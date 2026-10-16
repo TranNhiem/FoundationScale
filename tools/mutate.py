@@ -1,54 +1,34 @@
 #!/usr/bin/env python3
 """Mutation battery for the FoundationScale verification framework.
 
-A green test suite is not evidence. `243 passed` is exactly the shape of output
-the audited estate produced for 472 steps at grad_norm 0.000 — a confident
-report from a check that could not have said anything else. So before this
-suite is allowed to count as verification, each load-bearing rule is
-individually broken and the suite must notice. A mutation that survives is a
-rule with no test behind it.
+A green test suite is not evidence: each load-bearing rule is individually
+broken and the suite must notice. A mutation that survives is a rule with no
+test behind it.
 
-TWO PRECONDITIONS, both of which are this project's own failure mode turned
-inward:
+TWO PRECONDITIONS:
 
 1. The suite must be GREEN before we start, or a survivor means nothing: a
    mutant "killed" by a test that was failing anyway says nothing about
    coverage.
 
-2. The baseline must report ZERO SKIPPED TESTS. This is not fussiness. An
-   earlier version of this file ran the suite under an interpreter with no
-   torch installed, where every checkpoint test skipped. A mutation in
-   `dcp.py` could not be killed there no matter how wrong it was, and the
-   battery reported it as a surviving mutant: an alarm from a detector never
-   connected to the thing it watches. A skipped test is the vacuous-success
-   shape, and a battery whose baseline is full of them is measuring nothing
-   while printing a reassuring column of `[killed]`. This is a hard failure —
-   the battery exits nonzero (2), not a warning. Do not soften it.
-
-   And say so plainly, because it is the most useful thing this file
-   documents: this is the SAME defect that was found independently, at the
-   same time, in this repository's own CI — 41 tests skipped, pipeline
-   green. Two detectors disconnected in two different places, both reporting
-   success. The failure this tool exists to catch is not hypothetical and
-   not behind us; a suite whose skips nobody adds up drifts back into it by
-   default.
+2. The baseline must report ZERO SKIPPED TESTS. A skipped test cannot kill a
+   mutant, so every mutation it would have caught is reported as a rule with
+   no test behind it — an alarm from a detector never connected to the thing
+   it watches. This is a hard failure — nonzero exit (2), not a warning. Do
+   not soften it.
 
 ANCHOR DISCIPLINE
 
 Each mutant is applied by replacing one anchor string in the real source. An
-anchor that matches other than exactly once is REFUSED and reported as
-`not applicable` — never silently skipped, never guessed at — because a
-mutation landing in the wrong function tells you nothing about the rule you
-meant to break. A refused anchor is not a passing one, and it must never be
-able to look like one: ANY `n/a` row makes this file exit nonzero, whether it
-is the whole table or one row of forty-two. The partial case is the one that
-actually happened here — a run printed `40 killed, 0 alive, 2 n/a` and exited
-0, claiming forty-two rules while measuring forty. A stale anchor means the
-table no longer describes the module (usually because the module was fixed
-underneath it), so re-derive it against the current source; deleting the row
-would shrink the battery silently, which is the same trade. Anchors are
-validated once when the table is assembled and re-checked here, row by row, at
-run time.
+anchor matching other than exactly once is REFUSED and reported as `not
+applicable` — never silently skipped, never guessed at, because a mutation
+landing in the wrong function tells you nothing about the rule you meant to
+break. A refused anchor must never look like a pass: ANY `n/a` row makes this
+file exit nonzero. A stale anchor means the table no longer describes the
+module (usually because the module was fixed underneath it), so re-derive it
+against the current source; deleting the row would shrink the battery
+silently, which is the same trade. Anchors are validated once when the table
+is assembled and re-checked here, row by row, at run time.
 
 BACKUP / RESTORE
 
@@ -56,76 +36,67 @@ Every module under test is backed up BEFORE any of them is touched, all are
 restored in a `finally`, and each restore is verified byte-for-byte.
 Restoring only the file being mutated when an exception fires would leave an
 earlier module mutated on disk — a corrupted tree that looks perfectly fine.
-A crash mid-run must not leave a mutant in the tree — but `finally` guards
-exceptions, not signals. #404 measured this directly: a battery SIGTERM'd at
-the CI/tool wall ran no finally at all and left a size-preserving mutant in
-the tree, the next full suite run read it as nine ordinary failures, and a
-`git add -A` would have staged it behind one unremarkable ` M` line. So the
-backups are additionally written, in full, to `.mutate_in_flight.json` the
-moment they are taken; the sentinel is deleted only after the verified
-restore, the next run refuses (exit 96) on any sentinel whose recorded
-hashes do not match the current tree, and heals silently only when every
-file already matches. `tools/mutate.py --recover` puts the recorded
-pre-battery bytes back — by hand, on the operator's decision, because the
-differing bytes may equally be legitimate edits made since the crash.
+`finally` guards exceptions, not signals: the backups are additionally
+written, in full, to `.mutate_in_flight.json` the moment they are taken; the
+sentinel is deleted only after the verified restore. The next run refuses
+(exit 96) on any sentinel whose recorded hashes do not match the current
+tree, and heals silently only when every file already matches.
+`tools/mutate.py --recover` puts the recorded pre-battery bytes back — by
+hand, on the operator's decision, because the differing bytes may equally be
+legitimate edits made since the crash.
 
 KILL CRITERIA
 
-A mutant is never scored on pytest's exit code alone. rc=2 (collection
-error), a bare rc=1 that names no failing test, a signal, and a hang are
-all indistinguishable from detection if the return code is all you read —
-and one flaky red run is indistinguishable from a real one. So a kill
-requires two things: pytest exited 1 with the failing tests named in the
-junit report, and a SECOND run with the mutant still applied reproduced
-exactly the same set. Every other shape is UNSCORED: the battery claims
-nothing about that rule and exits 2. Each run is bounded by
-FS_MUTATE_SUITE_TIMEOUT (default 1800s) so a mutant that makes the suite
-loopy costs one unscored trial instead of hanging until CI's SIGKILL
-bypasses the finally-restore and strands the mutant in the tree.
+A mutant is never scored on pytest's exit code alone: rc=2 (collection
+error), a bare rc=1 that names no failing test, a signal, and a hang are all
+indistinguishable from detection if the return code is all you read, and one
+flaky red run is indistinguishable from a real one. A kill requires two
+things: pytest exited 1 with the failing tests named in the junit report,
+and a SECOND run with the mutant still applied reproduced exactly the same
+set. Every other shape is UNSCORED: the battery claims nothing about that
+rule and exits 2. Each run is bounded by FS_MUTATE_SUITE_TIMEOUT (default
+1800s) so a mutant that makes the suite loopy costs one unscored trial
+instead of hanging until CI's SIGKILL bypasses the finally-restore and
+strands the mutant in the tree.
 
 MUST-PASS CONTROL
 
 A detector is two claims (doctrine 3). The mutation table supplies the
 MUST_FIRE half; it must also carry rows flagged "must_survive": inert,
-behaviour-preserving edits — a trailing comment — that the suite MUST let
-pass. Exactly such a control once scored KILLED in this battery, attributed
-to a meta-test that failed only because the outer mutant had invalidated the
-inner battery's live-anchor check: detection with no fault behind it. Since
-then the control is first-class — reported on its own line EVERY run,
-including runs whose table carries no control row at all: the line there
-reads "none configured", stated in words with its cost, and the run voids
-(exit 2). It is excluded from the caught= denominator and the killed/alive
-tallies, and if it ever dies the whole run voids (exit 2), because
-attribution that fires on a no-op cannot be believed about anything else
-either. A control that was configured but never exercised — stale anchor,
-unscored trial — reports as a third state, counted from the table and
-listed alongside NOT APPLICABLE / UNSCORED: never a pass, never an absence.
+behaviour-preserving edits (a trailing comment) that the suite MUST let pass.
+The control is reported on its own line EVERY run, including runs whose table
+carries no control row: that line reads "none configured", states its cost,
+and the run voids (exit 2). It is excluded from the caught= denominator and
+the killed/alive tallies, and if it ever dies the whole run voids (exit 2),
+because attribution that fires on a no-op cannot be believed about anything
+else either. A control that was configured but never exercised — stale
+anchor, unscored trial — reports as a third state, counted from the table
+and listed alongside NOT APPLICABLE / UNSCORED: never a pass, never an
+absence.
 
 EXIT STATUS
 
   0  every mutation in the table was applied and scored, and every one
      was killed on two identical attributed runs
   1  at least one mutant survived — the suite has a gap. A survivor
-     outranks a refused anchor: a run with both exits 1, not 2, because a
+     outranks a refused anchor: with both present the exit is 1, because a
      live survivor is direct evidence against the suite, whereas a stale
-     anchor only says the table drifted underneath the module — the more
-     informative state wins. Only an UNSCORED trial outranks a survivor:
-     a battery that could not measure may claim nothing, not even "the
-     suite has a gap".
+     anchor only says the table drifted underneath the module. Only an
+     UNSCORED trial outranks a survivor: a battery that could not measure
+     may claim nothing, not even "the suite has a gap".
   2  preconditions failed (red suite, skipped tests, missing/empty table,
      module unreadable), any mutation could not be applied (provided no
-     mutant survived — a survivor takes exit 1; see above), any trial
-     was UNSCORED (timeout, collection/usage error, red run naming no
-     test, a green run whose junit records zero executed tests,
-     attribution that did not reproduce) — for that part of the
-     table, we never measured — a MUST-PASS control was reported KILLED,
-     which proves the attribution machinery unsound and voids every other
-     measurement the run printed, or the table carried ZERO MUST-PASS
-     control rows: with the negative half of the detector never wired up,
-     every caught= figure the run printed is an unverified claim, and
-     claiming from silence is "we never measured" one level up; or the
-     table carried ZERO MUST-FIRE rows — every row a control, so the
-     positive half fired zero times and exit 0 there is 0 killed of
+     mutant survived — a survivor takes exit 1; see above), any trial was
+     UNSCORED (timeout, collection/usage error, red run naming no test, a
+     green run whose junit records zero executed tests, attribution that
+     did not reproduce) — for that part of the table, we never measured —
+     a MUST-PASS control was reported KILLED (proves the attribution
+     machinery unsound and voids every other measurement the run printed),
+     or the table carried ZERO MUST-PASS control rows (the negative half of
+     the detector never wired up: every caught= figure is an unverified
+     claim, and claiming from silence is "we never measured" one level up);
+     or the table carried ZERO MUST-FIRE rows — every row a control, so
+     the positive half fired zero times and exit 0 there is 0 killed of
      0 fired: the 0/0 success in exit-code form
 
 CI depends on the difference between 1 and 2: "the suite has a gap" and
@@ -164,9 +135,9 @@ from pathlib import Path
 from typing import NoReturn
 
 # tools/mutate.py -> tools/ -> repository root. Nothing in this file is allowed
-# to contain a machine-specific path: the earlier incarnation pinned one
-# developer's absolute checkout and venv, which is exactly the "works on the box
-# that wrote it" assumption the audit was about.
+# to contain a machine-specific path: no absolute checkout, venv, or username
+# — "works on the box that wrote it" is exactly the assumption this must not
+# make.
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = Path(__file__).resolve().parent
 SRC = ROOT / "src" / "foundationscale"
@@ -185,13 +156,11 @@ PY = sys.executable
 
 # Values are TREE-root-relative, not SRC-relative: every src module restates
 # its src/foundationscale prefix so that a file OUTSIDE the package can sit in
-# the same table under one format. The previous SRC-relative shape made tools/
-# literally unexpressible, which is how tools/live_save_gate.py — the tool that
-# adjudicates the FIRST REAL SAVE of the real training run — spent its whole
-# life with zero mutation coverage while the tally printed caught= over only
-# what the table could name. SRC stays as the canonical package-root handle;
-# nothing resolves against it anymore, and both resolution sites (load_table
-# and main) join at ROOT with no per-module special-casing.
+# the same table under one format — a SRC-relative shape makes tools/
+# unexpressible and leaves tools/ modules with zero mutation coverage while
+# the tally reports only what the table could name. SRC stays as the canonical
+# package-root handle; both resolution sites (load_table and main) join at
+# ROOT with no per-module special-casing.
 MODULE_PATHS = {
     "core": "src/foundationscale/gates/core.py",
     "dcp": "src/foundationscale/checkpoint/dcp.py",
@@ -206,43 +175,40 @@ MODULE_PATHS = {
     "adjudication": "src/foundationscale/gates/adjudication.py",
     # #85: the emission adjudicator becomes nameable by mutation rows.
     "emit_run_manifest": "tools/emit_run_manifest.py",
-    # #522: the family plane decides which modules an adapter may wrap. Every
-    # one of its defects is SILENT by construction -- a mis-scoped selector
-    # still produces a LoRA run, a loss curve and a checkpoint, all of them
-    # trained on the wrong tower -- so it is enrolled with rows from the day it
-    # lands rather than left PENDING.
+    # The family plane decides which modules an adapter may wrap. Every one
+    # of its defects is SILENT by construction -- a mis-scoped selector still
+    # produces a LoRA run, a loss curve and a checkpoint, trained on the wrong
+    # tower -- so it is enrolled with rows from the day it lands rather than
+    # left PENDING.
     "families_registry": "src/foundationscale/families/registry.py",
     "families_adapters": "src/foundationscale/families/adapters.py",
-    # #521/#523/#527: same argument as the two rows above -- every defect in
-    # these three is SILENT. A mis-converted corpus still trains, a wrong
-    # dormancy answer still produces a run (or an abort nobody attributes to
-    # this file), and an SDPA pin that did not take still finishes with a loss
-    # curve. None of them has a failure mode an ordinary suite would notice, so
-    # they are enrolled with rows from the day they land rather than PENDING.
+    # Same argument as the two rows above -- every defect in these three is
+    # SILENT: a mis-converted corpus still trains, a wrong dormancy answer
+    # still produces a run (or an abort nobody attributes to this file), and
+    # an SDPA pin that did not take still finishes with a loss curve. None of
+    # them has a failure mode an ordinary suite would notice, so they are
+    # enrolled with rows from the day they land rather than PENDING.
     "families_corpus": "src/foundationscale/families/corpus.py",
     "families_towers": "src/foundationscale/families/towers.py",
     "train_sdp_backend": "src/foundationscale/train/sdp_backend.py",
-    # #529: promoted out of PENDING_ENROLMENT the moment it had rows. It sat
-    # PENDING under a reason that named its own exit condition -- "the battery
-    # has no rows for it yet, and enrolling a file with zero rows would report
-    # a pass over nothing" -- and #529 supplied them. It is the perf plane's
-    # only measuring surface, so every defect here is silent by construction:
-    # the run still trains, the units and the exit code are unchanged, and the
-    # only thing that moves is a published MFU figure. #529 was exactly that
-    # -- 6.51x overstated on Qwen3.5-35B-A3B, invisible to every other gate.
+    # The perf plane's only measuring surface: every defect here is silent by
+    # construction -- the run still trains, the units and the exit code are
+    # unchanged, and the only thing that moves is a published MFU figure (a
+    # defect here overstated MFU 6.51x on Qwen3.5-35B-A3B, invisible to every
+    # other gate). Enrolled only once it has rows: a file with zero rows would
+    # report a pass over nothing.
     "perf_telemetry": "src/foundationscale/perf/telemetry.py",
-    # #543: promoted out of PENDING_ENROLMENT with its rows, as perf_telemetry
-    # was. It writes the denominator save_complete counts a Megatron checkpoint
-    # against; a map that drops a tensor class, or an empty map written instead
-    # of refused, turns a real completeness check back into a vacuous one with
-    # no other symptom.
+    # It writes the denominator save_complete counts a Megatron checkpoint
+    # against; a map that drops a tensor class, or an empty map written
+    # instead of refused, turns a real completeness check back into a vacuous
+    # one with no other symptom. Enrolled with its rows.
     "bridge_fqn_map": "tools/bridge_fqn_map.py",
-    # Agentic RL: promoted out of PENDING_ENROLMENT with their rows, on the
-    # families_* argument -- every defect in these three is SILENT. A flipped
-    # loss mask or a zero-filled rollout logprob still trains; a one-sided
-    # abstention check or an inverted staleness lag still exits 0; a servable
-    # completion that extracts the wrong keys still serves. None of them has a
-    # failure mode an ordinary run would notice.
+    # Agentic RL, on the families_* argument -- every defect in these three
+    # is SILENT: a flipped loss mask or zero-filled rollout logprob still
+    # trains; a one-sided abstention check or inverted staleness lag still
+    # exits 0; a servable completion that extracts the wrong keys still
+    # serves. No failure mode an ordinary run would notice; enrolled with
+    # their rows.
     "agentic_contracts": "src/foundationscale/agentic_rl/contracts.py",
     "agentic_gates": "src/foundationscale/gates/agentic_gates.py",
     "agentic_servable": "src/foundationscale/agentic_rl/servable.py",
@@ -250,18 +216,16 @@ MODULE_PATHS = {
 
 _REQUIRED_KEYS = ("name", "what", "anchor", "replacement")
 
-# #404: the `finally` restore in main() guards EXCEPTIONS, not signals. A
-# battery SIGTERM'd at the CI/tool wall (or SIGKILL'd outright) runs no
-# finally, and the mutant is left in the working tree — measured for real as
-# one enum member deleted from a tuple in gates/core.py, which the next full
-# suite run read as nine ordinary failures and a `git add -A` would have
-# staged behind an ordinary-looking ` M` status line. The sentinel is
-# written the moment the pre-battery bytes are in hand and deleted only after
-# the verified restore, so a sentinel still on disk at startup means exactly
-# one thing: the last battery died in flight. A git-dirty guard is the wrong
-# shape and was rejected — these are ordinary source files that developers
-# edit, "dirty" cannot tell a stranded mutant from uncommitted work, and such
-# a guard would refuse every normal development run.
+# The `finally` restore in main() guards EXCEPTIONS, not signals. A battery
+# SIGTERM'd at the CI/tool wall (or SIGKILL'd outright) runs no finally, and
+# the mutant is left in the working tree — next full suite run failing as
+# ordinary failures, and a `git add -A` would stage it behind an ordinary-
+# looking ` M` status line. The sentinel is written the moment the pre-battery
+# bytes are in hand and deleted only after the verified restore, so a sentinel
+# still on disk at startup means exactly one thing: the last battery died in
+# flight. A git-dirty guard is the wrong shape: these are ordinary source
+# files that developers edit, so "dirty" cannot tell a stranded mutant from
+# uncommitted work and would refuse every normal development run.
 IN_FLIGHT_SENTINEL = ROOT / ".mutate_in_flight.json"
 
 
@@ -276,8 +240,8 @@ def _display(path: Path) -> str:
 
     Injected tables (the meta-suite's scratch files) legitimately live outside
     ROOT, and ``Path.relative_to`` RAISES on those rather than falling back --
-    so keying the sentinel on it would turn the meta-suite's own fixtures into
-    a crash. Display only; the sentinel keys on the absolute path.
+    so the fallback here is required, not cosmetic. Display only; the sentinel
+    keys on the absolute path.
     """
     try:
         return str(path.relative_to(ROOT))
@@ -338,11 +302,11 @@ def write_in_flight_sentinel(backups: dict[Path, str], modules: list[str]) -> Pa
             str(p): {"sha256": _sha256_text(text), "text": text} for p, text in backups.items()
         },
     }
-    # Written via a sibling temp file and one atomic rename. A plain write is
-    # not atomic, and this file's entire reason to exist is that the process
-    # can be killed at any instant -- including during this write. A partial
-    # sentinel would be unparseable, and an unparseable sentinel over a
-    # possibly-mutated tree is the worst state the mechanism could produce.
+    # Written via a sibling temp file and one atomic rename: this file's
+    # entire reason to exist is that the process can be killed at any instant
+    # — including during this write. A partial sentinel would be unparseable,
+    # and an unparseable sentinel over a possibly-mutated tree is the worst
+    # state the mechanism could produce.
     target = sentinel_path_for(backups)
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n", "utf-8")
@@ -365,15 +329,12 @@ def sentinel_differences(sentinel: Path) -> tuple[bool, list[str]]:
     The sentinel is a parameter, not the module-global, and that is the whole
     point of the signature. Reading the repository-root sentinel
     unconditionally made every battery over an INJECTED table read a sentinel
-    it does not own -- and the meta-suite drives exactly such batteries from
-    inside the suite a real battery runs. Measured: with a root sentinel on
-    disk over a differing file (which is precisely what a mutant in flight
-    looks like), 20 of the harness's own tests refused 96, among them
-    ``test_injected_table_never_reads_live_table``, whose name states the
-    hermeticity this violated. Those 20 failures then landed in every trial's
-    junit, so the MUST-PASS inert control read as killed and the battery
-    declared its own attribution unsound. Scope the read exactly as
-    ``write_in_flight_sentinel`` already scopes the write.
+    it does not own -- which breaks the meta-suite's hermeticity whenever the
+    outer battery has a mutant applied: the harness's own tests then refuse 96
+    (their scratch paths are not in the outer sentinel), those failures land
+    in every trial's junit, and the MUST-PASS inert control reads as killed.
+    Scope the read exactly as ``write_in_flight_sentinel`` already scopes the
+    write.
     """
     if not sentinel.is_file():
         return False, []
@@ -434,11 +395,10 @@ def recover_from_sentinel(sentinel: Path | None = None) -> int:
                 file=sys.stderr,
             )
             return 5
-        # #328: a size-preserving mutant restored inside the same integer
-        # second leaves a .pyc whose mtime+size still validate, so the next
-        # run would execute the mutant out of the bytecode cache even with
-        # the .py already correct. Purge every recovered file's cache, or
-        # the recovery has recovered nothing.
+        # A size-preserving mutant restored inside the same integer second
+        # leaves a .pyc whose mtime+size still validate, so the next run
+        # would execute the mutant out of the bytecode cache even with the
+        # .py already correct. Purge every recovered file's cache.
         for stale_pyc in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
             stale_pyc.unlink()
     sentinel.unlink()
@@ -446,37 +406,22 @@ def recover_from_sentinel(sentinel: Path | None = None) -> int:
     return 0
 
 
-# tools/emit_run_manifest.py mutants (#85). Rows carry exactly _REQUIRED_KEYS;
+# tools/emit_run_manifest.py mutants. Rows carry exactly _REQUIRED_KEYS;
 # binding to the module is by anchor uniqueness inside the file, which is why
 # MODULE_PATHS names the file first. The list's LENGTH is deliberately not
-# stated here: it said "7 MUST-FIRE rows" from the day it was written until
-# #221 appended topology-check-unwired and made it 8, and nothing was red for
-# the interval -- a count in prose sits in no denominator and no gate, so it
-# can only rot. `tools/mutate.py --list` prints the live per-module figure and
-# tests/provenance/test_emit_run_manifest.py pins shape over however many rows there are.
-# KNOWN, re-observed on every test run: tests/provenance/test_emit_run_manifest.py pins
-# shape, keys, and per-row anchor uniqueness, over however many rows the
-# list carries. EXPECTED, not yet measured by the battery: the five rows
-# whose behaviors that suite exercises directly should be killed; and the
-# two main()-level rows (lora-count-fabricated, drill-never-arms) --
-# survivors with no test behind them when this caveat was first written --
-# should now be killed as well, because both main()-level legs have since
-# been repaired: they had been dying on missing argparse flags before ever
-# reaching main(), and a two-arm drill leg now pins EXIT_REFUSED and
-# EXIT_UNMEASURED separately. EXPECTED is not MEASURED: the next battery
-# run is what settles those two rows, one way or the other, and they stay
-# published either way -- a row dropped to protect an exit code is the
-# worst outcome available here.
-# Publication caveat, updated: from the day this list was planted, its
-# battery denominator was 0 -- mutations.json never carried the rows and
-# nothing refused. This repair closes both flanks: load_table publishes
-# the list by MERGE (EMBEDDED_TABLE: the rows above plus 1 inert
-# must-pass control; the constant stays the single source and any copy
-# appearing in the JSON is itself a refusal), and
-# _validate_table(complete=True) makes ANY mapped-but-unpublished module
-# a die() that names it with its expected row count. A denominator of 0
-# for this module is no longer a silence; it is a refusal -- red, never
-# green.
+# stated in prose: a count written here sits in no denominator and no gate,
+# so it can only rot. `tools/mutate.py --list` prints the live per-module
+# figure; tests/provenance/test_emit_run_manifest.py pins shape (keys, and
+# per-row anchor uniqueness) over however many rows the list carries. Any row
+# without a test behind it stays published anyway — a row dropped to protect
+# an exit code is the worst outcome available here.
+#
+# Publication: these rows are published by MERGE (EMBEDDED_TABLE: the rows
+# below plus 1 inert must-pass control; the constant stays the single source
+# and any copy appearing in tools/mutations.json is itself a refusal), and
+# _validate_table(complete=True) makes ANY mapped-but-unpublished module a
+# die() that names it with its expected row count. A denominator of 0 for this
+# module is a refusal -- red, never green.
 EMIT_RUN_MANIFEST_ROWS = [
     {
         "name": "emit_run_manifest.lora-zip-unstrict",
@@ -495,14 +440,12 @@ EMIT_RUN_MANIFEST_ROWS = [
             "to call this null a DECLARED state; swapping the literal "
             "makes an abstention serialize as a non-abstention"
         ),
-        # Widened 2026-08-24: the #79 full-ft repair added a SECOND
-        # five-field abstention record whose value list opens with the same
-        # literal (emit_run_manifest.py:981), so the bare '"abstained",' line
-        # stopped being unique and the row's own validity leg went red. The
+        # The bare '"abstained",' line is not unique: a second five-field
+        # abstention record (emit_run_manifest.py:981) opens with the same
+        # literal, so this anchor must widen here to stay exactly-once. The
         # following line is the LoRA record's WHO constant, which the full-ft
-        # record does not carry -- that is what pins this row to the LoRA
-        # producer. The full-ft twin at :981 is covered by the NEXT row, added
-        # in the same edit that recorded the gap -- annexing it here would have
+        # record does not carry -- that pins this row to the LoRA producer. The
+        # full-ft twin at :981 has its own row below; annexing it here would
         # let one row claim two producers on one observation.
         "anchor": '        "abstained",\n        _LORA_ABSTENTION_WHO,',
         "replacement": '        "present",\n        _LORA_ABSTENTION_WHO,',
@@ -665,11 +608,11 @@ def run_suite(
     that preserves byte length — `==` -> `!=`, `<` -> `>`, a same-width name —
     and is restored inside the same integer second leaves a cache entry whose
     header matches the RESTORED file exactly. Every later process then imports
-    the mutant while the source reads correct and `git status` is clean, which
-    is a fault the restore-verification below cannot see: it compares source
-    bytes, and the source bytes are right. Forbidding the write is what closes
-    it; purging after the fact would not, because a SIGKILL mid-trial skips
-    the purge and leaves the entry behind. `importlib.invalidate_caches()`
+    the mutant while the source reads correct and `git status` is clean: a
+    fault the restore-verification below cannot see, because it compares
+    source bytes and the source bytes are right. Forbidding the write is what
+    closes it; purging after the fact would not, because a SIGKILL mid-trial
+    skips the purge and leaves the entry behind. `importlib.invalidate_caches()`
     does not help — it drops the finder's directory listing, not the
     mtime/size validation.
     """
@@ -729,11 +672,10 @@ def _nodeid(classname: str | None, name: str | None) -> str:
     Real pytest writes junit classnames as DOTTED module paths —
     `tests.test_parity`, or `tests.test_parity.TestFoo` for a method —
     never the slash-and-`.py` shape humans type. Joining classname and name
-    verbatim therefore names a test that does not exist, and the `[killed]`
-    line is the human-facing record of what fired: it must be pasteable
-    back into `pytest <nodeid>`. Module components precede the first
-    Capitalized component (pytest's own class-naming convention); anything
-    from there on is a class segment of the nodeid.
+    therefore names a test that does not exist, and the `[killed]` line must
+    be pasteable back into `pytest <nodeid>`. Module components precede the
+    first Capitalized component (pytest's own class-naming convention);
+    anything from there on is a class segment of the nodeid.
     """
     cls = classname or "?"
     test = name or "?"
@@ -753,8 +695,7 @@ def _parse_junit(path: Path) -> tuple[int, tuple[str, ...], tuple[str, ...], int
 
     An unreadable report is reported as an ERROR, never as emptiness:
     returning zeros here would let a truncated or drifted file masquerade as
-    a suite that simply named nothing — exactly the silent degradation the
-    junit rewrite exists to remove.
+    a suite that simply named nothing.
     """
     try:
         root = ET.parse(path).getroot()
@@ -813,9 +754,9 @@ def classify(out: SuiteOutcome) -> TrialVerdict:
     if out.rc == 0:
         if out.errored:
             # _parse_junit encodes an unreadable report as an error entry,
-            # and the rc=1 branch already honours that sentinel; the green
-            # branch must too. A green run over evidence that was never read
-            # is "we never measured" (2), not "the suite has a gap" (1) —
+            # and the rc=1 branch honours that sentinel; the green branch
+            # must too. A green run over evidence that was never read is
+            # "we never measured" (2), not "the suite has a gap" (1) —
             # die()'s contract says those two must never blur.
             return TrialVerdict(
                 TrialKind.UNSCORED,
@@ -826,17 +767,15 @@ def classify(out: SuiteOutcome) -> TrialVerdict:
             )
         if out.passed == 0:
             # A green return code over a junit report recording ZERO executed
-            # tests detected nothing: "the suite stayed green" and "the suite
-            # ran" have collapsed into the same non-event. Vanilla pytest
-            # exits 5 on an empty collection, so reaching this branch means
-            # the return code and the report disagree (an injected runner, a
-            # plugin, a race on the junit file) — and contradictory evidence
-            # blocks, it never scores. Above all it cannot be ALIVE: ALIVE's
-            # reason asserts "no test detects the broken rule", a claim about
-            # tests that never ran, priced at exit 1 ("the suite has a gap")
-            # when the truth is exit 2 ("we never measured"). check_baseline
-            # has always refused `not out.passed` for exactly this reason;
-            # the trial side of the per-run contract needed the same floor.
+            # tests detected nothing, and the return code and the report
+            # disagree (vanilla pytest exits 5 on an empty collection here —
+            # an injected runner, a plugin, a race on the junit file).
+            # Contradictory evidence blocks, it never scores: above all it
+            # cannot be ALIVE, whose reason asserts "no test detects the
+            # broken rule" about tests that never ran, priced at exit 1 when
+            # the truth is exit 2. check_baseline has always refused
+            # `not out.passed` for exactly this reason; the trial side of the
+            # per-run contract needed the same floor.
             return TrialVerdict(
                 TrialKind.UNSCORED,
                 (),
@@ -952,10 +891,10 @@ def score_trial(runner: SuiteRunner, *, junit_dir: Path, label: str) -> TrialVer
 
 
 # --- legacy stdout scrapers (not used by the scorer) -------------------------
-# tally()/failing_tests() parse pytest's human output. They scored every trial
-# before junit attribution existed, which is how a bare rc=2 or a format drift
-# could print `[killed]` with zero tests named. Kept importable for external
-# callers; the battery never calls them.
+# tally()/failing_tests() parse pytest's human output and scored every trial
+# before junit attribution existed -- which is how a bare rc=2 or a format
+# drift could print `[killed]` with zero tests named. Kept importable for
+# external callers; the battery never calls them.
 
 _COUNT = re.compile(r"(\d+) (passed|failed|skipped|xfailed|xpassed|error)")
 
@@ -1044,28 +983,25 @@ def _validate_table(
     before --module filtering. EMBEDDED_TABLE is referenced below its
     definition site and resolves at call time.
 
-    Applied to the shipped table from disk and to injected tables alike: an
-    in-memory table does not get a lower bar just because it never touched
-    the filesystem. `must_survive` is the MUST-PASS half of the detector
-    (doctrine 3); it is optional, but when present must be a real boolean
-    or die() — a truthy string would silently arm the control path on a
-    typo, and a control armed by accident is the vacuous-success shape in
-    miniature. It also refuses a table carrying ZERO MUST-FIRE rows: every
-    row a negative control means the positive half of the detector fires
-    zero times, and that run's exit 0 would print 0 killed of 0 fired —
-    the vacuous success one level up from the mutants. Half a proof does
-    not get to run.
+    Applies equally to a table from disk and to injected tables: an in-memory
+    table does not get a lower bar. `must_survive` is the MUST-PASS half of
+    the detector (doctrine 3); it is optional, but when present must be a
+    real boolean or die() — a truthy string would silently arm the control
+    path on a typo, and a control armed by accident is the vacuous-success
+    shape in miniature. A table carrying ZERO MUST-FIRE rows is refused: every
+    row a negative control means the positive half never fires, and that
+    run's exit 0 would be 0 killed of 0 fired. Half a proof does not get to
+    run.
     """
     unknown = set(data) - set(paths)
     if unknown:
         die(f"table names modules with no path mapping: {sorted(unknown)}")
     if complete:
-        # The complement of the historical check, and the orphan tripwire
-        # (#85/#86/#89): registered-but-unpublished means zero published
-        # rows, which is UNMEASURED, never covered -- a refusal, not a
-        # silence. Runs on the FULL merged view only; load_table applies
-        # the --module filter after it, so the check never sees modules a
-        # filtered run legitimately set aside.
+        # The orphan tripwire: registered-but-unpublished means zero
+        # published rows, which is UNMEASURED, never covered -- a refusal,
+        # not a silence. Runs on the FULL merged view only; load_table
+        # applies the --module filter after it, so the check never sees
+        # modules a filtered run legitimately set aside.
         unpublished = [mod for mod in sorted(paths) if not data.get(mod)]
         if unpublished:
             detail = []
@@ -1104,24 +1040,20 @@ def _validate_table(
         1 for muts in data.values() for m in muts if not m.get("must_survive", False)
     )
     if must_fire_rows == 0:
-        # The 0/0 run in its purest form: every selected row is a negative
-        # control, so the battery's positive half — deliberately break a
-        # rule, demand the suite notice — is exercised ZERO times. A
-        # surviving control can never redden such a run (surviving is what
-        # a control MEANS), so the run would print a clean control line,
-        # tally caught=n/a over zero scored trials, and fall off the end of
-        # the exit ladder to `return 0`: the battery certifying detection
-        # over a detector that fired never. That is the founding incident
-        # in exit-code form. Reachable from the shipped CLI as well as from
-        # injected tables, because load_table() validates AFTER the
-        # --module filter: `--module X` on a module whose rows are all
-        # controls selects exactly this table. die() beside the zero-rows
-        # guard above — both guards say one sentence (a battery that fires
-        # nothing proves nothing), once for an empty magazine and once for
-        # a magazine of blanks. Placed AFTER the per-row loop so
-        # must_survive has already been proven a real bool; read earlier,
-        # `must_survive: "yes"` would count its row as a control on a typo
-        # and trip this guard for the wrong reason.
+        # Every selected row is a negative control, so the battery's
+        # positive half — deliberately break a rule, demand the suite notice
+        # — would be exercised ZERO times. A surviving control can never
+        # redden such a run, so it would tallly caught=n/a over zero scored
+        # trials and `return 0`: certification over a detector that fired
+        # never. Reachable from the shipped CLI too (`--module X` on a module
+        # whose rows are all controls), because load_table() validates AFTER
+        # the --module filter. die() beside the zero-rows guard above — both
+        # guards say one sentence (a battery that fires nothing proves
+        # nothing), once for an empty magazine and once for a magazine of
+        # blanks. Placed AFTER the per-row loop so must_survive has already
+        # been proven a real bool; read earlier, `must_survive: "yes"` would
+        # count its row as a control on a typo and trip this guard for the
+        # wrong reason.
         die(
             "the table selects zero MUST-FIRE mutations — every row is a "
             '"must_survive" control. Surviving controls cannot redden that '
@@ -1133,15 +1065,14 @@ def _validate_table(
         )
 
 
-# R1+R2 (#85/#86/#89 orphan class). The emit_run_manifest rows are published
-# by MERGE, never copied into tools/mutations.json: EMIT_RUN_MANIFEST_ROWS
-# (above) is the single source for the fact, and load_table refuses a JSON
-# that grows a copy -- two sources for one fact. The inert must-pass row is
-# the module's MUST-PASS half (doctrine 3): it anchors on the same producer
-# line as row lora-count-plus-one, whose uniqueness in
-# tools/emit_run_manifest.py the shape test already enforces, and a trailing
-# comment is stripped by the tokenizer -- no test, import, or bytecode
-# comparison can observe it.
+# The emit_run_manifest rows are published by MERGE, never copied into
+# tools/mutations.json: EMIT_RUN_MANIFEST_ROWS (above) is the single source
+# for the fact, and load_table refuses a JSON that grows a copy -- two
+# sources for one fact. The inert must-pass row is the module's MUST-PASS
+# half (doctrine 3): it anchors on the same producer line as row
+# lora-count-plus-one, whose uniqueness in tools/emit_run_manifest.py the
+# shape test already enforces, and a trailing comment is stripped by the
+# tokenizer -- no test, import, or bytecode comparison can observe it.
 EMBEDDED_TABLE: dict[str, list[dict]] = {
     "emit_run_manifest": [
         *EMIT_RUN_MANIFEST_ROWS,
@@ -1200,16 +1131,13 @@ def load_table(only: str | None) -> dict[str, list[dict]]:
 
 # --- anchor-freshness gate: is every published anchor still bindable? ---
 #
-# Ground truth here is RECONSTRUCTED, never read. The two obvious sources are
-# both measurably wrong for this tree. A git HEAD snapshot lags any repair
-# round that has not been committed yet, so it reports a stale row that is not
-# stale -- a false alarm on a healthy corpus, and doctrine 5 prices that
-# exactly like a false green. And the raw working tree IS one applied mutant
-# while the battery's exec'd suite is running (tools/mutate.py writes the
-# mutant, execs pytest, and restores only in `finally`), so a raw reader goes
-# red for every mutation of that file regardless of behaviour, is named in
-# every attribution, and reddens the inert must-pass control -- the text
-# tripwire that already cost two repair rounds.
+# Ground truth here is RECONSTRUCTED, never read. A git HEAD snapshot lags any
+# uncommitted repair round and reports stale rows that are not stale -- false
+# alarms priced exactly like a false green. And the raw working tree IS one
+# applied mutant while the battery's exec'd suite is running (tools/mutate.py
+# writes the mutant, execs pytest, and restores only in `finally`), so a raw
+# reader goes red for every mutation of that file regardless of behaviour, is
+# named in every attribution, and reddens the inert must-pass control.
 #
 # The corpus is its own inverse map: every row carries anchor AND replacement.
 # So the gate asks an EXISTENCE question instead of a recovery question:
@@ -1232,9 +1160,9 @@ def load_table(only: str | None) -> dict[str, list[dict]]:
 #   * NESTED ANCHORS -- in `parity` and `emit_run_manifest` one row's anchor
 #     sits inside another's, so applying the inner row consumes the outer
 #     row's anchor too.
-# Demanding a unique applied row reddens 6 of the 70 legitimate applied
-# states; demanding a unique pristine candidate is impossible, because a
-# deletion-style row always generates a second self-consistent candidate.
+# Demanding a unique applied row reddens legitimate applied states; demanding
+# a unique pristine candidate is impossible, because a deletion-style row
+# always generates a second self-consistent candidate.
 #
 # Placement: beside MODULE_PATHS and load_table, the two facts the gate
 # joins. Safe because tools/mutate.py is not itself a MODULE_PATHS target --
@@ -1251,14 +1179,13 @@ class FreshnessRefusedError(Exception):
 def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
     """Every text that could be the pristine source behind `live`.
 
-    A candidate is `live` itself -- nothing applied, the normal case -- or
-    `live` with ONE occurrence of one row's replacement rewritten back to
-    that row's anchor. EVERY occurrence is enumerated, not only the
-    single-occurrence case: a deletion-style row's replacement necessarily
-    occurs inside its own intact anchor, so any count-based shortcut is
-    reading the wrong thing.
+    A candidate is `live` itself (nothing applied) or `live` with ONE
+    occurrence of one row's replacement rewritten back to that row's anchor.
+    EVERY occurrence is enumerated, not only the single-occurrence case: a
+    deletion-style row's replacement necessarily occurs inside its own intact
+    anchor, so any count-based shortcut is reading the wrong thing.
 
-    A candidate is ACCEPTED only when both hold:
+    A candidate is ACCEPTED only when all of the following hold:
 
       * every one of this file's anchors occurs EXACTLY once in it. Raw
         str.count, byte-exact, indentation included -- no strip, no
@@ -1266,32 +1193,20 @@ def _accepted_pristine_states(live: str, rows: list[dict]) -> list[str]:
         was eight leading spaces becoming four, and a tolerant matcher
         greens it.
       * it does not ALREADY contain the replacement of a row that survives
-        its own application. An insertion-style row -- 2 of the shipped 70 --
-        still binds its anchor exactly once after it is applied, so without
-        this clause the applied state passes as pristine and then serves as
-        a BASE from which one MORE row is reachable. That silently doubles
-        the one-row budget and certifies a two-rows-applied source, which is
-        a state nothing measured.
-
-        This closes composition for every shape the pinned corpus can
-        reach: the real-corpus shape guard requires every anchor surviving
-        application to be insertion-style. It is NOT a general closure. An
+        its own application. An insertion-style row still binds its anchor
+        exactly once after it is applied, so without this clause the applied
+        state passes as pristine and then serves as a BASE from which one
+        MORE row is reachable — silently certifying a two-rows-applied
+        source. This closes composition for every shape the pinned corpus
+        can reach (its shape guard requires every anchor surviving
+        application to be insertion-style). It is NOT a general closure: an
         anchor can also survive through overlap, as "xx" survives replacing
-        the first "xx" in "xxx" by "x". No shipped row has that shape.
-
-        The stronger legal-predecessor closure was attempted and measured
-        against the real corpus: it rejected 2 of 9 healthy pristine sources
-        and the true base behind 15 real applied states. A false alarm costs
-        what a false green costs, so that remedy is refused. This clause is
-        also deliberately NOT the blanket rule "no candidate may contain any
-        replacement": a deletion-style row's replacement necessarily sits
-        inside its own intact anchor, making the blanket form unsatisfiable
-        on the 2 shipped deletion-style rows.
+        the first "xx" in "xxx" by "x" (no shipped row has that shape). This
+        clause is deliberately NOT the blanket rule "no candidate may contain
+        any replacement": a deletion-style row's replacement necessarily sits
+        inside its own intact anchor, making the blanket form unsatisfiable.
       * `live` is reachable from it in zero or one row applications. Narrow
-        but real: a generated candidate normally reaches `live` by
-        construction, since rewriting a replacement back to its anchor makes
-        that the anchor's only occurrence and re-applying restores the same
-        bytes. It bites when an anchor SELF-OVERLAPS, so that the rewrite
+        but real: it bites when an anchor SELF-OVERLAPS, so the rewrite
         creates an occurrence which is not the first one `str.replace`
         would find, and the round trip lands on different bytes.
 
@@ -1341,40 +1256,37 @@ def check_anchor_freshness(
 ) -> list[str]:
     """Resolve every published anchor exactly once, against RECOVERED bytes.
 
-    The caller hands over load_table's FULL merged view -- the
-    tools/mutations.json rows MERGED with EMBEDDED_TABLE -- because a gate
-    over the JSON half alone repeats the orphan class where the
-    emit_run_manifest rows sat outside the only table anything checked. A
-    --module narrowing must never be passed in as if it were the corpus.
+    The caller hands over load_table's FULL merged view (the
+    tools/mutations.json rows MERGED with EMBEDDED_TABLE) because a gate over
+    the JSON half alone repeats the orphan class where the emit_run_manifest
+    rows sat outside the only table anything checked. A --module narrowing
+    must never be passed in as if it were the corpus.
 
     Fail-closed enumerations, one problem string per finding, accumulated
     ACROSS modules and returned together: a zero-row corpus; a module
     publishing 0 rows beside measured ones; a row with an empty anchor or
-    replacement; a row whose replacement
-    EQUALS its anchor (that mutation edits nothing, so the battery would
-    score a guaranteed survivor as a real mutant); a corpus module absent
-    from `paths`; a source that will not read or will not decode; candidate
-    enumeration blowing past its bound; and finally the substantive verdict,
-    no pristine state accounting for the live bytes. Within one module the
-    blank-row enumeration masks that module's later findings for this run,
-    and a zero-row corpus returns before module examination. When at least one
-    anchor fails exactly-once it names that row and counts; when every
-    anchor binds exactly once it uses the fallback's different semantics,
-    naming the self-surviving row whose replacement is present when that is
-    the observable cause, otherwise naming the self-surviving/reachability
-    clauses as the remaining possible causes.
-
-    An empty return is the only green.
+    replacement; a row whose replacement EQUALS its anchor (that mutation
+    edits nothing, so the battery would score a guaranteed survivor as a real
+    mutant); a corpus module absent from `paths`; a source that will not read
+    or will not decode; candidate enumeration blowing past its bound; and
+    finally the substantive verdict, no pristine state accounting for the
+    live bytes. Within one module the blank-row enumeration masks that
+    module's later findings for this run, and a zero-row corpus returns
+    before module examination. When at least one anchor fails exactly-once it
+    names that row and counts; when every anchor binds exactly once it uses
+    the fallback's different semantics, naming the self-surviving row whose
+    replacement is present when that is the observable cause, otherwise
+    naming the self-surviving/reachability clauses as the remaining possible
+    causes. An empty return is the only green.
 
     RESIDUALS, stated exactly -- what a green here does NOT claim:
 
       * It says every published anchor BINDS, not that the tree is
         pristine. Drift that displaces no anchor is invisible unless it
         ships replacement text from one of the 2 self-surviving insertion
-        rows among the shipped 70. The other 68 replacement strings are
-        never consulted. The blanket replacement rule is unsatisfiable
-        because the 2 deletion-style rows' replacement text necessarily
-        occurs inside their own intact anchor.
+        rows among the shipped 70. The blanket replacement rule is
+        unsatisfiable because the 2 deletion-style rows' replacement text
+        necessarily occurs inside their own intact anchor.
       * It is a per-MODULE verdict, not a per-ROW one. Rows sharing one
         identical anchor -- 70 shipped rows collapse to 67 distinct
         (module, anchor) pairs, `core`'s 9 rows to 6 anchors -- are
@@ -1385,21 +1297,21 @@ def check_anchor_freshness(
         Unrelated drift that happens to leave the file looking exactly like
         some row's applied state is accepted as that applied state, because
         with no external history the two are the same bytes. Widening the
-        gate to catch this would mean re-admitting a snapshot, which is the
+        gate to catch this would mean re-admitting a snapshot, the
         false-alarm failure this design exists to avoid.
       * Green is not "this mutant would be killed". That is the battery's
         verdict, and only ever the battery's.
 
-    Within the pinned shipped corpus, the applied state of an
-    insertion-style row is NOT a residual: the self-surviving clause keeps
-    it from becoming a pristine base, and the genuine reconstructed pristine
-    candidate accepts the state instead. Outside those shapes the general
-    composition hole is a DECLARED residual: an overlap-surviving row can
-    still become a pristine base. The real-corpus MUST_PASS shape guard
-    makes that residual unreachable by construction. The measured
-    predecessor remedy -- 2 of 9 pristine false alarms and 15 rejected
-    applied-state bases -- was refused rather than silently traded for a
-    false-alarm class.
+    Within the pinned shipped corpus, the applied state of an insertion-style
+    row is NOT a residual: the self-surviving clause keeps it from becoming a
+    pristine base, and the genuine reconstructed pristine candidate accepts
+    the state instead. Outside those shapes the general composition hole is a
+    DECLARED residual: an overlap-surviving row can still become a pristine
+    base; the real-corpus MUST_PASS shape guard makes that residual
+    unreachable by construction. A stronger legal-predecessor closure was
+    attempted and refused because it rejected healthy pristine sources and
+    the true base behind real applied states -- a false alarm costs what a
+    false green costs.
     """
     problems: list[str] = []
     if sum(len(rows) for rows in table.values()) == 0:
@@ -1598,17 +1510,17 @@ def main(
     )
     ap.add_argument("--module", help="run one module's mutations only")
     ap.add_argument("--list", action="store_true", help="print the table and exit")
-    # #242: CI shards the battery per module. The shard list must be DERIVED
-    # from the table, never restated in the workflow -- a hand-written matrix
-    # that misses a tenth module runs 9 shards, reports 9 greens, and leaves
-    # the tenth unmeasured behind a wall of success. One module per line,
+    # CI shards the battery per module. The shard list must be DERIVED from
+    # the table, never restated in the workflow -- a hand-written matrix that
+    # misses a tenth module runs 9 shards, reports 9 greens, and leaves the
+    # tenth unmeasured behind a wall of success. One module per line,
     # nothing else on stdout, so a workflow step can read it directly.
     ap.add_argument(
         "--list-modules",
         action="store_true",
         help="print one module name per line and exit (the CI shard list)",
     )
-    # #404: a battery killed mid-trial leaves the mutant in the working tree.
+    # A battery killed mid-trial leaves the mutant in the working tree.
     # Recovery is a MUTATION-FREE, MEASUREMENT-FREE path: it restores the
     # bytes the sentinel recorded and exits, never running the suite. It is a
     # first-class flag rather than an argv peek so `--help` names it -- the
@@ -1621,10 +1533,10 @@ def main(
     )
     args = ap.parse_args(argv)
 
-    # #404: dispatched HERE, above every table and path check, and that
-    # placement is the whole point. A stranded mutant IS an edited anchor, so
-    # the most likely tree needing recovery is exactly the tree whose anchors
-    # no longer resolve -- and the table check refuses 2 on that tree. Below
+    # Dispatched HERE, above every table and path check, and that placement
+    # is the whole point. A stranded mutant IS an edited anchor, so the
+    # most likely tree needing recovery is exactly the tree whose anchors no
+    # longer resolve -- and the table check refuses 2 on that tree. Below
     # that check, `--recover` would be unreachable in the one situation it
     # exists for. Recovery needs the sentinel and nothing else.
     if args.recover:
@@ -1638,13 +1550,13 @@ def main(
         # pinned by tests/tooling/test_mutate_zero_work_refusals.py and must not move.
         resolved_paths = {mod: Path(p) for mod, p in module_paths.items()}
 
-    # The table/module_paths seam is the second half of the inert-control
-    # fix. A behaviour-preserving mutant once scored KILLED because main()
-    # always read the LIVE mutations.json against the LIVE tree: an outer
-    # mutation invalidated one live anchor, the inner meta-suite refused it,
-    # and its deterministic exit 2 was banked as detection. An injected
-    # table runs against scratch files, so mutating any shipped module can
-    # no longer change what the meta-suite measures.
+    # The table/module_paths seam keeps an injected battery hermetic. A
+    # behaviour-preserving mutant once scored KILLED because main() always
+    # read the LIVE mutations.json against the LIVE tree: an outer mutation
+    # invalidated one live anchor, the inner meta-suite refused it, and its
+    # deterministic exit 2 was banked as detection. An injected table runs
+    # against scratch files, so mutating any shipped module can no longer
+    # change what the meta-suite measures.
     if table is None:
         table = load_table(args.module)
     else:
@@ -1667,15 +1579,14 @@ def main(
         return 0
 
     # A table entry that resolves to a file this tree does not have is an
-    # unreadable artifact, and the rule for unreadable artifacts is fail
-    # CLOSED with the entry NAMED — before the baseline, not after it:
-    # check_baseline costs one full suite run, and the old shape spent that
-    # run and then reported through the generic OSError catch below, which
-    # can surface the path (via the exception) but never the table ENTRY.
-    # --list is exempt by design (it mutates nothing and returns above);
-    # a file vanishing between this check and the backup read below is
-    # still caught by that catch — this guard exists so the common case
-    # (a table that has outgrown the tree) refuses cheaply and by name.
+    # unreadable artifact, and the rule is fail CLOSED with the entry NAMED
+    # — before the baseline, not after it: check_baseline costs one full
+    # suite run, and the generic OSError catch below can surface the path
+    # (via the exception) but never the table ENTRY. --list is exempt by
+    # design (it mutates nothing and returns above); a file vanishing
+    # between this check and the backup read is still caught by that catch —
+    # this guard exists so the common case (a table that has outgrown the
+    # tree) refuses cheaply and by name.
     missing_files = [
         (mod, resolved_paths[mod]) for mod in sorted(table) if not resolved_paths[mod].is_file()
     ]
@@ -1694,21 +1605,18 @@ def main(
         )
         return 2
 
-    # #404: BEFORE check_baseline on purpose — the baseline costs one full
-    # suite run, and a run about to refuse on a stranded mutant (or to heal
-    # a stale sentinel) has no business paying it. The absent case is the
+    # BEFORE check_baseline on purpose — the baseline costs one full suite
+    # run, and a run about to refuse on a stranded mutant (or to heal a stale
+    # sentinel) has no business paying it. The absent case is the
     # overwhelmingly common one and costs one is_file() and no output.
     #
     # Scoped to THIS battery's own targets, via the same function the write
-    # uses. Reading the repository-root sentinel unconditionally is what made
-    # the harness's own self-tests -- which drive mutate.main() over injected
-    # pytest scratch tables from INSIDE the suite a real battery runs -- refuse
-    # 96 the moment the outer battery had a mutant applied. Measured: 20 of the
-    # 42 self-tests failed in every trial, the same 20 every time, which put
-    # 20 spurious failures in every junit and made the MUST-PASS inert control
-    # read as killed. The battery then correctly declared its own attribution
-    # unsound and exited 2 -- a true verdict about a defect that was in the
-    # harness, not in the tree.
+    # uses. Reading the repository-root sentinel unconditionally made the
+    # harness's own self-tests (which drive mutate.main() over injected
+    # pytest scratch tables from INSIDE the suite a real battery runs) refuse
+    # 96 the moment the outer battery had a mutant applied: those spurious
+    # failures landed in every junit and made the MUST-PASS inert control
+    # read as killed, voiding the run.
     battery_sentinel = sentinel_path_for(resolved_paths[mod] for mod in sorted(table))
     try:
         sentinel_present, differing = sentinel_differences(battery_sentinel)
@@ -1785,10 +1693,10 @@ def main(
         )
         return 2
 
-    # #404: the sentinel goes down the moment the pre-battery bytes are in
-    # hand, BEFORE the first mutant is written — from here until the
-    # verified restore in the finally below, it is the only record of what
-    # the tree must be returned to if a signal bypasses that finally.
+    # The sentinel goes down the moment the pre-battery bytes are in hand,
+    # BEFORE the first mutant is written — from here until the verified
+    # restore in the finally below it is the only record of what the tree
+    # must be returned to if a signal bypasses that finally.
     sentinel = write_in_flight_sentinel(backups, sorted(table))
 
     results: dict[str, dict[str, list]] = {}
@@ -1843,9 +1751,9 @@ def main(
                 elif verdict.kind is TrialKind.KILLED:
                     r["killed"].append((m["name"], verdict.attribution))
                     # The attribution IS the evidence for the kill, so the
-                    # run record carries it in full, one nodeid per line.
-                    # A 100-char truncation once made a control-dead run
-                    # impossible to audit after the fact (R6).
+                    # run record carries it in full, one nodeid per line —
+                    # truncation once made a control-dead run impossible to
+                    # audit after the fact.
                     print(
                         f"  [killed] {m['name']:31s} {len(verdict.attribution)} test(s), "
                         "reproduced in full:"
@@ -1861,15 +1769,12 @@ def main(
             p.write_text(text, "utf-8")
             # Not an assert. This read-back is the ONLY verification that
             # the live tree actually got its pre-battery bytes back, and
-            # this tool's whole safety case rests on it: asserts are
-            # compiled out under `python -O` / PYTHONOPTIMIZE=1 (a common
-            # CI default, and this file tells operators to run it under
-            # whatever interpreter they are verifying), after which the
+            # this tool's whole safety case rests on it: asserts are compiled
+            # out under `python -O` / PYTHONOPTIMIZE=1, after which the
             # "restored byte-for-byte" line below would keep printing with
-            # nothing verified — the vacuous-success shape guarding the
-            # one operation that can corrupt the tree. A guard that a
-            # command-line flag can erase is not a guard; the check must
-            # be ordinary control flow.
+            # nothing verified — the vacuous-success shape guarding the one
+            # operation that can corrupt the tree. The check must be ordinary
+            # control flow.
             if p.read_text("utf-8") != text:
                 raise RuntimeError(
                     f"restore verification failed for {p}: the pre-battery "
@@ -1878,13 +1783,12 @@ def main(
                     f"this file from version control before trusting ANY "
                     f"result this run printed."
                 )
-        # #404: the sentinel must OUTLIVE an unverified restore — it is
-        # deleted only here, after the byte-for-byte read-back above passed
-        # for every module. The RuntimeError on a failed verification rises
-        # before this line and leaves the sentinel on disk: exactly the
-        # state the next run's startup check must catch and refuse on.
-        # Deleting it before the read-back would let an unverifiable
-        # restore pass as a clean one.
+        # The sentinel must OUTLIVE an unverified restore — it is deleted
+        # only here, after the byte-for-byte read-back above passed for every
+        # module. The RuntimeError on a failed verification rises before this
+        # line and leaves the sentinel on disk: exactly the state the next
+        # run's startup check must catch and refuse on. Deleting it before
+        # the read-back would let an unverifiable restore pass as a clean one.
         #
         # `sentinel`, not IN_FLIGHT_SENTINEL: an injected-table battery puts
         # its sentinel beside the files it describes, and unlinking the root
@@ -1904,12 +1808,10 @@ def main(
         total_scored += scored
         # A percentage is only honest when every trial in the module was
         # scored: `8 killed 0 alive 4 unscored caught=100%` claims a whole
-        # measurement over a module a third of which measured nothing.
-        # Suppress the number rather than print a precise-looking lie.
-        # A dead control impugns every measurement this module reports: an
-        # inert edit "killed" means attribution can fire with no fault
-        # behind it, so caught= over this module would be arithmetic, not
-        # evidence. Suppress the number rather than print a lie.
+        # measurement over rules that measured nothing. Suppress the number
+        # rather than print a precise-looking lie. A dead control impugns
+        # every measurement this module reports (attribution fired with no
+        # fault behind it) — suppress there too.
         if r["unscored"] or r["na"] or r["control_failed"]:
             pct = "--"
         elif scored:
@@ -1923,14 +1825,12 @@ def main(
 
     ctrl_ok = [(mod, n) for mod, r in results.items() for n in r["control_passed"]]
     ctrl_dead = [(mod, n, attr) for mod, r in results.items() for n, attr in r["control_failed"]]
-    # R6: the attribution IS the evidence; persist ALL of it, untruncated,
-    # before any summary rendering. The console lines above carry one
-    # nodeid per line; this JSON artifact is the machine-readable twin of
-    # the same claim, rendered from the same in-memory results in this
-    # same run, so the two cannot drift apart within a run. Failing to
-    # persist the evidence is a certification failure (fail closed),
-    # never a footnote: a run that cannot keep its own evidence proves
-    # nothing.
+    # The attribution IS the evidence; persist ALL of it, untruncated,
+    # before any summary rendering. This JSON artifact is the machine-readable
+    # twin of the console claim, rendered from the same in-memory results in
+    # this same run, so the two cannot drift apart within a run. Failing to
+    # persist the evidence is a certification failure (fail closed): a run
+    # that cannot keep its own evidence proves nothing.
     report_path = ROOT / "artifacts" / "mutation-battery-report.json"
     try:
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1978,8 +1878,7 @@ def main(
     # carried no control row states the absence in words, with its cost:
     # without a negative control, nothing separates "the suite detected the
     # fault" from "the suite reports detection whether or not there is a
-    # fault", so every caught= figure above is arithmetic, not evidence —
-    # the same shape as the lie this battery was just fixed for.
+    # fault", so every caught= figure above is arithmetic, not evidence.
     if ctrl_configured == 0:
         print(
             "\nMUST-PASS CONTROL: none configured. This run carried no negative "
@@ -2013,11 +1912,11 @@ def main(
                 print("    - <no attribution>")
 
     # Denominator reconciliation (doctrine 2, M6), stated EVERY run so the
-    # scoreable count can never again sit next to the corpus row count as
-    # an unexplained gap: scoreable rows + must-pass control rows = corpus
-    # rows. Controls are unscoreable BY CONSTRUCTION (their evidence is
-    # survival, not a kill), so corpus minus scoreable is exactly the
-    # control count -- printed here, never left for a reader to infer.
+    # scoreable count can never sit next to the corpus row count as an
+    # unexplained gap: scoreable rows + must-pass control rows = corpus rows.
+    # Controls are unscoreable BY CONSTRUCTION (their evidence is survival,
+    # not a kill), so corpus minus scoreable is exactly the control count --
+    # printed here, never left for a reader to infer.
     corpus_rows = sum(len(muts) for muts in table.values())
     print(
         f"\nCORPUS DENOMINATOR: {corpus_rows} corpus row(s) over "
@@ -2087,13 +1986,12 @@ def main(
         return 2
     # A control-free run sits in the claim-nothing class beside UNSCORED: the
     # MUST_FIRE half of the detector ran alone (doctrine 3 — a detector is
-    # two claims), so nothing this run printed distinguishes detection from
-    # a battery that reports detection whether or not there is a fault. It
-    # outranks a survivor for the same reason UNSCORED does: a battery whose
-    # negative half was never wired up may claim nothing — not "the suite
-    # has a gap", and certainly not caught=100% — even though every trial
-    # scored. It trails UNSCORED only because "we never measured" is the
-    # more fundamental failure; both exit 2.
+    # two claims), so nothing this run printed distinguishes detection from a
+    # battery that reports detection whether or not there is a fault. It
+    # outranks a survivor for the same reason UNSCORED does — claim nothing,
+    # not "the suite has a gap", and certainly not caught=100% — even though
+    # every trial scored. It trails UNSCORED only because "we never measured"
+    # is the more fundamental failure; both exit 2.
     if ctrl_configured == 0:
         print(
             "\nThe table configured no MUST-PASS control row, so the MUST_FIRE "

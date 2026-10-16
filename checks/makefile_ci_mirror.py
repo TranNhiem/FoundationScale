@@ -1,41 +1,31 @@
 #!/usr/bin/env python3
-"""checks/makefile_ci_mirror.py -- the Makefile <-> CI mirror gate (finding #286).
+"""checks/makefile_ci_mirror.py -- the Makefile <-> CI mirror gate.
 
-The Makefile's `check` target and .github/workflows/ci.yml are supposed to
-run the SAME checks. Today that mirror is a hand-synchronised convention,
-and it has already drifted in BOTH directions (#231: CI's mypy was
-narrower than the Makefile's; the `check` target's `-$(PY) -m mypy
-checks` prefix was the reverse). This gate extracts the check commands
-from BOTH files, normalises away the differences that are allowed
-(interpreter spelling, env arming placement, make-vs-yaml quoting,
-quoted command substitutions), and reports any check script that runs
-on one side of the mirror and not on the other.
+The Makefile's `check` target and .github/workflows/ci.yml must run the SAME
+checks. This gate extracts check commands from BOTH files, normalises away the
+allowed differences (interpreter spelling, env arming placement, make-vs-yaml
+quoting, quoted command substitutions), and reports any check script that runs
+on one side of the mirror and not the other.
 
-THE COMPARISON KEY IS THE SCRIPT, NOT THE ARGV. Each extracted command
-is reduced to its first token -- the script path (tools/mutate.py,
-checks/countables_drift.py), the tool name (pytest, ruff, mypy,
-coverage), or the dotted module (foundationscale.gates.controls) --
-and the two SETS of keys are compared. Arguments are not compared,
-because the two sides legitimately differ in output paths ($(CURDIR)
-against $RUNNER_TEMP), in sharding (one whole-corpus tools/mutate.py
-run against a per-module job matrix), and in whether a --self-test
-mode is invoked directly or reached through
-checks/campaign_self_tests.py. The first version of this gate keyed on
-the literal argument string and reported four findings on the real
-tree; all four were false, because the claim is about WHICH checks
-run and the detector's denominator was the argv. A gate that is RED
-on a correct tree gets an exception added or gets deleted, so the
-denominator is now the thing the claim is about.
+THE COMPARISON KEY IS THE SCRIPT, NOT THE ARGV. Each command is reduced to
+its first token -- the script path (tools/mutate.py,
+checks/countables_drift.py), the tool name (pytest, ruff, mypy, coverage), or
+the dotted module (foundationscale.gates.controls) -- and the two SETS of
+keys are compared. Arguments are not compared: the sides legitimately differ
+in output paths ($(CURDIR) against $RUNNER_TEMP), in sharding (one
+whole-corpus tools/mutate.py run against a per-module job matrix), and in
+whether --self-test is invoked directly or through
+checks/campaign_self_tests.py. Keying on the literal argv reddens a correct
+TREE (false findings) and a RED-on-correct gate gets an exception or gets
+deleted, so the key must match the claim: WHICH checks run.
 
-THE BLIND SPOT, STATED: a check that runs on both sides with different
-SEMANTIC arguments -- a narrower path set on one side, a mode disabled
-on one side -- produces the same key on both sides and is invisible
-here. That is the price of not reddening on environment syntax, and
-this gate says so in its banner on every verdict, CLEAR or RED.
-Narrowing a corpus or disabling a mode is real drift; it is simply
-not THIS gate's claim, and it must be caught by review or by a gate
-whose claim IS the arguments, not by quietly pretending the argv
-comparison used to catch it.
+THE BLIND SPOT, STATED: a check running on both sides with different
+SEMANTIC arguments -- a narrower path set on one side, a mode disabled on one
+side -- shares the same key and is invisible here. That is the price of not
+reddening on environment syntax, and the banner says so on every verdict.
+Narrowing a corpus or disabling a mode is real drift, but it is NOT this
+gate's claim; it must be caught by review or by a gate whose claim IS the
+arguments.
 
 Exit contract (never exit 1):
   0  CLEAR      the set of check-script keys extracted from the
@@ -54,21 +44,14 @@ Exit contract (never exit 1):
                 controls broken (a gate that cannot fail its own
                 fixtures must not be trusted to judge the repo).
 
-EXACT INPUT THAT MAKES THIS GATE RED (also exercised by --self-test):
-  In .github/workflows/ci.yml delete BOTH steps that invoke
-  checks/coverage_floor.py while the Makefile's `coverage-floor`
-  target still runs it. The gate prints `checks/coverage_floor.py`
-  under "Makefile-only" and exits 5. The reverse direction is also
-  RED: add `run: python3 tools/some_new_gate.py` to the workflow
-  without adding it to any target in the Makefile's `check` tree and
-  the gate prints it under "CI-only" and exits 5. Note that deleting
-  only ONE of several steps that share a key (say, the ruff format
-  step while the ruff check step survives) is NOT visible here --
-  the key `ruff` still runs on both sides. That is the blind spot
-  named above, pinned by MUST_NOT_FIRE leg 5 of the self-test so it
-  stays measured rather than assumed. A gate with no failing input
-  is worthless; this one has two, one per direction, because the
-  drift has happened both ways.
+FAILING INPUTS (also exercised by --self-test): in .github/workflows/ci.yml
+delete BOTH steps that invoke checks/coverage_floor.py while the Makefile's
+`coverage-floor` target still runs it -> `checks/coverage_floor.py` under
+"Makefile-only", exit 5. Reverse direction: add `run: python3
+tools/some_new_gate.py` to the workflow only -> "CI-only", exit 5. Deleting
+only one of several steps that share a key (the ruff format step while ruff
+check survives) is NOT visible -- the key `ruff` still runs on both sides;
+pinned by MUST_NOT_FIRE leg 5 of the self-test.
 
 WHAT COUNTS AS A CHECK COMMAND:
   A line whose normalised first token is one of the gated tool names
@@ -81,22 +64,20 @@ WHAT COUNTS AS A CHECK COMMAND:
   block scalar without being drift.
 
 REJECTED FRAGMENTS:
-  A segment whose first token fails the plausibility test for a key
-  (it must match ^[A-Za-z0-9_./-]+$ after normalisation) but whose
-  stem still looks like a check command is a slicing artefact -- a
-  fragment the extractor cut out of a larger shell construct, such as
-  the `pytest.skip("deliberate skip` half of the string that carries
-  a semicolon inside the CI probe's heredoc. Fragments are never keys
-  and never findings, but they are COUNTED, and the count prints on
-  every verdict: small and non-zero is normal on the real tree, and
-  a sudden jump means the extractor is losing sight of real commands.
+  A segment whose first token fails key plausibility (^[A-Za-z0-9_./-]+$
+  after normalisation) but whose stem still looks like a check command is a
+  slicing artefact -- e.g. the `pytest.skip("deliberate skip` half of a
+  string carrying a semicolon inside the CI probe's heredoc. Fragments are
+  never keys and never findings, but they are COUNTED and the count prints
+  on every verdict: small and non-zero is normal on the real tree; a sudden
+  jump means the extractor is losing sight of real commands.
 
-WHAT IS DELIBERATELY NOT MIRRORED HERE:
-  `pip install ...` lines. Provisioning is environment setup, not a check;
+NOT MIRRORED HERE:
+  `pip install ...` lines -- provisioning is environment setup, not a check;
   which extras suite-executing jobs install is gated by
-  checks/ci_suite_extras.py (finding #253). Widening this gate's scope to
-  install lines would double-gate #253 and would false-RED on the shipped
-  tree, where `install` is not a prerequisite of `check`.
+  checks/ci_suite_extras.py. Widening this gate to install lines would
+  double-gate that and would false-RED where `install` is not a prerequisite
+  of `check`.
 """
 
 from __future__ import annotations
@@ -126,9 +107,9 @@ _ENV_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s()]+ +)+")
 # The unwrap tolerates quotes around the command substitution, because
 # that is how the real tree writes it: ci.yml's shard enumeration is
 # `modules="$(python tools/mutate.py --list-modules)"`. Without the
-# optional quote arms the unwrap did not match, the interpreter strip
-# below then matched the `python` buried mid-line, and the gate
-# compared a fragment sliced out of the middle of the assignment.
+# optional quote arms the unwrap does not match, the interpreter strip
+# below then matches the `python` buried mid-line, and the gate
+# compares a fragment sliced out of the middle of the assignment.
 _UNWRAP_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=[\"']?\$\((.*)\)[\"']? *;? *$")
 _INTERP_RE = re.compile(r"^(?:" + _PY + r"|\S*python[0-9.]*)( -m)? ")
 _MODULE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+")
@@ -211,16 +192,15 @@ def normalize(segment: str, variables: Mapping[str, str]) -> tuple[str | None, s
 
 def script_key(command: str) -> str | None:
     """Reduce a normalised command to its comparison key: the first
-    whitespace-separated token, i.e. the script path, the tool name, or
-    the dotted module. Arguments are deliberately NOT part of the key --
-    the claim of this gate is about WHICH checks run, and the two sides
-    legitimately differ in output paths, sharding and --self-test
-    placement, all of which live in the argv.
+    whitespace-separated token, i.e. the script path, the tool name, or the
+    dotted module. Arguments are deliberately NOT part of the key -- the
+    claim is WHICH checks run, and the sides legitimately differ in output
+    paths, sharding and --self-test placement, all in the argv.
 
-    Returns None when the token is not a plausible script/tool/module
-    token. A token holding a shell artefact (a parenthesis, a quote, a
-    `$`, a brace) is not a command; it is a fragment the extractor
-    sliced out of a larger construct, and it must never become a key."""
+    Returns None when the token is not a plausible script/tool/module token.
+    A token holding a shell artefact (parenthesis, quote, `$`, brace) is a
+    fragment the extractor sliced out of a larger construct, and must never
+    become a key."""
     token = command.split(" ", 1)[0]
     if _KEY_RE.fullmatch(token) is None:
         return None
@@ -237,13 +217,12 @@ def is_check_command(command: str) -> bool:
 
 
 def _looks_like_check_stem(token: str) -> bool:
-    """True when a token that FAILED the key plausibility test still has
-    a check command's stem: cut it at the first shell artefact and what
-    remains names a gated tool, a *.py path, or a dotted module. Such a
-    token is the slicing artefact of a real check command -- the
-    semicolon inside the CI probe's `pytest.skip("...")` string is the
-    standing example -- and those are counted, so the narrowing stays
-    visible rather than silent."""
+    """True when a token that FAILED the key plausibility test still has a
+    check command's stem: cut at the first shell artefact and what remains
+    names a gated tool, a *.py path, or a dotted module. Such a token is a
+    slicing artefact of a real check command (the semicolon inside the CI
+    probe's `pytest.skip("...")` string is the standing example); they are
+    counted so the narrowing stays visible, not silent."""
     stem = _ARTEFACT_RE.split(token, 1)[0]
     if not stem:
         return False
@@ -323,13 +302,13 @@ def _collect(
     variables: Mapping[str, str],
     origin_label: str,
 ) -> tuple[dict[str, dict[str, set[str]]], list[str], int]:
-    """Normalise physical lines into a {key: {command: set(origins)}}
-    map keyed by script_key, plus a list of parse problems (unresolved
-    make-style variables in lines that would otherwise be check
-    commands), plus a count of rejected fragments (segments that looked
-    like check commands but whose first token failed the plausibility
-    test). The full observed commands are kept per key so the report
-    can show what each key was seen as; they just are not compared."""
+    """Normalise physical lines into a {key: {command: set(origins)}} map
+    keyed by script_key, plus a list of parse problems (unresolved make-style
+    variables in lines that would otherwise be check commands), plus a count
+    of rejected fragments (segments that looked like check commands but whose
+    first token failed the plausibility test). Full observed commands are kept
+    per key so the report can show what each key was seen as; they are not
+    compared."""
     commands: dict[str, dict[str, set[str]]] = {}
     problems: list[str] = []
     fragments = 0
@@ -365,10 +344,10 @@ def _origins(seen: Mapping[str, set[str]]) -> str:
 
 
 def _banner(fragments: int) -> str:
-    """The narrowing banner, printed on EVERY verdict, CLEAR and RED
-    alike: what this gate compares, why it no longer compares argv, and
-    what that choice cannot see. A narrowing that is only printed on
-    the red runs is a narrowing nobody believes on the green ones."""
+    """The narrowing banner, printed on EVERY verdict, CLEAR and RED alike:
+    what this gate compares, why argv is not compared, and what that choice
+    cannot see. A narrowing printed only on the red runs is one nobody
+    believes on the green ones."""
     return "\n".join(
         [
             "----------------------------------------------------------------------",
@@ -441,14 +420,12 @@ def evaluate(makefile_path: Path | str, ci_path: Path | str) -> tuple[int, str]:
         return UNMEASURED, f"UNMEASURED: CI workflow unreadable at {ci_path}: {exc}"
 
     variables, targets, prereqs = parse_makefile(make_text)
-    # $(CURDIR) is make's own absolute path to the directory it runs in, which
-    # is the directory holding this Makefile. Seeding it is not a guess -- it is
-    # the value make itself computes. Without it every recipe that mentions
-    # $(CURDIR) is unresolvable, and since `countables` does, the gate abstained
-    # on EVERY run of this repo. A gate that can only ever return UNMEASURED is
-    # an inert gate (the #278/#293 shape), not a cautious one: it has no failing
-    # input, so it certifies nothing. setdefault, not assignment, so an explicit
-    # CURDIR := in the Makefile still wins.
+    # $(CURDIR) is make's own absolute path to the directory holding the
+    # Makefile -- the value make itself computes, not a guess. Without it every
+    # recipe mentioning $(CURDIR) (e.g. `countables`) is unresolvable and the
+    # gate abstains on EVERY run: an inert, always-UNMEASURED gate has no
+    # failing input and certifies nothing. setdefault, not assignment, so an
+    # explicit CURDIR := in the Makefile still wins.
     variables.setdefault("CURDIR", str(Path(makefile_path).resolve().parent))
     make_cmds: dict[str, dict[str, set[str]]] = {}
     make_fragments = 0
@@ -518,11 +495,10 @@ def evaluate(makefile_path: Path | str, ci_path: Path | str) -> tuple[int, str]:
         report.append(_banner(fragments))
         return RED, "\n".join(report)
 
-    # #310: the count and the names come from ONE list, and the names are
-    # printed. A bare "18 scripts mirrored" is unauditable -- it cannot be
-    # told apart from 18 of the wrong scripts, or from an extractor that
-    # found 18 things that are not checks at all. Enumerating the
-    # denominator is what makes a CLEAR verdict checkable by a reader.
+    # The count and the names come from ONE list, and the names are printed:
+    # a bare "18 scripts mirrored" is unauditable -- indistinguishable from 18
+    # wrong scripts or 18 non-checks. Enumerating the denominator is what makes
+    # a CLEAR verdict checkable by a reader.
     both = sorted(make_cmds)
     report = [
         f"CLEAR: {len(both)} check scripts run on both sides of the "
@@ -632,11 +608,10 @@ _MK_SHELL_SUITE = (
     "\tbash launchers/test_fixture_suite.sh\n"
 )
 
-# The shape MEASURED in .github/workflows/ci.yml: the two launcher suites
-# are reached through a loop variable, so the suite path never occupies a
-# command position anywhere in the workflow. This is why the recogniser
-# is not widened to *.sh -- see the SECOND NARROWING paragraph of the
-# banner.
+# The shape of .github/workflows/ci.yml: the two launcher suites are reached
+# through a loop variable, so the suite path never occupies a command position
+# in the workflow. This is why the recogniser is not widened to *.sh -- see
+# the SECOND NARROWING paragraph of the banner.
 _CI_SHELL_SUITE_VIA_LOOP = (
     "name: CI\n"
     "jobs:\n"
@@ -813,7 +788,7 @@ def _self_test() -> int:
             # silent" from "silently absent". The forbidden list is how a
             # blind-spot leg states what must NOT appear: leg 9 is only
             # meaningful if the shell suite is missing from the report
-            # entirely, not merely absent from the single-sided lists.
+            # entirely, not merely from the single-sided lists.
             for sub in forbidden:
                 if sub in report:
                     leg_failures.append(f"report must not contain {sub!r}")
@@ -825,16 +800,15 @@ def _self_test() -> int:
         print(f"{verdict}  {name}")
         print(f"      {planted}")
         print(f"      {demanded}")
-    # The tally is printed in the "SELF-TEST DENOMINATOR: N of M controls
-    # behaved" grammar six sibling gates already use (campaign_self_tests,
-    # ci_suite_extras, coverage_floor, mutation_scope, packaging_reachability,
-    # training_plane_probe). Inventing a seventh phrasing would give this gate
-    # its own private parse, which is the drift class the campaign keeps
-    # closing. It is printed on BOTH arms deliberately: a reader -- and the
-    # shrink-floor leg in launchers/test_checks_gates.sh -- needs the
-    # denominator most on the arm where the controls did NOT all behave, and a
-    # failing self-test that prints no count cannot be told from one whose
-    # control set was silently emptied.
+    # The tally uses the "SELF-TEST DENOMINATOR: N of M controls behaved"
+    # grammar six sibling gates share (campaign_self_tests, ci_suite_extras,
+    # coverage_floor, mutation_scope, packaging_reachability,
+    # training_plane_probe); a private phrasing would give this gate its own
+    # parse, the drift class the campaign keeps closing. Printed on BOTH arms:
+    # the denominator -- and the shrink-floor leg in
+    # launchers/test_checks_gates.sh -- matters most where the controls did NOT
+    # all behave, and a failing self-test with no count cannot be told from one
+    # whose control set was silently emptied.
     behaved = len(_SELF_TEST_LEGS) - len(failures)
     if failures:
         print(

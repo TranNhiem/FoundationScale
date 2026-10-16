@@ -28,7 +28,7 @@ reward shaping is likewise rollout-side and unimplemented. No convergence,
 benchmark, or equivalence-to-the-paper claim is made: none of these
 objectives has ever been trained here.
 
-On the standing open question (docs/RL_ALGORITHMS.md:137) -- this module's
+On the ratio_scope question (docs/RL_ALGORITHMS.md:95) -- this module's
 answer, stated once and as an ARGUMENT, not a measurement: no third
 ``ratio_scope`` member and no companion flag. A non-length-normalised
 sequence ratio is ``exp(SUM_t log_ratio_t)``; over any response long enough

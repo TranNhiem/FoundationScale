@@ -2,33 +2,30 @@
 """Gate: no bare Python-ecosystem tool name may sit in COMMAND position in a Makefile recipe.
 
 WHAT IS MEASURED
-    Every line of this repository's Makefile that begins with a literal TAB is a recipe line.
-    Recipe lines are joined across trailing-backslash continuations into logical commands, and
-    each logical command is tokenised with a quote- and substitution-aware scanner.  A token is
-    in COMMAND position when it is the first word of a simple command: at the start of the
-    logical line (after make's `@`/`-`/`+` prefixes), after `;`, `&&`, `||`, `|`, `&`, after an
-    opening `(`/`` ` ``/`$$(`, after any run of `VAR=value` assignment prefixes, and after a
+    Every line of the Makefile starting with a literal TAB is a recipe line.  Recipe lines are
+    joined across trailing-backslash continuations into logical commands and each is tokenised
+    with a quote- and substitution-aware scanner.  A token is in COMMAND position when it is the
+    first word of a simple command: at the start of the logical line (after make's
+    `@`/`-`/`+` prefixes), after `;`, `&&`, `||`, `|`, `&`, after an opening
+    `(`/`` ` ``/`$$(`, after any run of `VAR=value` assignment prefixes, and after a
     transparent shell keyword (`then`, `do`, `env`, `xargs`, ...).  A command word is BARE when
     it names pytest / ruff / mypy / pip / coverage / python[N[.N]] with no path separator and no
     `$` expansion in it.
 
-WHY IT IS A DEFECT (#232, reopened as a class by #247)
-    Whether a bare name resolves is a property of the developer's PATH, not of the repository.
-    `make lint` that runs `ruff` works on the machine that happens to have ruff installed
-    globally and dies with `No module named ruff` -- or worse, silently runs a DIFFERENT ruff --
-    on the machine that does not.  Routing every tool through `$(PY) -m <tool>` moves the
-    verdict back inside the repository, where a gate can hold it.
+WHY IT IS A DEFECT
+    Whether a bare name resolves is a property of the developer's PATH, not of the repository:
+    `make lint` running a bare `ruff` dies with `No module named ruff` -- or silently runs a
+    DIFFERENT ruff -- on a machine without a global install.  Routing every tool through
+    `$(PY) -m <tool>` puts the verdict inside the repository.
 
-WHAT IS NOT MEASURED (deliberately, per #83/#111)
-    Nothing here asks which interpreter is running, what is installed, or what is on PATH.  A
-    verdict that depends on the machine reading the file is a property of the MACHINE and may be
-    reported as information but must never be RED.  This gate never shells out and never
-    imports anything outside the standard library.
+WHAT IS NOT MEASURED
+    Nothing here asks which interpreter runs, what is installed, or what is on PATH -- those are
+    MACHINE properties and may never be reported RED.  This gate never shells out and imports
+    nothing outside the standard library.
 
 DENOMINATOR
     The physical recipe lines of the Makefile.  Zero recipe lines is UNMEASURED, never a pass:
-    `all([])` is True, so an empty denominator that exits 0 is the exact vacuous truth this
-    repository's doctrine exists to refuse.
+    an empty denominator that exits 0 is vacuous truth.
 
 EXIT CODES
     0   CLEAR      -- at least one recipe line was read and none invokes a bare tool name
@@ -107,9 +104,9 @@ class Finding:
 def _unquote(word: str) -> str:
     """Strip one matching pair of surrounding quotes, if the result is still a single word.
 
-    `"pytest" tests` really does invoke pytest, so a quoted command word must not be a hiding
-    place.  A quoted run that contains whitespace (`'import pytest'` emitted by a printf) is not
-    a command name and is returned unchanged, so it can never match a tool.
+    `\"pytest\" tests` really does invoke pytest, so a quoted command word is still checked.  A
+    quoted run containing whitespace (`'import pytest'` from a printf) is not a command name and
+    is returned unchanged, so it can never match a tool.
     """
     if len(word) >= 2 and word[0] == word[-1] and word[0] in "'\"":
         inner = word[1:-1]
@@ -161,9 +158,9 @@ def _skip_make_var(s: str, i: int) -> int:
 def command_words(logical: str) -> list[str]:
     """Return every token of `logical` that sits in shell COMMAND position, in order.
 
-    This is the whole instrument: everything else in the file is bookkeeping around it.  The
-    scanner is deliberately conservative -- when it cannot tell, it stops treating the position
-    as a command position rather than inventing an invocation.
+    This is the whole instrument; the rest of the file is bookkeeping.  The scanner is
+    deliberately conservative: where it cannot tell, it stops treating the position as a command
+    position rather than inventing an invocation.
     """
     words: list[str] = []
     i = 0
@@ -264,9 +261,9 @@ def command_words(logical: str) -> list[str]:
 def bare_tool(word: str) -> str | None:
     """Return the tool name if `word` is a bare invocation of one, else None.
 
-    A token carrying a path separator (`/usr/bin/python3`, `./ruff`) names a specific file and is
-    not PATH-dependent; a token carrying `$` has been routed through a variable.  Neither is the
-    defect.
+    A token with a path separator (`/usr/bin/python3`, `./ruff`) names a specific file and a
+    token with `$` has been routed through a variable; neither is PATH-dependent and neither is
+    the defect.
     """
     candidate = _unquote(word)
     if not candidate or "/" in candidate or "$" in candidate:
@@ -281,8 +278,8 @@ def bare_tool(word: str) -> str | None:
 def logical_recipe_lines(text: str) -> tuple[list[tuple[int, str]], int]:
     """Split `text` into (first_physical_line, joined_command) pairs plus the physical count.
 
-    The physical count is the DENOMINATOR the verdict is stated over: joining continuations is
-    how the command is parsed, but "how much of the Makefile did I read" is a line question.
+    The physical count is the DENOMINATOR the verdict is stated over: continuations are joined
+    to parse the command, but coverage is measured in lines.
     """
     lines = text.split("\n")
     out: list[tuple[int, str]] = []
@@ -352,10 +349,9 @@ def evaluate(text: str) -> tuple[int, list[str]]:
 
 
 # --------------------------------------------------------------------------------------------
-# Controls.  Each one runs the REAL detector over a fixture; none re-implements the rule, so a
-# control cannot pass while the shipped code is wrong.  MUST_FIRE plants the exact pattern and
-# asserts the detector fires; MUST_PASS plants a clean or deliberately-confusable fixture and
-# asserts it stays silent.
+# Controls.  Each runs the REAL detector over a fixture, so a control cannot pass while the
+# shipped code is wrong.  MUST_FIRE plants the pattern and asserts the detector fires;
+# MUST_PASS plants a clean or deliberately-confusable fixture and asserts it stays silent.
 # --------------------------------------------------------------------------------------------
 
 # Verbatim excerpts from the live Makefile.  These are the shapes that made a naive scanner

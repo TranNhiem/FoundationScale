@@ -6,12 +6,11 @@ Usage:
   verification_matrix.py [--repo-root ROOT] [--matrix PATH] [--doc PATH]
   verification_matrix.py --self-test   plant each defect in a temp copy and exit
 
-The class. validation_campaigns/verification_matrix/matrix.json is the
-repository's ledger of claims, and docs/VERIFICATION_MATRIX.md is the prose
-rendering of that ledger. Both are edited by hand, so they can drift in either
-direction, and a row can rot in place: its control_arm can slide from a real
-arm to a placeholder while every presence check stays green. Both shapes are
-declarations that no longer measure anything, and neither had a gate.
+validation_campaigns/verification_matrix/matrix.json is the repository's
+ledger of claims; docs/VERIFICATION_MATRIX.md is its prose rendering. Both are
+hand-edited and can drift in either direction. A row can also rot in place: its
+control_arm slides to a placeholder while every presence check stays green --
+either shape declares something that no longer measures anything.
 
 Checks, each reported with its own verdict line:
   C1 CONTROL_ARM_PRESENT     every row's control_arm is non-empty after strip()
@@ -22,10 +21,10 @@ Checks, each reported with its own verdict line:
                              ones derived from the JSON, parsed positionally
   C5 DOC_JSON_AGREEMENT      every T0-/T1- table row in the doc equals the JSON
 
-C2 is the check that actually bites. This document's own thesis is that a row
-with no arm that must come out DIFFERENT is a row that cannot fail, and a row
-that cannot fail is not a measurement. A presence-only check (C1) passes a
-placeholder like "not recorded"; C2 exists because C1 cannot see that shape.
+C2 is the check that actually bites: a row with no arm that must come out
+DIFFERENT cannot fail, and a row that cannot fail is not a measurement. C1
+passes a placeholder like "not recorded"; C2 exists because C1 cannot see that
+shape.
 
 Doctrine wiring:
   (1) Exit codes are 0/5/95/96 and never 1. CLEAR means every check passed;
@@ -39,33 +38,23 @@ Doctrine wiring:
   (3) --self-test plants each defect in a tempfile.TemporaryDirectory() copy
       of the REAL files (the real files are never mutated) and asserts two
       things separately: REACHED-SITE (the check's own finding list names the
-      planted row) and OUTCOME (the exit code). An exit-code-only assertion
-      cannot distinguish "the right check caught the right row" from "the
-      gate is RED for some other reason", and this repository has repeatedly
-      shipped controls that cannot fail.
-  (4) SC6 is the negative control: the unmodified files must come back CLEAR.
-      Without it SC1-SC5 prove nothing, because a gate that always returns 5
-      would pass every positive control. SC7 is the abstention control: a
-      missing matrix is UNMEASURED (95), not RED. SC8 is the precedence
-      control: with one check RED and another UNMEASURED at the same time the
-      verdict must be RED, because 95 is the code this plane reads as "not a
-      failure" and a fired check must not be reported as neutral. SC9 is the
-      discrimination control, and it is the only one that does not plant into
-      a file copy: the defect it guards lives in the COUNTING, not in the
-      ledger. ``"MEASURED" in status`` also matches ``"UNMEASURED"`` (#199),
-      so it would tally a row that explicitly refused for want of an arm as a
-      row that measured something -- the one direction this countable must
-      never fail in. Two synthetic rows differing only in the ``UN`` prefix
-      cover that direction; #507 added two more, because containment also
-      cannot tell a row that STATES a verdict from one that MENTIONS the other
-      while discussing it, and a measuring row was struck from the tally for
-      reporting that an abstention branch did not fire. The verdict is now
-      resolved by position -- first token wins -- and all four rows are
-      required. SC10 guards the #415 adjudicator binding:
-      C3 admits the key to its set, so C3 must READ it. A key admitted and
-      never adjudicated is a quiet exclusion reading as coverage (#231),
-      and the plant is the empty string -- the one value a truthiness test
-      would silently accept as "this row has no adjudicator".
+      planted row) and OUTCOME (the exit code).
+  (4) SC6 (negative control): the unmodified files must come back CLEAR, or
+      SC1-SC5 prove nothing -- a gate that always returns 5 passes every
+      positive control. SC7 (abstention): a missing matrix is UNMEASURED (95),
+      not RED. SC8 (precedence): with one check RED and another UNMEASURED the
+      verdict must be RED -- 95 reads as "not a failure", and a fired check
+      must not be reported as neutral. SC9 (discrimination) is the only
+      control that does not plant into a file copy: the defect lives in the
+      COUNTING, not the ledger. ``"MEASURED" in status`` also matches
+      ``"UNMEASURED"``, and containment cannot tell a row that STATES a
+      verdict from one that MENTIONS the other while discussing it; the
+      verdict is resolved by position (first token wins), and four synthetic
+      rows covering both directions are required. SC10 guards the adjudicator
+      binding: C3 admits `adjudicator` to its key set, so C3 must READ its
+      value -- a key admitted and never adjudicated is a quiet exclusion
+      reading as coverage, and the plant is the empty string, the one value a
+      truthiness test accepts as "this row has no adjudicator".
 """
 
 from __future__ import annotations
@@ -108,11 +97,11 @@ EXPECTED_KEYS = {
     "status",
     "blocked_by",
     "findings",
-    # #415 bound each row to the program that judges it: null when the row
-    # has no adjudicator yet, a repo-relative path when it does. It is in
-    # EXPECTED_KEYS so its ABSENCE is drift, and C3 adjudicates its VALUE
-    # below -- a key admitted to the set and then never read is the #231
-    # shape, where a quiet exclusion reads as coverage.
+    # Each row's adjudicator binds it to the program that judges it: null
+    # when unbound, a repo-relative path otherwise. It is in EXPECTED_KEYS so
+    # its ABSENCE is drift, and C3 adjudicates its VALUE below -- a key
+    # admitted to the set and then never read is the shape where a quiet
+    # exclusion reads as coverage.
     "adjudicator",
 }
 
@@ -193,8 +182,8 @@ def check_control_arm_substantive(rows: list[JsonRow]) -> CheckResult:
     """C2: no control_arm is a placeholder.
 
     Exact placeholders are matched case-insensitively after strip(); the
-    phrases are matched case-insensitively as substrings. This is the check
-    that actually bites: C1 passes "not recorded", C2 does not.
+    phrases are matched case-insensitively as substrings. C1 passes
+    "not recorded", C2 does not.
     """
     name = "C2 CONTROL_ARM_SUBSTANTIVE"
     findings = []
@@ -219,11 +208,11 @@ def check_control_arm_substantive(rows: list[JsonRow]) -> CheckResult:
 def check_schema(rows: list[JsonRow]) -> CheckResult:
     """C3: exact key set, unique ids, tier in {0,1}, list fields, no dangles.
 
-    Also adjudicates the #415 adjudicator binding: null, or a non-empty
-    path string. EXISTENCE of that path is NOT checked here -- this
-    function is handed rows, not a repo root, and the controls adjudicate
-    copies in a temp directory, so resolving a root from the matrix path
-    would make the verdict depend on where the file sits (#83/#229).
+    Also adjudicates the adjudicator binding: null, or a non-empty path
+    string. Path EXISTENCE is NOT checked -- this function is handed rows,
+    not a repo root, and the controls adjudicate copies in a temp directory,
+    so resolving a root from the matrix path would make the verdict depend
+    on where the file sits.
     """
     name = "C3 SCHEMA"
     findings: list[str] = []
@@ -248,12 +237,11 @@ def check_schema(rows: list[JsonRow]) -> CheckResult:
             if not isinstance(row.get(key), list):
                 findings.append(f"{label}: {key} must be a list")
         # null is legal and means "no adjudicator bound yet", which most rows
-        # honestly are. The count is deliberately NOT written here: it was
-        # stated as "28 of the 33" and had drifted to 22 unnoticed, because a
-        # hand-written number in a comment is invalidated by every row that
-        # binds an adjudicator and is checked by nothing. Anything other than
-        # null must be a usable path. isinstance(True, str) is False, so a bare
-        # bool is caught.
+        # honestly are. Do NOT state a bound-rows count here: a hand-written
+        # number in a comment is invalidated by every row that binds an
+        # adjudicator and is checked by nothing. Anything other than null must
+        # be a usable path. isinstance(True, str) is False, so a bare bool is
+        # caught.
         adjudicator = row.get("adjudicator")
         if adjudicator is not None and not (isinstance(adjudicator, str) and adjudicator.strip()):
             findings.append(
@@ -294,23 +282,25 @@ def derive_countables(rows: list[JsonRow]) -> dict[str, int]:
         if isinstance(blocked_by, list) and blocked_by:
             blocked.add(i)
 
-    # ANCHORED on purpose (the #199 class): a bare `"MEASURED" in s` also matches
-    # "UNMEASURED", so a row that explicitly refuses for want of an arm would be
-    # counted as a row that measured something -- the one direction this countable
-    # must never fail in. The lookbehind, not a substring test, is what enforces it.
+    # ANCHORED on purpose: a bare `"MEASURED" in s` also matches "UNMEASURED",
+    # so a row that explicitly refuses for want of an arm would be counted as
+    # a row that measured something -- the one direction this countable must
+    # never fail in. The lookbehind, not a substring test, is what enforces
+    # it.
     #
-    # #507: the first cut wrote `"UNMEASURED" not in s`, which is containment, and
-    # containment cannot tell USE from MENTION. T1-22 measured on a tray and says so
-    # in its first word, then four thousand characters later reports that an
-    # UNMEASURED fallback branch did NOT fire -- evidence that it measured -- and was
-    # struck from the tally for saying so. The failure is not cosmetic: C4 then
-    # reports the doc and the matrix disagreeing, and the cheap way to agree is to
-    # edit the doc down to 19, publishing a false count in the honest-count section.
-    # A gate whose remedy is to write something untrue is pointed at the wrong file.
+    # `"UNMEASURED" not in s` is containment, which cannot tell USE from
+    # MENTION: a row may state MEASURED first and later report that an
+    # UNMEASURED fallback branch did NOT fire (evidence it measured), and
+    # containment strikes it from the tally. That is not cosmetic: C4 then
+    # reports the doc and the matrix disagreeing, and the cheapest way to
+    # agree is to edit the doc down to a false number in the honest-count
+    # section -- a gate whose remedy is to write a lie is pointed at the
+    # wrong file.
     #
-    # So resolve by POSITION: a row's verdict is whichever token comes FIRST. Leading
-    # position alone would be wrong -- T1-16 states MEASURED 152 characters in -- and
-    # containment alone is what broke. Anything after the verdict is discussion.
+    # So resolve by POSITION: a row's verdict is whichever token comes FIRST.
+    # Leading position alone would be wrong (T1-16 states MEASURED 152
+    # characters in), so the verdict is the first anchored MEASURED or
+    # UNMEASURED token; anything after it is discussion.
     def _is_measured(s: str) -> bool:
         if s.startswith("done"):
             return True
@@ -387,11 +377,11 @@ def check_countables(rows: list[JsonRow], doc: str) -> CheckResult:
 def _norm_cell(cell: str) -> str:
     """Unescape the markdown pipe escape, drop inline-code ticks, collapse space.
 
-    Backticks are MARKUP, not content: the doc is a markdown rendering and the
-    JSON is the ledger, so requiring the ledger to carry the doc's inline-code
-    ticks would put presentation in the record. Applied to BOTH sides, so the
-    comparison stays symmetric. It removes only the tick characters -- two
-    cells whose words differ still disagree, which is what C5 exists to catch.
+    Backticks are MARKUP, not content: requiring the ledger to carry the
+    doc's inline-code ticks would put presentation in the record. Applied to
+    BOTH sides so the comparison stays symmetric. Only the tick characters
+    are removed -- cells whose words still differ disagree, which is what C5
+    exists to catch.
     """
     return " ".join(cell.replace("\\|", "|").replace("`", "").split())
 
@@ -450,9 +440,8 @@ def check_doc_json_agreement(rows: list[JsonRow], doc: str) -> CheckResult:
         for field_name, doc_value in zip(DOC_FIELDS, doc_rows[rid], strict=True):
             raw = json_row.get(field_name)
             # _norm_cell on BOTH sides, or the normalisation is one-sided and
-            # a ledger cell carrying markdown ticks reads as drift against the
-            # identical doc cell. Symmetric normalisation is what lets the
-            # docstring's claim be true.
+            # a ledger cell carrying markdown ticks reads as drift against
+            # the identical doc cell.
             json_value = _norm_cell(raw) if isinstance(raw, str) else ""
             if doc_value != json_value:
                 findings.append(
@@ -531,13 +520,12 @@ def adjudicate(matrix_path: Path, doc_path: Path) -> tuple[int, dict[str, CheckR
     for key in ("C1", "C2", "C3", "C4", "C5"):
         _report(results[key])
     statuses = {r.status for r in results.values()}
-    # RED outranks UNMEASURED, and the reason is that these five checks are
-    # INDEPENDENT. A whole-input failure already returned 95 above, before any
-    # check ran. Past that point C4 abstaining says nothing about C5, which
-    # read both artifacts and positively found disagreements -- and 95 is the
-    # code this plane treats as "not a failure", so letting one check's
-    # abstention set the verdict would report a fired RED as neutral. SC8
-    # pins this: without it the precedence is a claim no scenario measures.
+    # RED outranks UNMEASURED: the five checks are INDEPENDENT (a
+    # whole-input failure already returned 95 above, before any check ran),
+    # so one check's abstention says nothing about another's positive
+    # finding -- and 95 is the code this plane treats as "not a failure", so
+    # letting an abstention set the verdict would report a fired RED as
+    # neutral. SC8 pins this.
     if RED in statuses:
         rc, verdict = RC_RED, RED
     elif UNMEASURED in statuses:
@@ -560,8 +548,7 @@ def adjudicate(matrix_path: Path, doc_path: Path) -> tuple[int, dict[str, CheckR
 #   (b) OUTCOME -- the returned exit code is the expected one.
 # An assertion on the exit code alone is NOT acceptable: rc==5 cannot
 # distinguish "the right check caught the planted row" from "the gate is RED
-# for an unrelated reason (or always RED)", and this repository has repeatedly
-# shipped controls that cannot fail.
+# for an unrelated reason (or always RED)".
 
 
 def _fresh_copies(matrix_src: Path, doc_src: Path, dest: Path) -> tuple[Path, Path]:
@@ -724,28 +711,23 @@ def _sc8(matrix_src: Path, doc_src: Path) -> bool:
 def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
     """DISCRIMINATION CONTROL: "UNMEASURED" must not be counted as MEASURED.
 
-    This one does not plant into a file copy, because the defect it guards is
-    not a property of the ledger -- it is a property of the COUNTING. A bare
-    ``"MEASURED" in status`` also matches ``"UNMEASURED"`` (the #199 class), so
-    a row that explicitly refused for want of an arm would be added to the
-    tally of rows that measured something, which is the one direction this
-    countable must never fail in. The first two synthetic rows below differ in
-    exactly one character sequence -- the ``UN`` prefix -- so that pair cannot
-    pass for any reason other than the anchoring.
+    The defect guarded lives in the COUNTING, not the ledger, so nothing is
+    planted into a file copy. A bare ``"MEASURED" in status`` also matches
+    ``"UNMEASURED"``, so a row that refused for want of an arm would be
+    tallied as a row that measured something -- the one direction this
+    countable must never fail in. The first two synthetic rows differ only in
+    the ``UN`` prefix, so that pair passes only if the match is anchored, and
+    the same pair asserts the other direction (a real MEASURED row still
+    counts), so a fix that stopped counting everything would not pass.
 
-    It also asserts the OTHER direction (a real MEASURED row still counts), so
-    a fix that simply stopped counting everything would not pass it.
-
-    #507 added the second pair, which is where the instrument had a hole. Both
-    rows above state their verdict and then say nothing further, so neither can
-    see a row that states one verdict and DISCUSSES the other -- and the fix for
-    #199 was containment (``"UNMEASURED" not in s``), which cannot separate use
-    from mention. T1-22 measured on a tray and later reported that an UNMEASURED
-    fallback did not fire; that sentence, which is evidence the row measured,
-    removed it from the measured tally. The third row reproduces exactly that,
-    and the fourth holds the #199 direction shut while it is repaired: a row
-    whose abstention comes FIRST stays an abstention however much it goes on to
-    discuss measurement. Four rows, two directions, two positions.
+    Containment (``"UNMEASURED" not in s``) is not enough: it cannot separate
+    a row that STATES a verdict from one that MENTIONS the other while
+    discussing it. A row can measure and then report that an UNMEASURED
+    fallback did not fire -- evidence that it measured. The third row
+    reproduces that case; the fourth holds the symmetric direction shut: a
+    row whose abstention comes FIRST stays an abstention however much it
+    discusses measurement. Verdict resolution is therefore positional --
+    first token wins -- and all four rows are required.
     """
 
     def _row(status: str) -> JsonRow:
@@ -753,12 +735,11 @@ def _sc9(_matrix_src: Path, _doc_src: Path) -> bool:
 
     measured = derive_countables([_row("MEASURED on 2xGB200, control arm differed")])["measured"]
     unmeasured = derive_countables([_row("UNMEASURED: no GPU arm was available")])["measured"]
-    # #507: the third row is the one the first two could not catch. It MEASURED,
-    # and it goes on to discuss an UNMEASURED branch -- the use/mention split. A
-    # containment test drops it, and the drop is invisible to both rows above
-    # because neither mentions the other's token. Without this case, the only
-    # thing standing between the honest count and a false number is a human
-    # noticing that C4's easiest remedy is a lie.
+    # The third row is the one the first two cannot catch: it MEASURED and
+    # then discusses an UNMEASURED branch -- the use/mention split. A
+    # containment test drops it, invisibly to both rows above because neither
+    # mentions the other's token. Without this case, the honest count can
+    # drift to a false number with nothing to object.
     mention = derive_countables(
         [_row("MEASURED on a tray; the UNMEASURED fallback did not fire, so the scan ran")]
     )["measured"]
@@ -777,11 +758,12 @@ def _sc10(matrix_src: Path, doc_src: Path) -> bool:
     """MUST-FIRE: a mis-shaped #415 adjudicator binding must be caught.
 
     Widening EXPECTED_KEYS to admit `adjudicator` without this control
-    would be pure tolerance -- the key would pass through C3 unread, which
-    is the #231 shape. The planted value is the empty string because that
-    is the realistic drift: a row edited toward an adjudicator and left
-    half-bound. It is also the one value a truthiness test would silently
-    treat as "no adjudicator", so the plant separates the two readings.
+    would be pure tolerance -- the key would pass through C3 unread (the
+    quiet-exclusion shape where an unexamined key reads as coverage). The
+    planted value is the empty string: the realistic drift (a row edited
+    toward an adjudicator and left half-bound) and the one value a truthiness
+    test would silently treat as "no adjudicator", so the plant separates the
+    two readings.
     """
     with tempfile.TemporaryDirectory() as td:
         matrix, doc = _fresh_copies(matrix_src, doc_src, Path(td))
@@ -797,10 +779,10 @@ def _sc10(matrix_src: Path, doc_src: Path) -> bool:
 
 
 # The fourth element is the control's KIND, and the banner counts it rather
-# than restating a breakdown by hand: a hand-written "(5 MUST_FIRE, 1 ..., 1
-# ...)" summed to 7 the moment SC8 landed, while the total said 8. A banner
-# whose names come from one list and whose count comes from another is the
-# defect this campaign has already filed twice (#216, #310).
+# than restating a breakdown by hand: a hand-written breakdown like
+# "(5 MUST_FIRE, 1 ...)" goes stale the moment a control lands or is removed.
+# A banner whose names come from one list and whose count comes from another
+# is a defect this campaign has already filed twice.
 CONTROLS: list[tuple[str, Callable[[Path, Path], bool], str, str]] = [
     (
         "SC1 empty control_arm",

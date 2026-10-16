@@ -2,63 +2,50 @@
 """Per-module coverage floor -- the gate that refuses a subsidised total.
 
 WHY THIS GATE EXISTS
-    CI enforces `--cov-fail-under=90`. That flag is a TOTAL: one number over
-    the whole measured tree, and a total can be subsidised. Measured
-    2026-09-03 the repository reports 92.79% -- comfortably green -- while
-    FIVE of its 28 tracked modules sit below the 90 that number is compared
-    against: train/__main__.py at 0.00%, train/__init__.py at 50.00%,
-    train/loop.py at 78.43% (62.18% before this campaign's execution test),
-    tools/emit_run_manifest.py at 80.92% and checkpoint/dcp_meta.py at
-    81.36%. All five pass CI, because the other 23 average high enough to
-    carry them across the line. The aggregate is being read as if it were a
-    claim about every module, and it is not: a total is a claim about the
-    sum of numerators over the sum of denominators, nothing more. Reading
-    "92.79% overall" as "the training path is tested" is precisely the
-    vacuous-truth defect this repository exists to eliminate -- a sweeping
-    claim bought with evidence about something else. This gate adds the
-    claim the total cannot make: EVERY tracked module, individually, inside
-    a stated band around its own floor, or the run does not pass.
+    CI enforces `--cov-fail-under=90`, a TOTAL that can be subsidised: the
+    repository can read green overall while five of its modules sit below 90,
+    carried across the line by the others. A total claims about sums of
+    numerators over sums of denominators, not about every module. This gate
+    makes the claim the total cannot: EVERY tracked module, individually,
+    inside a stated band around its own floor, or the run does not pass.
 
 THE CLAIM
-    The denominator is derived from the repository (`git ls-files` over
-    src/foundationscale plus the modules named in TOOLS_IN_SCOPE), never
-    from the report: a module no test imports is invisible to coverage, and
-    invisible must not mean clean. A tracked module missing from the report
-    is UNMEASURED.
+    The denominator comes from the repository (`git ls-files` over
+    src/foundationscale plus the modules in TOOLS_IN_SCOPE), never from the
+    report: a module no test imports is invisible to coverage, and invisible
+    must not mean clean. A tracked module missing from the report is
+    UNMEASURED.
 
-    A report entry the tracked set does not carry is split on ONE axis --
-    where the file lives -- because the two halves are different facts:
+    A report entry the tracked set does not carry is split on where the file
+    lives -- two different facts:
       IN-TREE, untracked   RED. The report measured a file under the repo
                            root that `git ls-files` does not carry, so the
-                           denominator disagrees with the git index. That is
-                           #244's defect: the census and the gate must agree
-                           about what the repository IS.
+                           denominator disagrees with the git index (#244:
+                           the census and the gate must agree about what the
+                           repository IS).
       OUT-OF-TREE          EXCLUDED from the verdict, but COUNTED and NAMED
-                           in the output. These are real and legitimate: the
-                           gate tests write probe modules into a pytest
-                           tmpdir and import them, so every honest run
-                           reports rows like
-                           /private/var/.../pytest-of-<user>/.../clean_probe_gate.py
-                           (three measured 2026-09-03). Calling those drift
-                           would make this gate RED on every clean tree, and
-                           a gate that is always red is a gate that gets
+                           in the output. The gate tests write probe modules
+                           into a pytest tmpdir and import them, so every
+                           honest run reports rows like
+                           /private/var/.../pytest-of-<user>/.../clean_probe_gate.py.
+                           Calling those drift would RED every clean tree,
+                           and a gate that is always red is a gate that gets
                            disabled.
-    This is a SPLIT, not an allowlist: no path is ever named as an
-    exception, both arms carry controls, and an out-of-tree row cannot
-    launder an in-tree one -- a report carrying both is still RED.
+    This is a SPLIT, not an allowlist: no path is named as an exception, both
+    arms carry controls, and an out-of-tree row cannot launder an in-tree one
+    -- a report carrying both is still RED.
 
-    A report is also required to describe the SOURCE AS IT IS NOW. Coverage
-    line numbers are a line map: if the tree gained statements after the
-    report was written, the new statements sit in no denominator, and every
-    percentage in the file is a claim about a tree that no longer exists.
-    Such a report is STALE, and stale is UNMEASURED -- never CLEAR, because
-    "CLEAR" would certify modules the report cannot see, and never RED,
-    because "RED" would convict modules the report cannot see either.
+    A report must also describe the SOURCE AS IT IS NOW. Coverage line numbers
+    are a line map: statements added after the report was written sit in no
+    denominator, making every percentage a claim about a tree that no longer
+    exists. Such a report is STALE, and stale is UNMEASURED -- never CLEAR
+    ("CLEAR" would certify modules the report cannot see) and never RED
+    ("RED" would convict modules the report cannot see either).
 
 EXIT CODES
-    0   CLEAR -- every tracked module was measured inside
-        [floor, floor + SLACK]; the per-module claim holds with every unit
-        of its denominator accounted for, and the report's line map still
+    0   CLEAR -- every tracked module measured inside
+        [floor, floor + SLACK]; the per-module claim holds with every unit of
+        its denominator accounted for, and the report's line map still
         matches the working tree.
     5   RED -- a module measured below its floor, a floor went stale (see
         SLACK), or the report measured an IN-TREE file git does not track.
@@ -77,41 +64,36 @@ EXIT CODES
 
 FLOORS AND SLACK
     Each module's floor is an integer percentage from FLOORS, defaulting to
-    DEFAULT_FLOOR (90). A floor is not a trophy case: measuring ABOVE
-    floor + SLACK (5 points) is RED -- "floor is stale; raise it" -- because
-    a floor far below reality is a floor nothing can touch, which is how the
-    old total sat at 70 while the tree was at 93. A gate that cannot fail is
-    not a gate. `--update` rewrites the FLOORS block of THIS FILE in place
-    from a real measurement (measured value rounded down; entries that would
-    sit inside the default band are omitted so the table stays small enough
-    to audit by eye), prints every change, and touches nothing outside the
-    two sentinel lines. What it writes is formatter-clean as written: `ruff
-    format` deletes empty lines inside a collection literal, so the rendered
-    table carries none, and "fixes this in one command" stays true rather
-    than leaving the tree red under the `ruff format --check` CI runs.
+    DEFAULT_FLOOR (90). Measuring ABOVE floor + SLACK (5 points) is RED --
+    "floor is stale; raise it" -- because a floor far below reality is one
+    nothing can touch, which is how the old total sat at 70 while the tree was
+    at 93. A gate that cannot fail is not a gate. `--update` rewrites the
+    FLOORS block of THIS FILE in place from a real measurement (measured
+    value rounded down; entries inside the default band are omitted so the
+    table stays auditable by eye), prints every change, and touches nothing
+    outside the two sentinel lines. It renders the table formatter-clean
+    (`ruff format` deletes empty lines inside a collection literal, so the
+    rendered table carries none) so "fixes this in one command" stays true
+    under the `ruff format --check` CI runs.
     Floors are never invented by hand -- the table is empty until --update
-    fills it from evidence -- and --update writes it in two labelled halves.
-    A stale report is not evidence: `--update` refuses to write floors from
-    it, because rewriting policy from a line map of another tree would
-    institutionalise the exact defect this gate exists to catch.
-    Entries BELOW the default are DEBT, not policy:
-    each one names a module this repository does not adequately test, and
-    the floor's only job there is to stop the number sliding while the tests
+    fills it from evidence -- and --update refuses to write floors from a
+    stale report, because rewriting policy from a line map of another tree
+    would institutionalise the exact defect this gate exists to catch.
+    Entries BELOW the default are DEBT: a module this repository does not
+    adequately test, whose floor only stops the number sliding while tests
     get written. Entries ABOVE the default band are the ratchet.
 
 CONTROLS (--self-test)
     Sixteen, run in a temp dir against synthetic in-memory reports with an
     INJECTED tracked set and an INJECTED repo root, so the controls are
-    hermetic and cannot pass or fail because of what happens to be
-    committed or where the checkout lives. The twelve floor controls keep
-    freshness OFF because their fabricated line numbers isolate the FLOOR
-    axis and would all go stale on purpose. The four freshness controls are
-    built the other way: the statement set they compare against is an
-    INJECTED constant delivered through an injected parser RESOLVER, so
-    they measure the ghost/orphan comparison -- the thing this gate owns --
-    and never coverage's parser, which is what lets them stay hermetic
-    under `python3 -S`, the harness invocation under which site-packages,
-    and coverage with it, is not importable:
+    hermetic and cannot pass or fail because of what is committed or where the
+    checkout lives. The twelve floor controls keep freshness OFF because their
+    fabricated line numbers isolate the FLOOR axis and would all go stale on
+    purpose. The four freshness controls compare against an INJECTED constant
+    statement set delivered through an injected parser RESOLVER -- never
+    coverage's parser -- which is what lets them stay hermetic under
+    `python3 -S`, the harness invocation under which site-packages (and
+    coverage with it) is not importable:
       MUST_FIRE  a module one point below its floor            ->  5
       MUST_FIRE  a module far above floor + SLACK (stale)      ->  5
       MUST_FIRE  a tracked module absent from the report       -> 95
@@ -128,20 +110,18 @@ CONTROLS (--self-test)
       MUST_FIRE  freshness: current statement the report omits -> 95
       MUST_PASS  freshness: fresh map, one line excluded-only  ->  0
       MUST_FIRE  freshness: same fresh map, parser unavailable -> 95
-    The first two MUST_PASS controls pin both band boundaries as INCLUSIVE.
-    The next two pin the exclusion axis: one proves the tmpdir shape is
-    excluded rather than RED, the other proves an absolute in-tree path is
-    normalised onto its tracked relative name instead of counting twice
-    (once as drift, once as UNMEASURED). Control 8 is the drill that keeps
-    the exclusion from becoming a hole. The freshness MUST_PASS proves the
-    arm is not a blanket refusal -- a report naming exactly the current
-    statements, with one pragma-excluded line omitted from both lists, is
-    still CLEAR -- and the control right after it proves the very same
-    report is REFUSED as UNMEASURED when no parser is available, so
-    absence of coverage is attributed to the resolver and never laundered
-    into either verdict. If any control does not produce its declared
-    outcome, the gate prints which one and exits 96: an uncertified
-    verdict is a vacuous one.
+    The first two MUST_PASS pin both band boundaries as INCLUSIVE. The next
+    two pin the exclusion axis: tmpdir rows are excluded rather than RED, and
+    an absolute in-tree path is normalised onto its tracked relative name
+    instead of minting both a drift and an UNMEASURED finding. Control 8 is
+    the drill that keeps the exclusion from becoming a hole. The freshness
+    MUST_PASS proves the arm is not a blanket refusal -- a report naming
+    exactly the current statements, with one pragma-excluded line omitted
+    from both lists, is still CLEAR -- and the next control proves the same
+    report is REFUSED as UNMEASURED when no parser is available, so absence
+    of coverage is attributed to the resolver and never laundered into a
+    verdict. A misfiring control prints which one and exits 96: an
+    uncertified verdict is a vacuous one.
 """
 
 from __future__ import annotations
@@ -177,9 +157,8 @@ EXIT_REFUSE = 96
 DEFAULT_FLOOR: int = 90
 
 # SLACK is the width of a floor's honest band. Over-performing a floor by more than SLACK is a
-# DEFECT, not a bonus: a floor far below reality is a floor nothing can touch, which is exactly
-# how the previous total sat at 70 while the tree was at 93. A gate that cannot fail is not a
-# gate; `--update` pulls a stale floor back into contact with reality in one command.
+# DEFECT: a floor far below reality is one nothing can touch, and a gate that cannot fail is not
+# a gate. `--update` pulls a stale floor back into contact with reality in one command.
 SLACK: int = 5
 
 REPORT_DEFAULT = "coverage.json"
@@ -192,9 +171,9 @@ REPORT_DEFAULT = "coverage.json"
 # [tool.coverage.run] WITH its measured percentages rather than dropped in silence.
 #
 # tools/__init__.py is here because `--cov=tools` resolves the tools PACKAGE, so coverage emits
-# a row for the package marker on every run. It is git-tracked and it is in CI's denominator;
-# leaving it out of this tuple would classify a legitimate row as in-tree drift and RED the
-# gate on a clean tree. It must be in the claim or in nothing, and it is in CI's claim.
+# a row for the package marker on every run. It is git-tracked and in CI's denominator; leaving
+# it out of this tuple would classify a legitimate row as in-tree drift and RED the gate on a
+# clean tree.
 TOOLS_IN_SCOPE: tuple[str, ...] = (
     "tools/__init__.py",
     "tools/bridge_fqn_map.py",
@@ -210,20 +189,18 @@ GIT_PATHSPECS: tuple[str, ...] = (
 FLOORS_BEGIN = "# --- FLOORS: generated by --update; do not hand-edit values ---"
 FLOORS_END = "# --- end FLOORS ---"
 
-# No number in this table may be invented by hand. Every entry is written by `--update` from a
-# real coverage measurement and then committed; an entry without a measurement behind it would
-# be the same vacuity this gate exists to remove. --update renders the table in two labelled
-# halves -- DEBT below the default floor, RATCHET above the default band -- so that a module
-# which meets no standard cannot sit unremarked among the ones that do. This comment states the
-# RULE and no values: the values live in exactly one place, generated, and cannot drift from it.
+# No number in this table may be invented by hand: every entry is written by `--update` from a
+# real coverage measurement and then committed. --update renders the table in two labelled
+# halves -- DEBT below the default floor, RATCHET above the default band -- so a module which
+# meets no standard cannot sit unremarked among the ones that do. This comment states the RULE
+# and no values: the values live in exactly one place, generated, and cannot drift from it.
 # --- FLOORS: generated by --update; do not hand-edit values ---
 FLOORS: dict[str, int] = {
     # DEBT -- 7 module(s) BELOW the default floor of 90.
-    # Each of these is the aggregate subsidy this gate exists to expose, now
-    # stated with its denominator instead of averaged away. The floor is not an
-    # endorsement: it is a ratchet that stops the module rotting further while the
-    # tests are written. Delete a line when its module reaches the default; do not
-    # add a line by hand, and do not lower one to make a red run green.
+    # Each of these is the aggregate subsidy this gate exists to expose. The floor is not an
+    # endorsement: it is a ratchet that stops the module rotting while the tests are written.
+    # Delete a line when its module reaches the default; do not add one by hand, and do not
+    # lower one to make a red run green.
     "src/foundationscale/gates/speech_gates.py": 99,  # measured 100.0%; 1 pt CI slack
     "src/foundationscale/rl/distributed.py": 83,  # measured 84.7%; 1 pt CI slack
     "src/foundationscale/rl/megatron/driver.py": 39,  # measured 39.8%; rung-2 loop is GPU-only
@@ -388,11 +365,11 @@ FLOORS: dict[str, int] = {
 
 class GateArgumentParser(argparse.ArgumentParser):
     def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
-        # argparse exits 2 on bad arguments; without this remap an operator typo would escape
-        # the four-code namespace this gate advertises to CI.
+        # argparse exits 2 on bad arguments; this remap keeps an operator typo inside the
+        # four-code namespace this gate advertises to CI.
         # NoReturn, not None: the base method is Never, and an override that merely claims None
-        # would let a caller treat a remapped REFUSE as a fallthrough and carry on to publish a
-        # verdict this gate refused to give.
+        # would let a caller treat a remapped REFUSE as a fallthrough and publish a verdict this
+        # gate refused to give.
         if message:
             sys.stderr.write(message)
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)
@@ -408,8 +385,8 @@ class PythonParserLike(Protocol):
 
 # The freshness parser seam. The RESOLVER -- a function returning a builder or None -- is the
 # injectable thing, not a nullable builder: a resolver returning None models "the parser is
-# unavailable" exactly, without a None-sentinel sitting where a builder argument would be
-# ambiguous between "the parser is absent" and "the caller did not inject anything".
+# unavailable" exactly, without a None-sentinel where a builder argument would be ambiguous
+# between "the parser is absent" and "the caller did not inject anything".
 ParserBuilder = Callable[[str], PythonParserLike]
 ParserResolver = Callable[[], ParserBuilder | None]
 
@@ -446,9 +423,9 @@ class GateResult(NamedTuple):
 def _import_python_parser() -> ParserBuilder | None:
     """Import coverage.parser lazily; absence is UNAVAILABLE, never a silently skipped check.
 
-    The import is lazy because this gate must still adjudicate the floor axes when coverage is
-    not importable in some embedding environment -- by refusing freshness, not by waiving it.
-    This is the default parser resolver: callers that inject nothing get the real thing.
+    Lazy so the floor axes can still be adjudicated where coverage is not importable -- by
+    refusing freshness, not by waiving it. Default parser resolver: callers that inject
+    nothing get the real thing.
     """
     try:
         module = importlib.import_module("coverage.parser")
@@ -468,8 +445,8 @@ def _import_python_parser() -> ParserBuilder | None:
 def _line_set(value: Any) -> set[int] | None:
     """Coerce one coverage line-list to a set of positive ints; None means unreadable.
 
-    A malformed line list is not an empty line list: the report cannot be lined up against the
-    current tree, so freshness is unavailable rather than fresh.
+    A malformed line list is not an empty line list: the report cannot be lined up against
+    the current tree, so freshness is unavailable rather than fresh.
     """
     if not isinstance(value, list):
         return None
@@ -509,11 +486,11 @@ def missing_count_of(entry: dict[str, Any]) -> int | None:
 def locate_report_key(key: str, repo_root: Path) -> tuple[bool, str]:
     """Return (in_tree, normalised_path) for one report key.
 
-    Purely lexical: no resolve(), no stat, nothing that reads the filesystem, so the verdict
-    depends only on the report and the injected root. An absolute key UNDER the root is
-    normalised onto its repository-relative name -- coverage can emit either form, and comparing
-    the absolute one against a git-relative tracked set would mint a drift finding AND an
-    UNMEASURED finding for the same file, out of a path notation.
+    Purely lexical: no filesystem reads, so the verdict depends only on the report and the
+    injected root. An absolute key UNDER the root is normalised onto its repository-relative
+    name -- coverage can emit either form, and comparing the absolute one against a
+    git-relative tracked set would mint a drift finding AND an UNMEASURED finding for the
+    same file, out of a path notation.
     """
     normalised = os.path.normpath(key).replace("\\", "/")
     candidate = Path(normalised)
@@ -533,15 +510,14 @@ def assess_report_freshness(
 ) -> tuple[list[str], str | None]:
     """Return (stale_rows, unavailable_reason) for tracked files the report carries.
 
-    This is the arm that stops an old report from certifying a new tree. For each tracked path
-    that APPEARS in the report, recompute the file's statement lines from the CURRENT source and
+    The arm that stops an old report certifying a new tree. For each tracked path that
+    APPEARS in the report, recompute its statement lines from the CURRENT source and
     compare them against the line map the report claims:
       ghost  = lines the report names that are no longer statements;
       orphan = current statements the report never accounted for.
-    Either set non-empty means the report describes another tree. Pragma-excluded lines are
-    subtracted from the orphan side ONLY: they are statements coverage deliberately did not
-    count, but excluded_lines can also carry blanks, so unioning the whole list into `seen`
-    would invent statements that never existed.
+    Either non-empty means the report describes another tree. Pragma-excluded lines are
+    subtracted from the orphan side ONLY: excluded_lines can also carry blanks, so
+    unioning the whole list into `seen` would invent statements that never existed.
 
     resolve_parser is injectable so the self-test can exercise the ghost/orphan comparison
     hermetically under `python3 -S`, where coverage is not importable; an injected resolver
@@ -596,17 +572,17 @@ def evaluate(
 ) -> tuple[list[ModuleOutcome], list[str], list[str]]:
     """Classify every tracked module; return (outcomes, drift, excluded).
 
-    The tracked set is an ARGUMENT, never re-derived here: the verdict must claim about the
-    repository's own file list in production, while --self-test feeds a synthetic one. A gate
-    whose denominator can be silently swapped cannot be controlled, and an uncontrolled gate is
-    an unmeasured axis wearing a verdict. repo_root is an argument for the same reason.
+    The tracked set and repo_root are ARGUMENTS, never re-derived here: the verdict claims
+    about the repository's own file list in production while --self-test feeds a synthetic
+    one. A gate whose denominator can be silently swapped cannot be controlled -- an
+    uncontrolled gate is an unmeasured axis wearing a verdict.
 
-    Report keys the tracked set does not carry are split rather than lumped. An IN-TREE
-    untracked row is drift and is RED: the report and the git index disagree about what this
-    repository contains. An OUT-OF-TREE row is a test's own scratch -- the gate suite writes
-    probe modules into a pytest tmpdir and imports them, which coverage duly measures -- and is
-    excluded from the verdict but returned by name, because a silently dropped row reads exactly
-    like a row that was never there.
+    Report keys the tracked set does not carry are split on where the file lives: an
+    IN-TREE untracked row is drift and is RED (the report and the git index disagree about
+    what this repository contains), while an OUT-OF-TREE row is a test's own scratch (the
+    gate suite writes probe modules into a pytest tmpdir and imports them) and is excluded
+    from the verdict but returned by name -- a silently dropped row reads exactly like a
+    row that was never there.
     """
     tracked_set = set(tracked)
     drift: list[str] = []
@@ -658,12 +634,11 @@ def measure(
     """Pure verdict: reads the report, classifies every tracked module, never prints.
 
     All printing lives in emit_human / emit_json so that --self-test can assert on verdicts
-    over synthetic reports without scraping banner text. check_freshness is keyword-only so a
-    caller has to SAY it is waiving the "does this report describe this tree" arm; the existing
-    floor controls do exactly that because their fabricated line numbers isolate the floor axis.
-    resolve_parser, also keyword-only, is forwarded to that arm so the self-test can drive
-    freshness with an injected parser; its default is the real lazy coverage import, so a
-    caller that says nothing changes nothing.
+    over synthetic reports without scraping banner text. check_freshness is keyword-only so
+    a caller has to SAY it is waiving the "does this report describe this tree" arm (the
+    floor controls do, because their fabricated line numbers isolate the floor axis).
+    resolve_parser, also keyword-only, is forwarded to that arm; its default is the real
+    lazy coverage import.
     """
     src_count = sum(1 for p in tracked if p.startswith("src/"))
     tools_count = len(tracked) - src_count
@@ -721,9 +696,8 @@ def measure(
             )
         if stale:
             # Staleness outranks RED. If the report predates the tree, EVERY per-module verdict
-            # in it is unattributable -- new statements sit in no denominator -- so the gate must
-            # not report a floor finding derived from that map. "We cannot tell" is not "it is
-            # broken", and it is certainly not "clear".
+            # in it is unattributable -- new statements sit in no denominator -- so no floor
+            # finding may be derived from that map. "We cannot tell" is not "it is broken".
             return base._replace(stale=stale)
     outcomes, drift, excluded = evaluate(files, tracked, floors, repo_root)
     statuses = {o.status for o in outcomes}
@@ -732,9 +706,8 @@ def measure(
         code = EXIT_UNMEASURED
     elif drift or "red-below" in statuses or "red-stale" in statuses:
         # `excluded` is deliberately absent from this condition and from the one above: an
-        # out-of-tree row is not evidence about this repository either way. It cannot make the
-        # verdict RED, and -- the half that matters -- it cannot soften one, because drift is
-        # tested here on its own.
+        # out-of-tree row is not evidence about this repository either way -- it cannot make the
+        # verdict RED, and it cannot soften one, because drift is tested here on its own.
         code = EXIT_RED
     else:
         code = EXIT_CLEAR
@@ -778,10 +751,10 @@ def discover_tracked() -> list[str] | None:
 def discover_repo_root() -> Path:
     """The boundary that separates drift (RED) from a test's own scratch (excluded).
 
-    git decides it, not the process's cwd, so running the gate from a subdirectory cannot move
-    the line between the two arms. cwd is the fallback only for the case where git is already
-    unavailable -- and there discover_tracked() has already returned None, so the run is
-    UNMEASURED before this value is used for anything.
+    git decides it, not the process's cwd, so running the gate from a subdirectory cannot
+    move the line. cwd is the fallback only when git is already unavailable -- and there
+    discover_tracked() has already returned None, so the run is UNMEASURED before this
+    value is used for anything.
     """
     try:
         proc = subprocess.run(
@@ -921,16 +894,13 @@ def compute_updated_floors(
     [DEFAULT_FLOOR, DEFAULT_FLOOR + SLACK]; inside that band the default already tells the
     truth, and a table that restates the default for every module stops being auditable.
 
-    The carry-over rule is the half #385 broke. Floors derive from measurement, and an
-    ABSENT measurement is not a measurement of DEFAULT_FLOOR -- it is not evidence at all,
-    so the previous evidence stands: a tracked module whose measured is None and which has
-    an entry in `existing` keeps that entry byte-identical, and comes back in `carried`.
-    An unmeasured module with NO existing entry comes back in `unfloored` -- the honest
-    skip: a new module no test imports gets DEFAULT_FLOOR by omission, which is already
-    the right answer, and there was no floor to lose. `existing` is a required argument
-    so no caller can forget which table is being replaced: on 2026-09-11 a narrower
-    --cov scope left three tools/ modules unmeasured, and skipping them silently rewrote
-    the block without two ratchet floors, releasing both ratchets by remedy.
+    An ABSENT measurement is not a measurement of DEFAULT_FLOOR -- it is not evidence at
+    all, so the previous evidence stands: a tracked module whose measured is None and which
+    has an entry in `existing` keeps that entry byte-identical, and comes back in
+    `carried`. An unmeasured module with NO existing entry comes back in `unfloored` --
+    the honest skip: a new module gets DEFAULT_FLOOR by omission and there was no floor to
+    lose. `existing` is required so no caller can forget which table is being replaced: an
+    unmeasured module must never silently lose its floor and release a ratchet.
     """
     floors: dict[str, int] = {}
     carried: list[str] = []
@@ -945,13 +915,12 @@ def compute_updated_floors(
             else:
                 unfloored.append(outcome.path)
             continue
-        # The band test reads the MEASURED value, not its floor. measure() adjudicates the
-        # float against floor + SLACK, so a module measured at 95.1 is red-stale there while
-        # math.floor(95.1) == 95 read as "inside the band" here: a window one percentage
-        # point wide, over every module with no explicit entry, in which the gate was RED
-        # and its own prescribed remedy -- the RED line says `--update` fixes this in one
-        # command -- wrote nothing and printed UPDATE ok. Two adjudicators over one axis
-        # must use one comparison. The value WRITTEN stays floored: a floor must never
+        # The band test must read the MEASURED value, not its floored form: measure()
+        # adjudicates the float against floor + SLACK, so a module measured at 95.1 is
+        # red-stale there while math.floor(95.1) == 95 would read as "inside the band" here --
+        # a window one percentage point wide in which the gate was RED and its own prescribed
+        # remedy (--update) wrote nothing while printing UPDATE ok. Two adjudicators over one
+        # axis must use one comparison. The value WRITTEN stays floored: a floor must never
         # claim more than the measurement supports.
         if DEFAULT_FLOOR <= outcome.measured <= DEFAULT_FLOOR + SLACK:
             continue
@@ -966,16 +935,15 @@ def render_floors_block(
 ) -> list[str]:
     """Render the table in two LABELLED halves, both generated, neither hand-written.
 
-    An entry below DEFAULT_FLOOR and an entry above it are not the same kind of fact, and a flat
-    table hides that. `"train/__main__.py": 0` sitting unlabelled among the 100s reads as a
-    standard this repository holds; it is the opposite -- a module that meets no standard, whose
-    floor exists only to stop it rotting further. Splitting them puts the debt where a reader
-    trips over it, with its own count, and every number still comes from --update.
+    An entry below DEFAULT_FLOOR is not the same kind of fact as one above it: a module
+    that meets no standard, whose floor exists only to stop it rotting further, must not sit
+    unremarked among the 100s. Splitting DEBT from RATCHET puts the debt where a reader
+    trips over it, with its own count; every number still comes from --update.
 
     A path in `carried` has NO measurement in this report, so its line cannot quote one:
     `measured[path]` would raise KeyError, and a fabricated percentage would attribute to
-    this run a number it never saw. The carried comment says what is true -- the floor
-    stands, unmeasured, on the last --update that did measure the module.
+    this run a number it never saw. Its comment says the floor stands, unmeasured, on the
+    last --update that did measure the module.
     """
     if not floors:
         return ["FLOORS: dict[str, int] = {}\n"]
@@ -1002,13 +970,10 @@ def render_floors_block(
         for path in debt:
             lines.append(f"    {json.dumps(path)}: {floors[path]},  {entry_comment(path)}\n")
     if ratchet:
-        # No blank separator line between the halves, however much one would help the eye:
-        # `ruff format` DELETES every empty line inside a collection literal, so emitting one
-        # made --update's own output fail the `ruff format --check` CI enforces -- the gate's
-        # advertised one-command remedy could not be committed without a second, undocumented
-        # reformat. MEASURED 2026-09-05: `ruff format --diff` on a freshly updated copy removed
-        # exactly this line and nothing else. The RATCHET label below is the separator instead;
-        # a generator whose output its own build rejects is a remedy nobody can take.
+        # No blank separator line between the halves: `ruff format` DELETES every empty line
+        # inside a collection literal, so emitting one makes --update's own output fail the
+        # `ruff format --check` CI enforces and the advertised one-command remedy becomes
+        # uncommittable. The RATCHET label below is the separator instead.
         lines.append(
             f"    # RATCHET -- {len(ratchet)} module(s) ABOVE the default band. These record "
             "what\n    # the tree already achieves, so a regression to a merely-passing "
@@ -1023,11 +988,10 @@ def render_floors_block(
 def apply_update(result: GateResult, self_path: Path) -> int:
     """Rewrite ONLY the FLOORS block of this file, between the two sentinel lines.
 
-    Floors derive from measurement or they derive from nothing; an update that cannot see a
-    real, current report refuses rather than guess. The carry-over rule is #385's fix: a
-    tracked module this report does not measure keeps its existing floor byte-for-byte,
-    because an absent measurement is not a measurement of the default -- it is not evidence
-    at all, so the previous evidence stands.
+    Floors derive from measurement or they derive from nothing: an update that cannot see a
+    real, current report refuses rather than guess. A tracked module this report does not
+    measure keeps its existing floor byte-for-byte -- an absent measurement is not
+    evidence, so the previous evidence stands.
     """
     if result.load_error is not None or result.files_empty or result.stale:
         print(
@@ -1060,10 +1024,10 @@ def apply_update(result: GateResult, self_path: Path) -> int:
     except OSError as exc:
         print(f"UPDATE RED: cannot write {self_path}: {exc}")
         return EXIT_RED
-    # The outcome path set is what separates "the module is gone" from "the module is
-    # unmeasured": evaluate() iterates the tracked set, so a path in FLOORS with no outcome
-    # was deleted or renamed, and a path in FLOORS with an outcome whose measured is None
-    # was merely not measured this run. #385 printed the same "removed" line for both.
+    # The outcome path set separates "the module is gone" from "the module is unmeasured":
+    # evaluate() iterates the tracked set, so a path in FLOORS with no outcome was deleted or
+    # renamed, and a path in FLOORS with an outcome whose measured is None was merely not
+    # measured this run.
     outcome_paths = {o.path for o in result.outcomes}
     for path in unfloored:
         print(
@@ -1100,26 +1064,26 @@ def apply_update(result: GateResult, self_path: Path) -> int:
 
 def run_self_test() -> int:
     """Drive twenty controls in a temp dir: sixteen through measure() against synthetic
-    reports, and four -- the --update carry-over controls added as #385's regression
-    drill -- against compute_updated_floors and render_floors_block directly, from
-    hand-built ModuleOutcome values and a hand-built existing floor table, because the
-    axis under test there is the carry-over rule and nothing else, and no report file
-    is needed to build an outcome whose measured is None.
+    reports, and four -- the --update carry-over controls -- against
+    compute_updated_floors and render_floors_block directly, from hand-built
+    ModuleOutcome values and a hand-built existing floor table, because the axis under
+    test is the carry-over rule and nothing else (an outcome whose measured is None needs
+    no report file).
 
     The tracked set and the repo root are both INJECTED, never discovered from the real git
-    tree, so the controls are hermetic: they cannot pass or fail because of what happens to be
-    committed or where this checkout lives. Each control is labelled and asserted against its
-    declared exit code; a misfire means every verdict this gate returns is worthless until fixed.
+    tree, so the controls are hermetic: they cannot pass or fail because of what is
+    committed or where this checkout lives. Each control is labelled and asserted against
+    its declared exit code; a misfire means every verdict this gate returns is worthless
+    until fixed.
 
-    The twelve FLOOR controls pass check_freshness=False on purpose: they build SYNTHETIC
-    reports with fabricated line numbers over real-shaped paths, so each isolates the FLOOR axis
-    and would otherwise go stale by construction. The four FRESHNESS controls keep freshness ON
-    but stay hermetic the same way: the parser is an injected resolver returning a fixed
-    statement set, so what is measured is the ghost/orphan comparison this gate owns -- never
-    coverage's parser -- and the harness's `python3 -S` invocation, under which site-packages
-    and coverage with it are not importable, changes nothing. One of the four deliberately
-    injects a resolver returning None over an otherwise FRESH report, to prove the parser's
-    absence is REFUSED rather than waived.
+    The twelve FLOOR controls pass check_freshness=False on purpose: their fabricated line
+    numbers isolate the FLOOR axis and would every one go stale by construction. The four
+    FRESHNESS controls keep freshness ON with an injected resolver returning a fixed
+    statement set, so what is measured is the ghost/orphan comparison this gate owns --
+    never coverage's parser -- and the harness's `python3 -S` invocation, under which
+    site-packages and coverage with it are not importable, changes nothing. One of the
+    four injects a resolver returning None over an otherwise FRESH report, proving the
+    parser's absence is REFUSED rather than waived.
     """
     tracked = ["src/foundationscale/alpha.py", "src/foundationscale/beta.py"]
     failures: list[str] = []
@@ -1155,10 +1119,10 @@ def run_self_test() -> int:
             resolve_parser: ParserResolver = _import_python_parser,
         ) -> None:
             # check_freshness defaults to False for the pre-existing controls ONLY: their line
-            # numbers are fabricated over synthetic paths, so freshness would stale every one of
-            # them and drown the FLOOR axis each control was built to isolate. Any control that
-            # wants the freshness claim must opt in explicitly and inject its statement map
-            # through resolve_parser.
+            # numbers are fabricated over synthetic paths, so freshness would stale every one
+            # and drown the FLOOR axis each control was built to isolate. A control that wants
+            # the freshness claim opts in explicitly and injects its statement map through
+            # resolve_parser.
             use_tracked = tracked if tracked_override is None else tracked_override
             use_root = root if root_override is None else root_override
             use_floors: Mapping[str, int] = {} if floors is None else floors
@@ -1206,7 +1170,7 @@ def run_self_test() -> int:
         # THE DRILL for the exclusion. The out-of-tree arm exists so a pytest tmpdir row cannot
         # RED a clean tree; this asserts it cannot LAUNDER a dirty one either. Both shapes are
         # present at once, and the in-tree row must still decide the verdict. Without this
-        # control the split would be an untested exception, which is the shape it replaced.
+        # control the split would be an untested exception.
         write_files(
             {
                 alpha: entry(92.0, 8),
@@ -1306,10 +1270,9 @@ def run_self_test() -> int:
         )
 
         # (c) FRESH: executed|missing is the injected map minus ONE member, which sits in
-        # excluded_lines instead -- pragma-excluded on the orphan side ONLY. Had excluded_lines
-        # been unioned into `seen` wholesale, the blanks that list can carry would mint ghost
-        # findings on honest reports; this row pins the direction of the subtraction by staying
-        # CLEAR.
+        # excluded_lines instead -- pragma-excluded on the orphan side ONLY. Unioning the whole
+        # list into `seen` would mint ghost findings from the blanks it can carry; this row pins
+        # the direction of the subtraction by staying CLEAR.
         write_files({alpha: fresh_entry(fresh_but_one, [], [excluded_only], 100.0)})
         check(
             "MUST_PASS freshness: fresh map, one statement pragma-excluded only -> EXIT_CLEAR",
@@ -1333,23 +1296,15 @@ def run_self_test() -> int:
             resolve_parser=lambda: None,
         )
 
-        # The four --update controls. Everything above drives measure(); these four drive
-        # compute_updated_floors and render_floors_block DIRECTLY, over hand-built outcomes
-        # and a hand-built existing table, because the axis under test is the carry-over
-        # rule and nothing else -- no report file is needed to build an outcome whose
-        # measured is None. This is the axis finding #385 broke, measured 2026-09-11: a
-        # report produced with a narrower --cov scope than the Makefile's left three tools/
-        # modules unmeasured, and --update DELETED two ratchet floors while printing that
-        # their measured values now sat inside the default band -- the ratchet released by
-        # the very remedy the RED banner advertises. The first control is the drill: it
-        # misfires on the pre-fix code, which skipped an unmeasured path and so dropped its
-        # floor from the rewritten block. The second is the inverse that keeps the drill
-        # non-vacuous: measured inside the band, the same module's floor MUST be removed,
-        # or a "carry everything always" patch would pass. The third pins the honest skip:
-        # unmeasured and never floored writes nothing and loses nothing. The fourth drives
-        # the renderer, where a carried entry has no measurement and the old comment
-        # template would have raised KeyError on measured[path] -- the crash the carry-over
-        # introduces if the renderer is left alone.
+        # The four --update controls. Everything above drives measure(); these drive
+        # compute_updated_floors and render_floors_block DIRECTLY over hand-built outcomes and
+        # a hand-built existing table, because the axis under test is the carry-over rule only.
+        # The first is the drill: it misfires on code that skips an unmeasured path and drops
+        # its floor from the rewritten block. The second is the inverse that keeps the drill
+        # non-vacuous: measured inside the band, the same module's floor MUST be removed, or a
+        # "carry everything always" patch would pass. The third pins the honest skip: unmeasured
+        # and never floored writes nothing and loses nothing. The fourth drives the renderer,
+        # where a carried entry has no measurement and `measured[path]` would raise KeyError.
 
         def update_outcome(path: str, measured: float | None) -> ModuleOutcome:
             # compute_updated_floors reads only `measured`; the status is derived anyway,
@@ -1369,10 +1324,9 @@ def run_self_test() -> int:
             if not behaved:
                 failures.append(label)
 
-        # The #385 drill. 98 is the floor tools/live_save_gate.py actually carried on
-        # 2026-09-11, when a narrower --cov scope left it unmeasured and --update deleted
-        # the line. The measured sibling keeps the table non-empty -- the shape that made
-        # the deletion silent.
+        # The drill fixture. 98 is a ratchet floor that a run with a narrower --cov scope --
+        # leaving the module unmeasured -- would delete without the carry-over rule. The
+        # measured sibling keeps the table non-empty, the shape that made the deletion silent.
         drill_path = "tools/live_save_gate.py"
         drill_existing = {drill_path: 98}
         drill_floors, drill_carried, drill_unfloored = compute_updated_floors(
@@ -1437,10 +1391,10 @@ def run_self_test() -> int:
             f"floors={band_floors}, carried={band_carried}, unfloored={band_unfloored}",
         )
 
-        # The renderer arm. "unmeasured" contains "measured" as a substring, so the
-        # assertion keys on the full "set by --update; measured" prefix: the carried line
-        # must not quote a measurement this report does not contain, and the measured line
-        # must keep quoting its own.
+        # The renderer arm. "unmeasured" contains "measured" as a substring, so the assertion
+        # keys on the full "set by --update; measured" prefix: a carried line must not quote a
+        # measurement this report does not contain, and a measured line must keep quoting its
+        # own.
         rendered = render_floors_block({drill_path: 98, alpha: 99}, {alpha: 99.4}, [drill_path])
         rendered_carried = next(line for line in rendered if drill_path in line)
         rendered_measured = next(line for line in rendered if alpha in line)

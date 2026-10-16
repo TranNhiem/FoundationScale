@@ -1,103 +1,43 @@
-# Convenience only. The source of truth for every check is pyproject.toml plus
-# .github/workflows/ci.yml — CI does not run `make`, so these targets are kept to
-# single obvious commands that mirror the CI steps exactly.
+# Convenience only; source of truth is pyproject.toml plus .github/workflows/ci.yml — CI does not run `make`, so targets mirror the CI steps exactly.
 #
-# What the skip-hole fix changed here (full story in the ci.yml header):
-#
-#   * `install` now installs .[checkpoint,dev]: the [checkpoint] extra carries
-#     torch, and without it 41 tests skip (387 passed with torch; 346 passed /
-#     41 skipped without — CI's old green). pytest-cov rides along because the
-#     `test` command carries coverage flags, exactly like CI's step.
+#   * `install` installs .[checkpoint,dev]: [checkpoint] carries torch, without which 41 tests skip. pytest-cov rides along because `test` carries coverage flags.
 #   * `test` mirrors CI's pytest invocation, coverage floor included.
-#   * FS_FORBID_SKIPS is the ONE declared divergence from CI: the `check` job
-#     sets it job-wide so any skip fails the build; `make test` leaves it unset
-#     so a laptop may skip — but tests/conftest.py still names every skip and
-#     its reason in the summary. To run the suite byte-for-byte as CI sees it:
-#
-#         FS_FORBID_SKIPS=1 make test
-#
-#   * `skip-guard-probe` mirrors CI's probe step: it generates a deliberately
-#     skipped test and asserts the armed guard fails the run AND names it. It is
-#     a compound recipe rather than "one obvious command" — the CI step is a
-#     script, and the faithful mirror of a script is the same script. Dropping
-#     it from `make check` would make `check` weaker than CI, which is its own
-#     vacuous pass, so fidelity won over brevity here.
-#   * `mutation` runs the WHOLE corpus (a surviving mutant fails it). CI no
-#     longer does: as of #242 it shards per module across a job matrix, and
-#     `mutation-module` below is the mirror of one shard.
+#   * FS_FORBID_SKIPS is the ONE declared divergence from CI: CI's `check` job sets it job-wide so any skip fails; `make test` leaves it unset so a laptop may skip (tests/conftest.py still names every skip). CI's exact view: `FS_FORBID_SKIPS=1 make test`.
+#   * `skip-guard-probe` mirrors CI's probe step: it generates a deliberately skipped test and asserts the armed guard fails the run AND names it. It is a compound recipe because the CI step is a script; dropping it from `make check` would make `check` weaker than CI.
+#   * `mutation` runs the WHOLE corpus (a surviving mutant fails it). CI now shards per module (#242); `mutation-module` mirrors one shard.
 #
 #     The mutation corpus is 144 rows over 19 modules.
 #     Of those, 125 are MUST_FIRE mutants and 19 are MUST_PASS controls.
 #
-#     Each scoreable row runs the whole suite, so the wall time is one full
-#     pytest run per MUST_FIRE row rather than one in total. All four counts
-#     above are anchored (total_rows, mut_modules, must_fire, must_pass in the
-#     countables census) and each sits on its own line, because the gate reads
-#     a clause, not a paragraph: a number wrapped across a comment continuation
-#     is a number in no denominator. The line read "73 rows" until #242 gave a
-#     control row to each of the five modules that had none.
+#     Each scoreable row runs the whole suite, so wall time is one full pytest run per MUST_FIRE row. All four counts above are anchored (total_rows, mut_modules, must_fire, must_pass in the countables census) and each sits on its own line, because the gate reads a clause, not a paragraph.
 #
-#     The WALL TIME is not anchored, because no gate can hold it: it is a
-#     property of the machine, which is the #83/#111 shape. What is measured is
-#     one module — `--module checkpoint_gates`, 5 rows, 3m19s on an M-series
-#     laptop, i.e. ~40s per row. Extrapolated (not measured) that puts the full
-#     corpus near 50 minutes. It is stated because an understated cost is not a
-#     harmless comment: it is the reason a developer reaches for `make test`
-#     and skips the one target that certifies the detectors. It said "~2 min"
-#     until #234 and "~35 min" until #242, both of them guesses.
+#     WALL TIME is not anchored (it is a property of the machine — the #83/#111 shape). Measured on one module (`--module checkpoint_gates`, 5 rows, 3m19s on an M-series laptop, ~40s per row); extrapolated, the full corpus is near 50 minutes. Stated deliberately: an understated cost is the reason a developer skips the one target that certifies the detectors.
 
 # ---------------------------------------------------------------------------
-# Interpreter selection, and why it is two decisions rather than one (#247).
+# Interpreter selection: two decisions (#247).
 # ---------------------------------------------------------------------------
-# Every tool in this file is invoked as `$(PY) -m <tool>`, never as a bare name
-# on PATH. #247 reopened #232 as a class: #232 fixed bare `python` in four
-# targets, and the same defect survived in the TOOL invocations -- 9 recipe
-# lines across 7 targets calling `pip`, `pytest`, `ruff` and `mypy` by name. A
-# bare name resolves only if the tool happens to be on PATH, and on the machine
-# this file exists to serve -- a laptop with no venv activated -- it is not.
-# That is not hypothetical: during the review campaign `make lint` died with
-# `ruff: command not found` and `make packaging` reported UNMEASURED, both
-# purely because the project venv was inactive. CI never sees it, because
-# actions/setup-python puts everything on PATH, so the only machine this file
-# exists for is the only machine it failed on.
+# Every tool is invoked as `$(PY) -m <tool>`, never as a bare name on PATH: a
+# bare name resolves only if the tool happens to be on PATH, which on the
+# machine this file serves (a laptop with no venv activated) it is not. `-m`
+# also binds each tool to the SAME interpreter as the rest of the file.
 #
-# `-m` also binds each tool to the SAME interpreter as the rest of the file
-# rather than to whatever PATH offers, which is the #83/#111 shape closed one
-# more time: `mypy` from one environment checking a tree installed in another
-# is a different program, and the typecheck comment below says exactly that
-# about torch.
+# Second decision: `PY ?= python3` does not work, because a bare `python3` has
+# none of the tools installed either (measured: Homebrew and system python3
+# lack ruff/pytest/mypy/coverage; only .venv/bin/python3 has all five). The
+# tools live in the project venv, which is where `make install` puts them.
 #
-# THE SECOND DECISION, and the reason the obvious one-liner is not the fix.
-# `PY ?= python3` was written first and MEASURED, on the machine in question:
-#
-#     python3          -> 3.14.6 (Homebrew)  pip yes, pytest/ruff/mypy/coverage NO
-#     /usr/bin/python3 -> 3.9.6  (system)    pip yes, pytest/ruff/mypy/coverage NO
-#     .venv/bin/python3-> 3.14.6             all five present
-#
-# So `$(PY) -m ruff` under a bare `python3` does not fix `make lint`; it turns
-# `ruff: command not found` into `No module named ruff`. That is a strictly
-# better error -- it names the interpreter and makes the environment question
-# the visible one instead of a PATH riddle -- but shipping it as the fix would
-# have been the campaign's own recurring defect: declaring a class closed on
-# the strength of the edit rather than of a re-measurement. The tools are not
-# on PATH and they are not in the default interpreter either; they are in the
-# project venv, which is where `make install` puts them.
-#
-# Hence: prefer the in-tree venv when one exists, fall back to `python3` when
-# it does not, and let an explicit PY beat both. `?=` is not used, because a
-# recursively-expanded `$(shell ...)` would re-run the probe at every one of
-# this file's ~20 references; `origin` is the equivalent that expands once and
-# still yields to an environment or command-line PY.
+# Hence: prefer the in-tree venv when one exists, fall back to `python3`, and
+# let an explicit PY beat both. `?=` is not used because a recursively-expanded
+# `$(shell ...)` would re-run the probe at every reference; `origin` expands
+# once and still yields to an environment or command-line PY.
 #
 #     make check                      # venv if present, else python3
 #     make check PY=python3.11        # explicit wins
 #     PY=/usr/bin/python3 make lint   # environment wins
 #
 # `checks/makefile_tooling.py` makes the bare-name class un-reintroducible. It
-# does NOT gate which interpreter you chose or what that interpreter has
-# installed: that is the #83/#111 axis, a property of the machine reading the
-# file rather than of the file, and a gate that reddens on it would be
-# reporting the developer's environment as a repository defect.
+# does NOT gate which interpreter you chose or what it has installed: that is
+# the #83/#111 machine axis, not a repository defect.
 FS_VENV_PY := $(CURDIR)/.venv/bin/python3
 ifeq ($(origin PY),undefined)
 PY := $(shell test -x '$(FS_VENV_PY)' && printf %s '$(FS_VENV_PY)' || printf %s python3)
@@ -108,29 +48,24 @@ endif
 # [train] is here because CI's suite jobs install it and this target is the
 # developer's mirror of them. Without it `make install` provisions a WEAKER
 # environment than CI, so `make check` can pass locally on a machine CI would
-# fail -- and the gap is invisible to anyone whose venv already happens to
-# carry torch, which is the PATH-dependent-verdict class (#83/#111/#229) and
-# the same missing-extra that #253 found in the mutation job.
+# fail — the PATH-dependent-verdict class (#83/#111/#229), and the same
+# missing-extra that #253 found in the mutation job.
 install:
 	$(PY) -m pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
 
-# --cov=tools joined this line with #251, so the Makefile measures what CI measures.
-# It had drifted the other way from #230's case: there CI was the weaker of the two,
-# here the Makefile was, and a developer running `make check` got a green over a
-# denominator two adjudicating modules smaller than the one the build enforces.
+# --cov=tools so the Makefile measures what CI measures.
 #
-# --cov-report=json is what makes the per-module claim possible at all: it writes the
-# coverage.json that the `coverage-floor` target below adjudicates. Note that
-# --cov-fail-under=90 on this line is still a TOTAL, and a total can be subsidised --
-# that is #228, and the reason the next target exists.
+# --cov-report=json writes the coverage.json that the `coverage-floor` target
+# adjudicates per module. Note --cov-fail-under=90 on this line is still a
+# TOTAL, and a total can be subsidised (#228) — the reason the next target
+# exists.
 test:
 	$(PY) -m pytest --cov=foundationscale --cov=tools --cov-report=term-missing --cov-report=json --cov-fail-under=90
 
-# Ordered AFTER `test` in the `check` aggregate, and it must stay there: it consumes
-# the coverage.json that `test` writes. Self-test first, then the real run -- the same
-# pairing every other checks/ gate uses, because a detector whose controls misbehave
-# has no licence to report a verdict. If coverage.json is missing the gate exits 95
-# (UNMEASURED), never 0: "the report was not there" is not "every module passed".
+# Ordered AFTER `test` in the `check` aggregate and must stay there: it consumes
+# the coverage.json `test` writes. Self-test first, then the real run. A missing
+# coverage.json exits 95 (UNMEASURED), never 0: "the report was not there" is
+# not "every module passed".
 coverage-floor:
 	$(PY) checks/coverage_floor.py --self-test
 	$(PY) checks/coverage_floor.py
@@ -151,28 +86,14 @@ ci-suite-extras:
 	$(PY) checks/ci_suite_extras.py --self-test
 	$(PY) checks/ci_suite_extras.py
 
-# checks/ joined this list with #231. It was the one directory of executable
-# gates that no linter, no formatter and no typechecker saw, and the exclusion
-# read as coverage: on the day it was added, 2 of its 3 files were unformatted
-# and all 3 lacked the `from __future__ import annotations` that every tools/
-# gate carries. That last omission was not cosmetic -- a PEP 604 annotation in
-# a class body is evaluated at definition time, so all three died at IMPORT
-# with a TypeError and exit 1 on Python 3.9, which is the interpreter class the
-# login node actually has (#138). A gate that cannot start states no verdict,
-# and exit 1 is outside the 0/5/95/96 namespace it claims to publish.
-# `examples` joined this list because CI already had it and this file did not:
-# .github/workflows/ci.yml ran `ruff check src tests tools checks examples` while
-# `make lint` ran the same command four words shorter. That is #230 with the sign
-# flipped -- there CI was WEAKER than the Makefile it claims to mirror, here it was
-# stronger -- and the failure mode is the one that costs a round trip: `make lint`
-# green, push, CI red on a file the developer's own command could not see. Measured
-# at the time of this edit `examples` was clean on both rules, so nothing was being
-# hidden; the defect was that nothing would have said so either way.
+# checks/ must be linted: a PEP 604 annotation in a class body is evaluated at
+# definition time, so without `from __future__ import annotations` a gate dies
+# at IMPORT with exit 1 on Python 3.9 — outside the 0/5/95/96 namespace it
+# claims to publish. `examples` must match CI's lint set exactly: a four-word
+# gap means `make lint` green and push, CI red.
 #
-# ONE VARIABLE, both recipes. Stating a denominator twice in one file is how the
-# four-word gap opened in the first place. The Makefile<->CI half of the mirror is
-# still unpinned by any gate -- filed, because a hand-synchronised pair is a
-# convention, and this repository has already watched two of them drift.
+# ONE VARIABLE, both recipes. Stating the denominator twice is how the gap
+# opened; the Makefile<->CI pairing is still unpinned by any gate.
 LINT_PATHS := src tests tools checks examples
 
 lint:
@@ -184,71 +105,49 @@ fmt:
 	$(PY) -m ruff format $(LINT_PATHS)
 
 # Run this in the SAME environment as `install` creates — one with [checkpoint].
-# mypy without torch checks a different program: MetadataIndex becomes Any, and an
-# `Any | None` assigned over a variable already bound to `str` stops being an error.
-# A torch-free typecheck passed this tree; CI, which installs torch, failed it on all
-# three Pythons. Same command, same source, different answer, because the environment
-# differed. That is the repository's own thesis pointed at its Makefile.
-# tools/real_checkpoint_probe.py joined this list with finding #219. It is now a
-# thin CLI over foundationscale.gates.probe, the same shape live_save_gate.py has
-# over gates/adjudication.py, and a boundary wrapper that is not typechecked is a
-# re-export list nobody reads: mypy is what notices when the library's signature
-# moves out from under the CLI that forwards to it.
+# mypy without torch checks a different program: MetadataIndex becomes Any and
+# `Any | None` over `str` stops being an error. A torch-free typecheck passed
+# this tree; CI (with torch) failed it on all three Pythons.
 #
-# checks/ is no longer excluded: `typecheck-checks` below now GATES it, and is
-# in `check`. It was excluded from #231 until the errors were cleared, and the
-# note that stood here recorded the exclusion honestly -- what it got wrong was
-# the disposition. It said two of the reported errors were "deliberate
-# back-compat shapes in packaging_reachability.py that want silencing rather
-# than fixing", naming an EntryPoints.get fallback "that only executes on the
-# pre-3.10 shape mypy cannot see". mypy was right and the note was wrong:
-# Distribution.entry_points is a LIST before 3.10 and an EntryPoints after, and
-# has never on any release been the mapping .get() addresses -- the mapping is
-# the module-level entry_points() FUNCTION. So the arm was dead on 3.10+ and an
-# AttributeError on exactly the interpreters it was written for. An excuse
-# written into the exclusion is how a real defect kept an unfailing gate.
+# tools/real_checkpoint_probe.py is a thin CLI over foundationscale.gates.probe:
+# a boundary wrapper that is not typechecked is a re-export list nobody reads.
+#
+# checks/ is no longer excluded from here — `typecheck-checks` below GATES it.
+# Note Distribution.entry_points is a LIST before 3.10 and an EntryPoints after,
+# never the mapping that .get() addresses (that is the module-level
+# entry_points() FUNCTION): the former back-compat arm in
+# packaging_reachability.py was dead on 3.10+ and an AttributeError on 3.9.
 typecheck:
 	$(PY) -m mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
 
-# In `check`, and NOT prefixed with `-`. It was `-$(PY) -m mypy checks`, which
-# made this the one recipe in this file that could not fail: make prints
-# "Error 1 (ignored)" and returns 0, so the target read green while reporting
-# 22 errors. A gate that reports and cannot fail is #231's own subject matter
-# one level up -- the exclusion was visible, the suppression was not.
+# In `check`, and NOT prefixed with `-`: an ignored error makes the target green
+# while reporting failures — a gate that cannot fail reports no verdict.
 typecheck-checks:
 	$(PY) -m mypy checks
 
 # $(PY), not bare `python`: bare `python` does not exist on modern macOS or most
-# Linux distributions, so `make check` died with command-not-found for any
-# developer who had not activated a virtualenv. CI never saw it — setup-python
-# provides `python` — so the only machine this file exists to serve was the
-# only machine it did not run on (#232). #247 closed the same defect one layer
-# out, for the TOOLS: see the $(PY) block at the top of this file.
+# Linux distributions, so only a developer without an activated venv runs here
+# and `make check` would die with command-not-found. See the $(PY) block above.
 controls:
 	$(PY) -m foundationscale.gates.controls
 
 # Mirrors the two steps in CI's `controls` job. Self-test first: a detector whose
-# controls misbehave has no licence to report a verdict, so the real run must not
-# be reachable without it. Deliberately NOT `&&`-joined into one line — CI runs
-# them as two steps and a combined recipe would hide which half failed.
+# controls misbehave has no licence to report a verdict. Deliberately NOT
+# `&&`-joined: CI runs them as two steps and a combined recipe would hide which
+# half failed.
 #
-# This gate is why the target exists at all: it caught a false RED on itself.
-# Its first version asked `shutil.which(ep.name)` and reported both console
-# scripts unreachable on a tree where pip had installed both correctly — the
-# only fact it had measured was that the developer ran `.venv/bin/python3`
-# instead of sourcing `activate`. Existence is now resolved against the
-# interpreter's own script directory and the install record, and PATH is
-# reported as operator convenience that can never be red.
+# Existence is resolved against the interpreter's own script directory and the
+# install record — `shutil.which` reports false REDs whenever PATH is not
+# sourced. PATH is reported as operator convenience and can never be red.
 packaging:
 	$(PY) checks/packaging_reachability.py --self-test
 	$(PY) checks/packaging_reachability.py
 
-# Finding #245. Four review documents asserted the package "contains no
-# training code" -- true of training PRIMITIVES, false of the package, which
-# delegates to transformers.Trainer through function-scope imports. This probe
-# reports the two axes separately so neither can be quoted alone, and scans
-# every git-tracked *.md (not just docs/: README.md carries the claim too) for
-# the retired phrasings.
+# The package "contains no training code" is true of training PRIMITIVES but
+# false of the package, which delegates to transformers.Trainer through
+# function-scope imports. This probe reports the two axes separately and scans
+# every git-tracked *.md (README.md carries the claim too) for the retired
+# phrasings.
 #
 # Self-test first, same order as packaging: an instrument whose controls have
 # not run has not earned the right to have its verdict read.
@@ -256,32 +155,20 @@ training-plane:
 	$(PY) checks/training_plane_probe.py --self-test
 	$(PY) checks/training_plane_probe.py
 
-# Finding #247. The gate that makes the bare-tool class un-reintroducible: it
-# reads THIS file and refuses any recipe line that invokes pip, pytest, ruff,
-# mypy, coverage or a bare interpreter by name instead of through $(PY).
-#
-# It exists because #232 was fixed by editing four lines, and editing lines does
-# not close a class -- five more instances of the same defect were sitting in
-# the same file the whole time, and the next one would have arrived the next
-# time someone added a target. A fix with no detector is a fix with a half-life.
+# Reads THIS file and refuses any recipe line that invokes pip, pytest, ruff,
+# mypy, coverage or a bare interpreter by name instead of through $(PY) —
+# editing lines does not close the bare-tool class; only a detector does.
 #
 # Self-test first, same order and same reason as packaging and training-plane.
 makefile-tooling:
 	$(PY) checks/makefile_tooling.py --self-test
 	$(PY) checks/makefile_tooling.py
 
-# Finding #286. THIS target and the CI workflow are supposed to run the same
-# checks, and that mirror has been maintained by hand and by memory. It has
-# already drifted in both directions -- #230 landed a mypy widening in the
-# Makefile and not in CI, and the reverse prefix defect was sitting in this
-# file at the same time -- so the convention now has a reader.
-#
-# The gate compares WHICH check scripts run on each side, not their argv: the
-# two sides legitimately differ in output paths, in sharding, and in whether a
-# --self-test is invoked directly or through campaign_self_tests.py. Its first
-# draft keyed on the literal argument string, reported four findings on a
-# correct tree, and all four were false; the banner it prints on every verdict
-# states that narrowing and both of its blind spots rather than hiding them.
+# The Makefile and CI workflow must run the same checks. This gate compares WHICH
+# check scripts run on each side, not their argv: the sides legitimately differ
+# in output paths, sharding, and whether `--self-test` is direct or via
+# campaign_self_tests.py. Its printed banner states that narrowing and both of
+# its blind spots.
 #
 # Self-test first, same order and same reason as makefile-tooling above.
 mirror:
@@ -289,21 +176,15 @@ mirror:
 	$(PY) checks/makefile_ci_mirror.py
 
 # Mirrors the three steps in CI's countables leg (#220). The census is measured,
-# never committed -- see the ci.yml comment for why a frozen oracle is worse than
-# no oracle. It lands in the working tree, so `clean` removes it and .gitignore
-# keeps it out of a commit.
+# never committed (see ci.yml: a frozen oracle is worse than no oracle); it lands
+# in the working tree, so `clean` removes it and .gitignore keeps it out of a
+# commit. It counts tools/countables_census.py itself (tools_loc means "LOC
+# under tools/", and the producer lives there) — editing the producer moves
+# tools_loc, exactly the drift this gate exists to catch.
 #
-# Note the census counts tools/countables_census.py itself: it is inside its own
-# denominator. That is correct, not a bug -- tools_loc means "LOC under tools/",
-# and the producer lives there. Editing the producer moves tools_loc, which is
-# exactly the kind of drift this gate exists to catch.
-#
-# The scan set is `docs README.md Makefile .github/workflows/ci.yml`. The last
-# two joined with #241: a directory argument is walked for *.md, but a file
-# named outright is scanned whatever its suffix, so the build configuration --
-# the two files that DECIDE what CI measures -- is now inside the denominator
-# it was previously outside of. It had "3 of 3 files under checks/" in both,
-# written in the commit that added the fourth.
+# The scan set is `docs README.md Makefile .github/workflows/ci.yml`: a directory
+# argument is walked for *.md, but a file named outright is scanned whatever its
+# suffix. The build configuration is inside the denominator it decides.
 CENSUS := $(CURDIR)/.countables_census.json
 COUNTABLES_CORPUS := docs README.md Makefile .github/workflows/ci.yml
 
@@ -313,281 +194,202 @@ countables:
 	$(PY) tools/countables_census.py --no-coverage --out $(CENSUS)
 	$(PY) checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 
-# Finding #281. The README is a contents page, and 17 of the chapters it points
-# at did not exist. Nothing was red, because a pointer is a DECLARATION and the
-# only gate over declarations was gate_stage_orphans, which reads build stages.
-# This is the same class in prose, and the count could only grow while it had no
-# denominator.
+# The README is a contents page, and its chapter pointers declare documents that
+# must exist. A pointer is a DECLARATION with no denominator — the count can
+# only grow while nothing reads it.
 #
-# The gate found a defect in itself before it found one in the tree, which is the
-# reason it reports its extractors separately. Its first version anchored the
-# arrow notation on a closing bracket, so `[-> docs/ARCHITECTURE.md; the full
-# L0-L6 design is` -- one of the README's own pointers -- matched nothing. That
-# is #186 exactly (the citation gate read one of two notations and twelve
-# pointers sat in no denominator), recurring inside the gate written to close a
-# different instance of it. Two notations, two printed sub-counts, so an
-# extractor that goes inert shows a zero instead of a green.
+# Reports each extractor's sub-count separately, so an extractor that goes inert
+# shows a zero instead of a green. Two notations are supported (arrow and
+# bracket); one alone leaves pointers in no denominator.
 #
-# It also narrows on purpose: fenced blocks and inline-code spans are masked
-# before extraction, because a path in code formatting is being SHOWN, not
-# followed. That narrowing removed three false dangles a hand-rolled census had
-# reported -- `docs/CONTRACT.md` in SELF_AUDIT.md names a document that section
-# argues should be written. The masked-span count is printed so the narrowing
-# stays measured rather than silent.
+# Fenced blocks and inline-code spans are masked before extraction (a path in
+# code formatting is SHOWN, not followed). The masked-span count is printed so
+# the narrowing stays measured rather than silent.
 #
 # Self-test first, same order and same reason as packaging and makefile-tooling.
 doc-pointers:
 	$(PY) checks/doc_pointers.py --self-test
 	$(PY) checks/doc_pointers.py
 
-# Finding #303. The repository cites its own source as `path.ext:N` and
-# `path.ext:N-M`, and nothing put those tokens in a denominator, so a citation
-# rotted silently whenever the file it named was edited. Measured before the
-# gate was written: 231 tokens over 279 readable tracked files, of which 95
-# resolve to a tracked file and 0 point past its end -- so this target lands
-# GREEN at birth (#239), rather than being committed red on the tree it guards.
+# The repository cites its own source as `path.ext:N` and `path.ext:N-M`; a
+# citation rots silently whenever the file it names is edited unless those
+# tokens sit in a denominator.
 #
-# The claim is deliberately narrow and the gate says so: it proves the cited
-# LINE EXISTS, not that the line says what the surrounding prose claims. A
-# citation aimed at the wrong line of the right file passes here. The content
-# axis stays UNMEASURED, and the summary prints unresolved and bare counts next
-# to the verified count so 95 is never read as "95 of 231 citations are right".
+# The claim is narrow: it proves the cited LINE EXISTS, not that the line says
+# what the prose claims. Resolve counts are printed next to the verified count so
+# they are never read as "citations are correct".
 #
-# There is no allowlist, on purpose. Two constructs in the tree have exactly a
-# citation's shape and are not citations -- the `name:rc` arguments to
-# make_stub_campaign, and the `site` literals in fs_required_knobs.py. The gate
-# cannot tell them apart BY SHAPE and does not try: their paths name no tracked
-# file, so resolution puts them in UNMEASURED alongside genuine out-of-repo
-# citations. An allowlist would be the gate excepting its own residue (#303).
+# No allowlist: the `name:rc` arguments to make_stub_campaign and `site` literals
+# in fs_required_knobs.py cannot be told apart from citations BY SHAPE — their
+# paths name no tracked file, so they resolve to UNMEASURED alongside genuine
+# out-of-repo citations.
 #
-# Self-test first, same order and same reason as doc-pointers, and it carries a
-# control on itself: with the range comparison neutered, every MUST_FIRE control
-# must go silent, or the harness cannot fire and the gate refuses 96.
+# Self-test first (same reason as doc-pointers) and it carries a control on
+# itself: with the range comparison neutered, every MUST_FIRE control must go
+# silent, or the harness refuses 96.
 citation-lines:
 	$(PY) checks/citation_lines.py --self-test
 	$(PY) checks/citation_lines.py
 
-# Finding #317. The mutation battery's module scope was UNDECLARED: MODULE_PATHS in
-# tools/mutate.py named 9 files, `git ls-files src/foundationscale tools` returned 47,
-# and the other 38 sat in no set at all. tests/tooling/test_mutation_anchor_freshness.py
-# pins MODULE_PATHS at 9, which stops the map SHRINKING and says nothing about the tree
-# it is meant to reach -- a pinned number is not a denominator.
+# The mutation battery's module scope is the set of files whose RULES are checked
+# against mutants — distinct from coverage-floor, whose LINES execute. A file
+# added to the tree and to no mutation map is certified by nothing; a pinned
+# MODULE_PATHS count stops the map SHRINKING and says nothing about the tree it
+# is meant to reach.
 #
-# #316 is the proof rather than the motivation: it added 444 lines of adjudication logic
-# to src/foundationscale/gates/objective_gates.py, at the time the largest unmapped
-# library file, and every gate in the repository stayed green. Nothing was wrong; the
-# denominator had quietly stopped reaching part of the surface it certifies.
+# The gate partitions the tracked index into covered + pending + out-of-scope and
+# requires every file in exactly one. PENDING_ENROLMENT is an UNMEASURED
+# population COUNTED, not hidden — its size prints on every CLEAR line.
 #
-# The gate partitions the index into covered + pending + out-of-scope and requires every
-# tracked file in exactly one. PENDING_ENROLMENT is an UNMEASURED population being
-# COUNTED, not a green one being hidden -- its size prints on every CLEAR line so the gap
-# cannot grow silently. Coverage-floor touching a file means its LINES execute; the
-# battery covering it means its RULES are checked against mutants. Different claims, and
-# the first is not evidence for the second.
-#
-# Self-test first, same order and same reason as doc-pointers and citation-lines. It is
-# in the SAME commit as the CI step that mirrors it: #286 (no Makefile<->CI mirror gate)
-# is still open, so that pairing is held by hand.
+# Self-test first, same reason as doc-pointers and citation-lines. Mirrored by a
+# CI step held in the same commit by hand (#286, no Makefile<->CI gate, still
+# open).
 mutation-scope:
 	$(PY) checks/mutation_scope.py --self-test
 	$(PY) checks/mutation_scope.py
 
-# Finding #360. The RL plane ships 20 claims of the shape "this concrete binding IS a
-# `Foo`", and every instrument measuring them was a RUNTIME isinstance() against a
-# @runtime_checkable Protocol -- which checks that the named methods EXIST and says
-# nothing about their signatures. A binding whose `step` takes the wrong argument
-# types, or returns the wrong thing, passes every one of those checks. #397 is the
-# same edge from the other side: three docstrings claimed a setup-time refusal that
-# runtime_checkable cannot deliver.
+# The RL plane ships claims of the shape "this concrete binding IS a `Foo`".
+# runtime isinstance() against a @runtime_checkable Protocol only checks that the
+# named methods EXIST — a binding whose `step` has wrong argument/return types
+# passes. This gate adjudicates nothing itself: it discovers registry._REGISTRY
+# claims statically with `ast` (walked, not read top-level, because registry.py
+# imports every binding INSIDE _install_default_algorithms() to break a cycle),
+# writes a probe module asserting each one, and hands the verdict to mypy.
 #
-# So this gate does not adjudicate anything itself. It discovers the claims statically
-# with `ast` (registry._REGISTRY entries -- walked, not read top-level, because
-# registry.py imports every binding INSIDE _install_default_algorithms() to break a
-# cycle), writes a probe module asserting each one, and hands the verdict to mypy.
-# The gate's own opinion is never the answer; mypy's is.
+# A committed baseline guards the COMPLETENESS axis a subtype checker cannot see:
+# a deleted or renamed binding makes the remaining claims MORE true, so
+# discovery shrinking is RED.
 #
-# It carries a committed baseline for the COMPLETENESS axis, which is the axis a
-# subtype checker cannot see: a binding that is deleted, or renamed out of the
-# registry, makes the remaining claims MORE true, not less. Discovery shrinking is
-# therefore RED, and the baseline is the only thing that can say so.
-#
-# Self-test first, same order and same reason as citation-lines and mutation-scope.
-# mypy absent is 95 UNMEASURED, never a silent green.
+# Self-test first (same reason as citation-lines and mutation-scope). mypy absent
+# is 95 UNMEASURED, never a silent green.
 rl-static-subtypes:
 	$(PY) checks/rl_static_subtypes.py --self-test
 	$(PY) checks/rl_static_subtypes.py
 
-# Finding #378. validation_campaigns/verification_matrix/matrix.json is the ledger of
-# what this repository claims to have verified, and docs/VERIFICATION_MATRIX.md is its
-# rendering. Two failure modes, neither of which had a reader: the two drift (they are
-# edited by hand, in either direction), and a row rots in place -- its control_arm slides
-# from a real arm to a placeholder while every presence check stays green. A row with no
-# arm that must come out DIFFERENT is a row that cannot fail, which is the defect this
-# campaign has now filed four times (#291, #294, #372, #203), so the ledger that tracks
-# it is the last place it should be allowed to recur.
+# validation_campaigns/verification_matrix/matrix.json is the ledger of what this
+# repository claims to have verified; docs/VERIFICATION_MATRIX.md is its
+# rendering. Two failure modes: the two drift (hand-edited, either direction),
+# and a row rots in place — its control_arm slides from a real arm to a
+# placeholder while presence checks stay green. A row with no arm that must come
+# out DIFFERENT is a row that cannot fail.
 #
-# C5 is what makes the doc DERIVED rather than mirrored in practice: the table rows are
-# compared cell-for-cell against the JSON, with markdown ticks normalised on BOTH sides
-# (one-sided normalisation manufactures drift). C4 reads the honest-count paragraph
-# POSITIONALLY, so every integer in that section is a countable -- which is why the two
-# tiers are named in words there and not by their numeric labels.
+# C5 makes the doc DERIVED rather than mirrored: table rows are compared
+# cell-for-cell against the JSON, with markdown ticks normalised on BOTH sides
+# (one-sided normalisation manufactures drift). C4 reads the honest-count
+# paragraph POSITIONALLY, so every integer there is a countable — which is why
+# the two tiers are named in words, not by numeric labels.
 #
-# Self-test first, same order and same reason as doc-pointers, citation-lines and
-# mutation-scope. SC6 (unmodified files must be CLEAR) is what makes SC1-SC5 mean
-# anything, and SC8 pins RED over UNMEASURED -- without it the precedence was a claim
-# no scenario measured, and it was inverted when the gate first ran.
+# Self-test first (same reason as doc-pointers, citation-lines, mutation-scope).
+# SC6 (unmodified files must be CLEAR) makes SC1-SC5 mean anything; SC8 pins RED
+# over UNMEASURED precedence.
 verification-matrix:
 	$(PY) checks/verification_matrix.py --self-test
 	$(PY) checks/verification_matrix.py
 
-# Finding #381. #380 made loop.train total over the 0/5/95/96 contract; #381
-# measured the other side of the same handoff and found everything cli.main
-# does BEFORE `return train(cfg)` guarded for ValueError and nothing else, so
-# a TypeError in parser construction still exited 1 -- the one code the
-# contract has no room for, because it is what the interpreter prints a
-# traceback with. tests/train/test_train_boundary_is_total.py pins that
-# behaviourally; this gate pins it STATICALLY over three axes (RETURN,
-# MODULE-EXIT, ESCAPE), because a test covers the sites it was written for
-# while the defect class is "a statement was added and nobody wrapped it" --
-# #380 found 65 of those at once.
+# Everything cli.main does BEFORE `return train(cfg)` must be guarded over the
+# 0/5/95/96 contract (a TypeError in parser construction exits 1 — the one code
+# the contract has no room for). tests/train/test_train_boundary_is_total.py pins
+# this behaviourally; this gate pins it STATICALLY over three axes (RETURN,
+# MODULE-EXIT, ESCAPE), because the defect class is "a statement was added and
+# nobody wrapped it" — a test covers only the sites it was written for.
 #
-# The predecessor gate (validation_campaigns/h100_validation/
-# patch_trainer_exit_contract.py) scopes a GENERATED artifact, so the SHIPPED
-# entry points sat in no exit-contract denominator at all. This one takes the
-# repository root as a positional and reads src/, which is also what lets the
-# suite's MUST_FIRE leg plant the pre-#381 shape into a COPY rather than
-# mutate the tree it guards (#239).
+# The predecessor (validation_campaigns/h100_validation/
+# patch_trainer_exit_contract.py) scopes a GENERATED artifact, leaving SHIPPED
+# entry points in no exit-contract denominator. This one takes the repository
+# root as a positional and reads src/, which also lets its MUST_FIRE leg plant
+# pre-fix shapes into a COPY rather than the tree it guards.
 #
-# Self-test first, same order and same reason as the four targets above.
+# Self-test first, same order and same reason as the targets above.
 exit-contract-scope:
 	$(PY) checks/exit_contract_scope.py --self-test
 	$(PY) checks/exit_contract_scope.py
 
-# Finding #254. CI runs launchers/test_launcher_contracts.sh; until this target
-# existed, no `make` goal did, so the largest gate in the repository was one a
-# developer could not run before pushing. That is the #230 asymmetry with the
-# arrow reversed -- there the Makefile was the stronger of the two mirrors and
-# CI the weaker; here CI enforced a contract the mirror could not even reach.
+# Runs launchers/test_launcher_contracts.sh, which CI runs but no other make goal
+# does — the largest gate in the repository must be runnable before pushing.
+# Its anti-orphan leg scans every launchers/*.py + checks/*.py for call sites and
+# refuses a file with none, so a new gate file is discoverable before it is
+# committed.
 #
-# It was not a theoretical gap. The suite's anti-orphan leg scans every
-# launchers/*.py + checks/*.py for call sites and refuses a file that has none.
-# #228 committed checks/coverage_floor.py with `make check` fully green, and CI
-# indicted it as an orphan on the next push -- the second time (#238 was the
-# first) that a new gate file was discoverable only after the commit existed.
-#
-# Cost, measured rather than assumed: 27.8s wall / 4.1s user on the developer
-# machine, 146 controls. The first draft of this comment said "minutes, because
-# it runs real watchdog legs with wall budgets" -- plausible, and wrong; the
-# watchdog legs run their budgets concurrently, which is why user time is a
-# sixth of wall. It is cheap enough that there is no argument for keeping it
-# out of `check`. (#93 is the reason the legs are not made cheaper still: one
-# was, and went load-sensitive -- red at 7/8 under parallel load, 8/8 alone.)
+# Cost: 27.8s wall / 4.1s user, 146 controls. Cheap enough for `check`. The wall-
+# budget watchdog legs run concurrently; they must not be made cheaper still
+# (#93: one was, and went load-sensitive — red at 7/8 under parallel load, 8/8
+# alone).
 launcher-contracts:
 	bash launchers/test_launcher_contracts.sh
 
-# Finding #257. The checks/*.py gate self-tests were split out of the launcher
-# suite: they certify the repository's own gate scripts, not the launchers, and
-# appending each new one to a file named for the launchers is what grew that
-# file to 5,562 lines. Both halves must run -- the anti-orphan leg's corpus is
-# the two suites concatenated, so running only one indicts every helper called
-# solely from the other. That is why this target is in `check` beside its
-# sibling and not merely available to type.
+# The checks/*.py gate self-tests, split out of the launcher suite: they certify
+# the repository's own gate scripts. BOTH halves must run — the anti-orphan
+# leg's corpus is the two suites concatenated, so running only one indicts every
+# helper called solely from the other.
 #
-# Cost: 9.4s wall / 5.8s user, 39 controls (re-measured for #381 on an idle
-# developer machine). It is cheaper than its sibling because the wall-budget
-# watchdog legs all stayed on the launcher side; it has grown because each new
-# checks/*.py gate lands its MUST_PASS/MUST_FIRE pair here.
+# Cost: 9.4s wall / 5.8s user, 39 controls. Cheaper than its sibling (no wall-
+# budget watchdog legs); each new checks/*.py gate lands its MUST_PASS/MUST_FIRE
+# pair here.
 checks-gates:
 	bash launchers/test_checks_gates.sh
 
-# Finding #293. The nine standing gate_*.py scripts in the H100 campaign are
-# invoked ONLY by build_h100_plane.sh, which no make target and no CI step runs
-# -- so the whole tail of the gate plane was reachable by nobody, which is #278
-# at nine times the scale. This target is their automated runner. It executes
-# each gate directly, read-only, in seconds; it does NOT run the build. Before
-# #294 that was because the build DELETED eight tracked artifacts on any
-# refusing stage. #294 closed that (snapshot before the `rm`, restore at exit
-# whatever no stage regenerated -- see the control-scratch-restore target), so
-# the reason is now the plainer one: without the private upstreams the build
-# refuses at stage one, and a refusal says nothing about these nine gates.
+# Runs the nine standing gate_*.py scripts in the H100 campaign, which only
+# build_h100_plane.sh invokes and no make target or CI step runs. Executed
+# directly, read-only, in seconds — NOT the build, which without the private
+# upstreams refuses at stage one and says nothing about these gates.
 #
-# --self-test first, and its rc is what gates the real run: a runner whose own
-# fourteen controls are broken cannot certify anything, and running the plane with
-# a broken instrument would produce a verdict nobody should read. The `&&` is
-# deliberate -- controls first, plane second, and no plane verdict at all if the
-# controls did not pass.
+# --self-test first, and its rc gates the real run (`&&` is deliberate): a runner
+# with broken controls cannot certify anything.
 #
 # --allow-refused NAMES the one gate that cannot measure without the estate
-# environment, which is absent here by design and must never be in a public
-# checkout. Naming it is the point: a bare `|| true`, or accepting the runner's
-# exit 95, would also swallow a refusal that appeared tomorrow because a gate
-# broke. A named set still reds when anything ELSE goes quiet -- the #199/#233
-# lesson that a count of one is satisfied by the wrong one.
+# environment (absent here by design and never in a public checkout). A named set
+# still reds when anything ELSE goes quiet — a bare `|| true` would swallow a new
+# refusal too.
 #
-# Cost: 6.5s wall on the developer machine, nine gates.
+# Cost: 6.5s wall, nine gates.
 standing-gates:
 	bash validation_campaigns/h100_validation/run_standing_gates.sh --self-test && \
 		FS_ESTATE_IDENT_PAT=NONE bash validation_campaigns/h100_validation/run_standing_gates.sh \
 			--allow-refused gate_launch_doc.py
 
-# Finding #294. The build snapshots eight tracked artifacts before its `rm -f`
-# and restores whatever no stage regenerated, so a clone that runs the build and
-# hits a refusing stage no longer ends with fewer files than it started with.
-# This target is the two-arm measurement of that claim, and it is a SEPARATE
-# target from campaign-self-tests on purpose: the self-test certifies the six
-# instruments in TemporaryDirectory fixtures in under a second, whereas this runs
-# the real build script twice and is the only thing here that does.
+# The build snapshots eight tracked artifacts before its `rm -f` and restores
+# whatever no stage regenerated, so a refusing stage no longer leaves a clone
+# with fewer files than it started with. This is the two-arm measurement of that
+# claim, separate from campaign-self-tests: the self-tests use fixtures; this
+# runs the real build script twice.
 #
 # Arm A is the tree as committed. Arm B is the same build with the two restore
-# anchors textually stripped -- the pre-fix build. Both arms must REACH the rm
-# site, which the control asserts separately from the outcome (L1), because a run
-# that refused earlier for some unrelated reason would leave 8/8 intact and look
-# exactly like a pass. L5 is the leg that makes the green attributable: arm B
-# must lose 8/8. If both arms survive, the fix is not what saved arm A and this
-# control certifies nothing.
+# anchors stripped (pre-fix). Both arms must REACH the rm site (L1) — an earlier
+# refusal would leave 8/8 intact and look like a pass. L5 must show arm B losing
+# 8/8: if both survive, the fix is not what saved arm A.
 #
-# Cost: 6s wall, measured -- the build refuses at stage one without the private
-# upstreams, so each arm is short. That is cheap enough for `check`, which is
-# where it runs; it is also the only target here that EXECUTES the build script
-# rather than reading it, so it stays a named target rather than folding into
-# campaign-self-tests.
+# Cost: 6s wall (both arms refuse at stage one without private upstreams). The
+# only target here that EXECUTES the build script rather than reading it, so it
+# stays a named target.
 control-scratch-restore:
 	$(PY) validation_campaigns/h100_validation/control_scratch_restore.py --self-test && \
 		$(PY) validation_campaigns/h100_validation/control_scratch_restore.py
 
-# Finding #352. pyproject.toml sets testpaths = ["tests"], so pytest collects
-# NOTHING under validation_campaigns/. When #352 was found, six campaign modules
-# shipped a --self-test flag that plants controls and returns 0 only if every
-# control passes, and five of the six were invoked by nobody -- #278/#293 again,
-# on a third population. This target invokes them. It is seven modules now, six
-# of them runnable here; the population is measured, so it moves without this
-# comment having to.
+# pyproject.toml sets testpaths = ["tests"], so pytest collects NOTHING under
+# validation_campaigns/. Campaign modules ship a --self-test flag (plant
+# controls, return 0 only if every control passes) that no pytest collection
+# reaches — this target invokes them. The population is measured, not numbered
+# here.
 #
-# --self-test first, and its rc gates the real run, for the same reason as the
-# sibling above: a runner whose own controls are broken cannot certify anything.
+# --self-test first, and its rc gates the real run.
 #
-# The scope is MEASURED (an ast '--self-test' literal), not hand-listed, and the
-# usual objection to a measured denominator -- deleting the self-test shrinks it,
-# and the absence reads as a pass -- is closed by making the rules two-way: R1
-# reds a measured file that is undeclared, R6 reds a declared file that is no
-# longer measured. Neither side can move alone. That is also why the 62 campaign
-# files with no self-test need no reason strings: they are outside the claim by
-# measurement rather than excused from it by a table someone has to maintain.
+# Scope is MEASURED (an ast '--self-test' literal), not hand-listed. The rules are
+# two-way so the denominator cannot shrink silently: R1 reds a measured file that
+# is undeclared, R6 reds a declared file no longer measured. Campaign files with
+# no self-test need no reason strings — they are outside the claim by
+# measurement.
 #
-# Cost: 2s wall, six self-tests spawned as subprocesses. The count is the
-# population at the time of writing, not a cap -- the denominator is measured,
-# so a seventh enrols by carrying the literal and being declared.
+# Cost: ~2s wall spawning each self-test as a subprocess.
 campaign-self-tests:
 	$(PY) checks/campaign_self_tests.py --self-test && $(PY) checks/campaign_self_tests.py
 
-# Finding #463. `campaign-self-tests` runs control_boundary_classification's
-# --self-test, which exercises the #417 boundary rule against SYNTHETIC subjects.
-# The entry that runs it against the REAL rows is --expect postfix, and until now
-# no make target and no CI step invoked it -- so the rule was certified in the
-# abstract and never checked on the shipped code. Measured: the real-row mode
-# needs the rows importable and nothing else (every leg patches the measurement
-# delegate out before calling main), so it runs on a laptop in seconds. Against
-# the tree before #463 it reports 9 failing legs of 36; against this one, 0.
+# `campaign-self-tests` runs control_boundary_classification's --self-test
+# against SYNTHETIC subjects. The entry that runs it against the REAL rows is
+# `--expect postfix`, and until this target existed no make goal or CI step
+# invoked it — the rule was certified in the abstract and never on the shipped
+# code. The real-row mode needs the rows importable and nothing else (every leg
+# patches the measurement delegate out before calling main), so it runs in
+# seconds on a laptop.
 boundary-control:
 	cd validation_campaigns/verification_matrix && \
 		$(PY) control_boundary_classification.py --self-test && \
@@ -597,10 +399,9 @@ mutation:
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py
 
 # One shard, the way CI runs it after #242. `make mutation-module MODULE=dcp`.
-# Every module carries its own "must_survive" row precisely so a shard is a
-# whole detector rather than half of one -- run without a control, mutate.py
-# exits 2 (never measured) rather than printing a caught= figure it cannot
-# support, and before #242 that is what 5 of the 9 shards would have done.
+# Every module carries its own "must_survive" row so a shard is a whole detector
+# — run without a control, mutate.py exits 2 (never measured) rather than
+# printing a caught= figure it cannot support.
 mutation-module:
 	@test -n "$(MODULE)" || { echo 'usage: make mutation-module MODULE=<name>   ("$(PY) tools/mutate.py --list" names them)'; exit 2; }
 	FS_FORBID_SKIPS=1 $(PY) tools/mutate.py --module $(MODULE)
@@ -635,12 +436,10 @@ skip-guard-probe:
 	}; \
 	echo "skip-guard-probe: guard fired and named its probe, as CI requires"
 
-# Finding #247, second half. `training-plane` had a target, a .PHONY entry and
-# two CI steps (ci.yml:276, ci.yml:278) and was absent from this line, so the
-# one command a developer runs before pushing was WEAKER than the CI it claims
-# to mirror -- #230's shape, in the file that states the mirror as its purpose.
-# A gate reachable only by typing its name is reachable by nobody: #238's
-# orphan class, one layer up from the gate files it was written about.
+# The `check` aggregate must list every make target CI runs: a gate missing here
+# is WEAKER than the CI the mirror claims to reflect (#230's shape). A gate
+# reachable only by typing its name is reachable by nobody: #238's orphan class,
+# one layer up.
 check: lint typecheck typecheck-checks skip-guard-probe test coverage-floor ci-suite-extras controls packaging training-plane makefile-tooling mirror countables doc-pointers citation-lines mutation-scope rl-static-subtypes verification-matrix exit-contract-scope launcher-contracts checks-gates standing-gates control-scratch-restore campaign-self-tests boundary-control mutation
 
 clean:

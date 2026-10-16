@@ -75,12 +75,9 @@ CONTROLS (--self-test)
     controls cannot be vacuous.  Any control failure exits 5, because then
     every verdict this detector returns is worthless.
 
-    Four of them exist because this gate's first version shipped the
-    console-script axis with no control at all, and that was the axis that
-    was wrong.  An uncontrolled axis is an unmeasured axis wearing a verdict.
-    The last two exist because the same was true one level up: nothing
-    controlled how the console-script DENOMINATOR was obtained, and its
-    pre-3.10 arm addressed a mapping no release ever returned.
+    An uncontrolled axis is an unmeasured axis wearing a verdict: every axis
+    that can return a verdict must be driven through all of its outcomes, and
+    every denominator must be controlled at its source too.
 """
 
 from __future__ import annotations
@@ -111,11 +108,9 @@ class EntryPointLike(Protocol):
     """The four members this gate consumes from an entry point.
 
     A Protocol rather than importlib.metadata.EntryPoint so the --self-test
-    stubs inhabit the SAME declared type as the real thing.  The alternative on
-    offer was widening these signatures to a bare `list`, and that is how the
-    defect select_console_scripts describes survived: nothing typed the shape,
-    so nothing noticed that its fallback arm addressed a mapping no interpreter
-    ever returned.
+    stubs inhabit the SAME declared type as the real thing.  Widening these
+    signatures to a bare `list` is what lets an entry-point-shaped bug
+    survive unnoticed.
     """
 
     @property
@@ -145,16 +140,13 @@ def select_console_scripts(entry_points: Iterable[EntryPointLike]) -> list[Entry
     `Distribution.entry_points` changed at 3.10: before, a FLAT LIST of
     EntryPoint spanning every declared group; from 3.10, an EntryPoints with
     .select(group=...).  Both are handled because the gate must run on whatever
-    login-node Python exists, not on the one Python the author tested.
+    login-node Python exists.
 
-    The pre-3.10 arm used to read `eps.get("console_scripts", [])`, which is the
-    shape of the module-level `entry_points()` FUNCTION -- this property has
-    never returned a mapping on any release.  So the arm was dead on 3.10+ and
-    an AttributeError on exactly the old interpreters it was written for, where
-    main()'s fail-closed wrapper would have turned it into a RED naming no
-    packaging defect at all: an environment-dependent verdict, the #83/#111
-    shape, in the one function that decides this gate's largest denominator.
-    Filtering on ep.group is what a flat list actually supports.
+    The pre-3.10 arm MUST filter on ep.group: a flat list is not a mapping, so
+    ``eps.get("console_scripts", [])`` (the shape of the module-level
+    `entry_points()` FUNCTION) raises AttributeError on exactly the old
+    interpreters this arm serves, and 5-vs-95 would then depend on the
+    interpreter.  Filtering on ep.group is what a flat list actually supports.
     """
     if hasattr(entry_points, "select"):
         return list(entry_points.select(group=CONSOLE_SCRIPTS_GROUP))
@@ -222,9 +214,9 @@ class ScriptTally(NamedTuple):
     """Per-script outcome counts. resolved + unmeasured + failed == total.
 
     Kept as counts rather than derived from len(findings) because one script
-    can contribute two findings (absent wrapper AND unresolvable target), and
-    subtracting a finding count from a script count is how a denominator goes
-    negative and stops meaning anything.
+    can contribute two findings (absent wrapper AND unresolvable target);
+    finding counts must never be used as script counts or the denominator
+    stops partitioning.
     """
 
     total: int
@@ -255,15 +247,10 @@ def check_console_scripts(
     exist -- reading pyproject.toml here would prove only that somebody
     typed it, which is the failure this gate exists to catch.
 
-    WRAPPER EXISTENCE IS DELIBERATELY NOT A PATH LOOKUP.  The first draft of
-    this gate asked `shutil.which(ep.name)` and reported RED for both of
-    FoundationScale's scripts on a tree where pip had installed both wrappers
-    correctly and both targets imported cleanly -- the only fact it had
-    measured was that the operator had invoked `.venv/bin/python3` by path
-    instead of sourcing `activate`.  A verdict that moves with the caller's
-    shell environment while the code stands still states no coverage; it is
-    the defect #83 fixed for the gates' own interpreter and the one
-    [tool.ruff.lint] ignore = ["UP038"] fixes for the linter, recurring here.
+    WRAPPER EXISTENCE IS DELIBERATELY NOT A PATH LOOKUP.  `shutil.which(ep.name)`
+    makes the verdict depend on whether `activate` was sourced, while the code
+    stands still -- a verdict that moves with the caller's shell states no
+    coverage and can go RED on code that is installed and reachable.
 
     So existence is resolved against two shell-independent sources: the script
     directory belonging to the interpreter running this gate, and the
@@ -371,14 +358,11 @@ def scan_source_roots(
     for root in roots:
         if not Path(root).is_dir():
             # NOT an error here. An absent root is UNMEASURED and main() owns
-            # that classification -- it prints the line and returns 95. Minting
-            # a red as well made both fire, and red wins, so `cd /` turned this
-            # gate's verdict from CLEAR to RED with no code changed and the
-            # header docstring promising 95. Same defect class as the PATH
-            # lookup this gate's console-script axis just lost: a verdict that
-            # moves with the caller's shell state. Unreadable FILES below stay
-            # red, because that is input the gate could not read, not input the
-            # operator never pointed it at.
+            # that classification -- it prints the line and returns 95. If this
+            # also emitted a red, red wins and the documented 95 would silently
+            # become 5 depending on where the operator ran the command.
+            # Unreadable FILES below stay red: that is input the gate could not
+            # read, not input the operator never pointed it at.
             continue
         for dirpath, _dirnames, filenames in os.walk(root):
             for filename in filenames:
@@ -476,11 +460,9 @@ class _StubEntryPoints:
     """Stand-in for the 3.10+ EntryPoints shape: iterable AND .select()-able.
 
     Lets the group-selection controls drive BOTH arms of
-    select_console_scripts on any interpreter.  Building the modern arm's
-    fixture out of importlib.metadata.EntryPoints instead would make the
-    control fire only where that class exists -- a control whose reach depends
-    on the interpreter that ran it is the defect this gate's console-script
-    axis already shipped once.
+    select_console_scripts on any interpreter.  Using
+    importlib.metadata.EntryPoints itself would make the control reach depend
+    on the running interpreter -- a control must not vary with its host.
     """
 
     def __init__(self, entries: Sequence[EntryPointLike]) -> None:
@@ -564,11 +546,10 @@ def run_self_test(dist_name: str) -> int:
             )
 
         # ---- console-script axis -------------------------------------------
-        # This axis shipped with NO control and was the axis that was wrong: it
-        # reported RED for two scripts pip had installed correctly, because it
-        # asked the caller's PATH. Four controls, each isolating one outcome,
-        # driven through injected script_dirs/record_basenames so the controls
-        # themselves cannot depend on how this interpreter was invoked.
+        # Four controls, each isolating one outcome (absent wrapper, unresolvable
+        # target, thin env, happy path), driven through injected
+        # script_dirs/record_basenames so the controls themselves cannot depend
+        # on how this interpreter was invoked.
         bindir = str(Path(tmp) / "bin")
         Path(bindir).mkdir(parents=True)
         present = str(Path(bindir) / "fs-present-cmd")
@@ -633,21 +614,19 @@ def run_self_test(dist_name: str) -> int:
             )
 
         # ---- group-selection axis ------------------------------------------
-        # select_console_scripts decides the console-script DENOMINATOR, and
-        # its pre-3.10 arm shipped addressing a mapping no release of
-        # Distribution.entry_points ever returned: dead on 3.10+, AttributeError
-        # on the interpreters it existed for. Both arms are driven here with
-        # stubs, so neither control depends on which importlib.metadata this
-        # Python happens to ship. No tempdir: the axis touches no filesystem.
+        # select_console_scripts decides the console-script DENOMINATOR. Both
+        # arms (flat list, .select()) are driven here with stubs, so neither
+        # control depends on which importlib.metadata this Python ships. No
+        # tempdir: the axis touches no filesystem.
         mixed: list[EntryPointLike] = [
             _StubEntryPoint("fs-real-cmd", f"{dist_name}.x:main"),
             _StubEntryPoint("fs-plugin", f"{dist_name}.x:plug", group="foundationscale.plugins"),
         ]
 
         # MUST_PASS: the flat pre-3.10 list keeps console_scripts and drops the
-        # foreign group. Asserted as 1 of 2, not as "no exception": the arm this
-        # replaces raised, so "it returned" is too weak a claim, and a filter
-        # that dropped everything would also never raise.
+        # foreign group. Asserted as 1 of 2, not as "no exception": a filter that
+        # dropped everything would also never raise, and "it returned" alone
+        # says nothing about which entry points survived.
         picked = select_console_scripts(mixed)
         if [ep.name for ep in picked] != ["fs-real-cmd"]:
             failures.append(
@@ -656,8 +635,8 @@ def run_self_test(dist_name: str) -> int:
                 "of 2 entry points spanning 2 groups"
             )
 
-        # MUST_PASS: the 3.10+ arm is still dispatched to .select() AND is
-        # handed the group. A fallback that quietly swallowed every shape would
+        # MUST_PASS: the 3.10+ arm must be dispatched to .select() AND be
+        # handed the group. A fallback that quietly accepted every shape would
         # pass the control above while silently widening the denominator to
         # every group the distribution declares.
         selectable = _StubEntryPoints(mixed)

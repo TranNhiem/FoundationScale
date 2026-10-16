@@ -1,36 +1,32 @@
 #!/usr/bin/env python3
 """#439 control: every T1 GPU row must declare a CONSTRUCTIBLE topology.
 
-MEASURED on a 2-GPU GB200 tray (pass p414): all four rows emit ``--nodes`` and
-``--gpus-per-node`` and none of them emits ``--dp``. ``--dp`` defaults to 1 and
+The rows emit ``--nodes``/``--gpus-per-node`` but never ``--dp`` (default 1), and
 ``Topology.__post_init__`` requires ``dp*tp*pp*ep*cp == nodes*gpus_per_node``, so
-at any width above 1 the trainer refused before loading a model::
+at any width above 1 the trainer refuses before loading a model::
 
     [fs:train:refuse] topology is not constructible (nothing touched):
       dp(1) x tp(1) x pp(1) x ep(1) x cp(1) = 1
       but nodes(1) x gpus_per_node(2) = 2
 
-torchrun then flattened that declared 96 to launcher rc 1 (#171), so the receipt
-said only "torchrun launcher exited 1" -- a crash and a refusal wearing one face.
+torchrun then flattens that refusal to launcher rc 1, indistinguishable from a
+crash.
 
-WHY NO EXISTING CONTROL CAUGHT IT: the defect is invisible at width 1, because
-1x1x1x1x1 == 1x1. Every local run, every CI leg and every row --self-test runs at
-width 1, which is the one width at which the bug cannot fire. So this control
-drives the rows at **width 2** -- that is the whole point of it, and a future
-edit that lowers WIDTH to 1 disables it silently. Control C1 of ``--self-test``
-exists to make that edit loud instead.
+The defect cannot fire at width 1 (1x1x1x1x1 == 1x1), and that is the width every
+local run, CI leg and row --self-test uses. So this control drives the rows at
+**width 2** -- that is the whole point of it; an edit that lowers WIDTH to 1
+disables it silently, and control C1 of ``--self-test`` exists to make that edit
+loud instead.
 
-It does not re-implement the rule. It calls each row's REAL argv composer and
-hands the emitted degrees to the trainer's REAL Topology, so the control and the
-trainer cannot drift apart: if Topology's invariant changes (e.g. when a
-Megatron-Core backend lands and EP stops being an independent multiplicative
-factor -- Megatron derives ``dp = world // (tp*pp*cp)`` and puts EP in a separate
-generator), this control changes with it for free.
+It does not re-implement the rule: it calls each row's REAL argv composer and
+hands the emitted degrees to the trainer's REAL Topology, so control and trainer
+cannot drift apart -- if Topology's invariant ever changes (e.g. a Megatron-Core
+backend deriving ``dp = world // (tp*pp*cp)`` with EP in a separate generator),
+this control changes with it for free.
 
 Exit: 0 all rows constructible, 5 a row declares an impossible topology,
 96 a precondition is unmet (the trainer's Topology is unreadable, a composer
-could not be driven) -- never a scientific verdict on an environment failure
-(#417).
+could not be driven) -- never a scientific verdict on an environment failure.
 """
 
 from __future__ import annotations
@@ -58,11 +54,11 @@ SRC = REPO_ROOT / "src"
 if str(VM) not in sys.path:
     sys.path.insert(0, str(VM))
 
-# src/ goes FIRST, deliberately. This gate compares four rows of THIS TREE against
+# src/ goes FIRST, deliberately. This gate compares the rows of THIS TREE against
 # the Topology of THIS TREE; resolving foundationscale from site-packages instead
-# would make the verdict depend on what happens to be installed (#83/#229), and
-# would also make the gate unrunnable under `python3 -S`, which is how every other
-# gate in this directory is invoked by launchers/test_checks_gates.sh.
+# would make the verdict depend on what happens to be installed, and would leave
+# the gate unrunnable under `python3 -S`, as invoked by
+# launchers/test_checks_gates.sh.
 if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -89,9 +85,8 @@ class _Refusal(Exception):
 def _load_topology() -> type:
     """Return the trainer's REAL Topology class, or refuse.
 
-    An absent or unimportable package is a precondition, not a scientific result
-    about the four rows -- #417 is exactly the habit of converting one into the
-    other.
+    An absent or unimportable package is a precondition (96), not a scientific
+    result about the four rows.
     """
     try:
         from foundationscale.topology import Topology
@@ -103,11 +98,10 @@ def _load_topology() -> type:
 def _synthesize(cls: type) -> Any:
     """Build a minimal instance of a row's ArmSpec from its dataclass fields.
 
-    The rows' spec types differ and are private. Filling them by field TYPE
-    rather than by name keeps this control from having to track four separate
-    constructors -- and a spec whose values are placeholders is fine here,
-    because the only fields this control reads back are the topology ones, which
-    come from ``args``, not from the spec.
+    The spec types differ per row and are private; filling required fields by
+    TYPE avoids tracking four constructors. Placeholder values are safe because
+    the only fields read back are the topology ones, which come from ``args``,
+    not from the spec.
     """
     kwargs: dict[str, Any] = {}
     for field in dataclasses.fields(cls):
@@ -175,8 +169,8 @@ def _judge(topology_cls: type, row: str, flags: dict[str, str]) -> tuple[bool, s
     """Hand one arm's declared degrees to the trainer's real Topology.
 
     Returns (constructible, one-line report). The self-test drives this same
-    function with synthetic flag mappings, so a control that says "the judge
-    fires" is a statement about the code main() runs, not about a copy of it.
+    function with synthetic flag mappings, so the "judge fires" statement is
+    about the code main() runs, not about a copy of it.
     """
     degrees = {d: int(flags.get(f"--{d}", 1)) for d in DEGREES}
     nodes = int(flags.get("--nodes", NODES))
@@ -230,9 +224,9 @@ def measure() -> int:
 def self_test() -> int:
     """Prove this control's own machinery, including that its judge can FIRE.
 
-    A control whose judge cannot return False is a control that passes by
-    construction, which is the defect it was written to catch one level up.
-    C4 is therefore a MUST_FIRE leg living inside the self-test.
+    A control whose judge cannot return False passes by construction -- the
+    very defect this control catches one level up. C4 is therefore a MUST_FIRE
+    leg living inside the self-test.
     """
     try:
         topology_cls = _load_topology()

@@ -41,10 +41,10 @@ from ._core import (
 @dataclass
 class _World:
     """A fully materialized, KNOWN-HEALTHY miniature of every artifact class the
-    ten checks read, under one temp dir. cfg is a complete, schema-valid config
-    with pins MEASURED from the files actually written (pins are computed, not
-    asserted — a fixture whose pins disagree with its files proves nothing).
-    Lanes then corrupt one artifact class at a time."""
+    ten checks read, under one temp dir. cfg is schema-valid with pins MEASURED
+    from the files actually written (pins are computed, not asserted — a fixture
+    whose pins disagree with its files proves nothing). Lanes then corrupt one
+    artifact class at a time."""
 
     root: Path
     cfg: dict[str, Any]
@@ -301,17 +301,14 @@ def _build_world(root: Path) -> _World:
     )
 
     # The external pin is MEASURED HERE, at world-build time, by walking the
-    # same bytes-on-disk quantity that lora_probe independently walks at check
-    # time. Legitimate here and forbidden inside the check, for mirror-image
-    # reasons: _build_world is the operator's stand-in — an authority EXTERNAL
-    # to the check under test, whose pins are measurements of what it wrote,
-    # never the artifact's own claims — whereas a pin derived inside the check
-    # from the same walk would be self-referential (pin == observed trivially,
-    # both control halves green on a detector that verifies nothing: exactly
-    # the hole the planted lying index exists to expose). The walk prices the
-    # planted index like any other regular file, per the check's contract, so
-    # this pin is deliberately NOT 1500 (= 1000 + 500 shards-only arithmetic,
-    # which forgot the planted file's real bytes).
+    # same bytes-on-disk quantity lora_probe walks at check time. Valid here and
+    # forbidden inside the check: _build_world is an authority EXTERNAL to the
+    # check under test, pinning measurements of what it wrote — a pin derived
+    # inside the check from the same walk would be self-referential (pin ==
+    # observed trivially: the hole the planted lying index exists to expose).
+    # The walk prices the planted index like any other regular file, per the
+    # check's contract, so this pin is deliberately NOT 1500 (= 1000 + 500
+    # shards-only, which omitted the planted file's real bytes).
     pinned_merged_total_bytes = sum(p.stat().st_size for p in merged_dir.rglob("*") if p.is_file())
 
     now = time.time()
@@ -500,9 +497,9 @@ def _doctored_registry_no_lanes() -> list[_Check]:
 
 def _run_lane_against(peer: _Check, lane: _Lane) -> CheckResult:
     """Fresh healthy world -> inject the lane's defect -> run ONLY the target.
-    The shared manifest state is established by a real frozen_manifest run on
-    the healthy world FIRST: a lane whose healthy precondition fails is
-    inconclusive-by-ERROR, never silently counted."""
+    Shared manifest state comes from a real frozen_manifest run on the healthy
+    world FIRST: a lane whose healthy precondition fails is inconclusive-by-ERROR,
+    never silently counted."""
     with _fresh_world() as world:
         shared: dict[str, Any] = {"_config_sha256": world._cfg_sha}  # type: ignore[attr-defined]
         baseline = _execute(REGISTRY["frozen_manifest"], world.cfg, world.env, shared)

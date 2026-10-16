@@ -27,37 +27,25 @@ Classification:
              reason, an anchor and the exact token. Declarations are pinned to
              bytes and go RED when they stop describing the tree.
 
-Why this file grew three categories (#239). Its first version asked one
-question -- "is there a bare expansion inside double-quoted inner source?" --
-and reported five REDs on a tree where two were genuine and three were not
-splices at all. A detector that cannot tell "value spliced INTO literal
-source" from "value IS the source" produces unattributable REDs, and an
-unattributable RED is discarded by the next reader, which is how a real
-blocker (the two that WERE genuine, now repaired at lora:726 and lora:1264)
-hides inside its own noise. The categories below are enumerated with their
-residual risk stated; none of them is an allowlist, and the difference is that
-each one is a rule about SHAPE that a control can fire against, not a list of
-lines that are excused.
+Why three categories: 'value spliced INTO literal source' and 'value IS the
+source' are different defects, and conflating them buries real blockers in
+unattributable REDs. The audited categories are SHAPE rules with controls that
+fire against them -- not allowlists of excused lines. Residual risk is stated
+per category:
 
   EVAL-SHAPED -- `bash -lc "$CMD"`, where the whole inner source is one
-  expansion and nothing else. The value is not spliced into surrounding
-  literal source; it IS the source, which is what `eval` means and what these
-  two call sites intend (both launchers build $CMD as the training command and
-  the launcher contract suite's conjunct c4 pins this exact spelling). Residual
-  risk, stated rather than dismissed: whoever writes $CMD owns its contents
-  absolutely. The narrowness is the control -- `bash -lc "$CMD --extra"` is a
-  splice again and MUST_FIRE proves this detector still says so.
+  expansion and nothing else: the value IS the source (eval semantics), and
+  the caller who builds $CMD owns its contents absolutely. `bash -lc
+  "$CMD --extra"` is a splice again and MUST_FIRE proves it is still caught.
 
-  %q-RENDERED -- `$(printf '%q ' "${ARR[@]}")`. The substitution's stdout is
-  shell-quoted BY printf, so what lands in the inner source is already escaped
-  bytes; this is the recommended render, not the defect. Residual risk: only
-  `printf %q` is recognised, and only at the head of the substitution.
+  %q-RENDERED -- `$(printf '%q ' "${ARR[@]}")`: printf shell-quotes the
+  output, so the inner source receives already-escaped bytes. Only
+  `printf %q` at the head of the substitution is recognised.
 
 Pure comment lines are not sites, and neither is a `bash -lc` inside a
-TRAILING comment on a code line (#239 D1): comment text must never make this
-sweep red or inflate its denominator (doctrine 5, symmetric). The `#` is only
-a comment when it is unquoted and at start-of-word, so `bash -lc "x # $V"`
-stays a site and stays RED -- there is a MUST_FIRE for exactly that.
+trailing comment on a code line: comment text must never make this sweep red
+or inflate its denominator. The `#` starts a comment only when unquoted and at
+start-of-word, so `bash -lc "x # $V"` stays a site and stays RED (MUST_FIRE).
 
 Doctrine wiring:
   (1) 0 sites is RED -- both launchers visibly use bash -lc, so zero means the
@@ -67,21 +55,18 @@ Doctrine wiring:
       count or the sweep indicts its own classifier.
   (3) the MUST_FIRE lives in .github/workflows/ci.yml: it calls
       --reinstate-blocker2 and demands this sweep refuse the copy. --self-test
-      adds the controls that live with the detector, and CI runs it BEFORE the
-      live sweep the way `packaging` already does: a detector whose controls
-      misbehave has no licence to report a verdict.
+      runs the detector's own controls and CI runs it BEFORE the live sweep: a
+      detector whose controls misbehave has no licence to report a verdict.
   (4) unreadable input is RED, not empty.
   (5) a DECLARED_SPLICES entry that matches nothing is RED, and one that
       matches more than one site is RED. A declaration is a claim about the
-      tree; when the tree moves the claim must move with it, and the only way
-      to keep an allowlist honest is to make going stale cost more than
-      deleting the entry.
+      tree; going stale must cost more than deleting the entry.
 Output avoids the verify_summary-ingested tokens by design: no 'green',
 'passed', or 'SUMMARY' on any path, and no suite domain prefix at line start.
 
 Exit codes are 0/1 here, not the 0/5/95/96 namespace: every gate under checks/
-still speaks 0/1 and CI's legs test for nonzero. Migrating the namespace is a
-separate change that must move the callers in the same commit.
+still speaks 0/1 and CI's legs test for nonzero. Migrating the namespace must
+move the callers in the same commit.
 """
 
 from __future__ import annotations
@@ -112,11 +97,8 @@ BLOCKER2_BROKEN = 'bash -lc "python3 $COT_PROBE_PY"'
 class Declaration(TypedDict):
     """One DECLARED_SPLICES entry -- the four keys classify() reads.
 
-    Spelled as a TypedDict rather than dict[str, str] because every key here is
-    load-bearing under doctrine 5: `anchor` and `token` are what pin the claim
-    to bytes, and a misspelled key would not soften the rule, it would raise
-    KeyError from inside the sweep and take the whole verdict with it. Naming
-    the four keys makes that a type error at the declaration site instead.
+    TypedDict rather than dict[str, str] so a misspelled key is a type error at
+    the declaration site instead of a KeyError from inside the sweep.
     """
 
     file: str
@@ -129,10 +111,7 @@ class DeclarationTally(TypedDict):
     """A declaration paired with the number of sites it matched.
 
     `hits` is the arithmetic doctrine 5 rests on: 0 is stale, >1 is ambiguous,
-    and both are RED. It shares a key space with a str->str declaration, so the
-    dict literal this replaces inferred `object` for both values -- which makes
-    `hits += 1` uncheckable and puts the stale/ambiguous counters in no
-    denominator a typechecker can see.
+    and both are RED. TypedDict so `hits` is typed `int`, not `object`.
     """
 
     d: Declaration
@@ -141,9 +120,8 @@ class DeclarationTally(TypedDict):
 
 # Deliberate splices, each pinned to the bytes that make it deliberate. `anchor`
 # is a substring of the site's own line and `token` is the exact expansion; both
-# must be observed or the entry is stale and the sweep goes RED. That is the
-# whole difference between this and an allowlist: an allowlist survives the code
-# it excuses being deleted, and this does not.
+# must be observed or the entry is stale and the sweep goes RED. Unlike an
+# allowlist, which outlives the code it excuses, a stale entry is fatal.
 DECLARED_SPLICES: tuple[Declaration, ...] = (
     {
         "file": "launch_g4e4b_lora_1tray.sh",
@@ -173,13 +151,12 @@ DECLARED_SPLICES: tuple[Declaration, ...] = (
 def _comment_start(line: str) -> int:
     """Index of the `#` that begins a trailing comment, or -1.
 
-    A `#` opens a comment only when it is unquoted AND at start-of-word, which
-    is why `bash -lc "x # $V"` is still a site: the `#` there is inside the
-    inner source, not a comment, and the expansion after it is a real splice.
-    Limitation, stated: quoting is tracked within one physical line, so a
-    double-quoted string continued across a backslash-newline can desynchronise
-    this. Both launchers keep every `bash -lc` invocation on one physical line
-    and the site count is printed, so a desync is visible rather than silent.
+    A `#` opens a comment only when unquoted AND at start-of-word, so
+    `bash -lc "x # $V"` is still a site with a real splice after the `#`.
+    Limitation: quoting is tracked within one physical line, so a double-quoted
+    string continued across a backslash-newline can desynchronise this. Both
+    launchers keep every `bash -lc` on one physical line and the site count is
+    printed, so a desync is visible rather than silent.
     """
     in_s = in_d = False
     i = 0
@@ -435,8 +412,7 @@ def classify(files: Sequence[str], declarations: Sequence[Declaration] = DECLARE
         # Named `entry`, not `e`, because `e` is the except-target bound at the
         # unreadable-file arm above. Python deletes an except-target when its
         # block exits, so reusing the name at function scope is one edit away
-        # from a NameError: the arm returns today, and the day it stops
-        # returning this loop reads a name the interpreter has unbound.
+        # from a NameError if that arm ever stops returning early.
         for entry in dupes:
             print(
                 f"  RED: ambiguous declaration {entry['d']['file']} ::"
@@ -493,25 +469,23 @@ def reinstate(src: str, dst: str) -> int:
 # ---------------------------------------------------------------------------
 # --self-test: the detector's own controls.
 #
-# Every category this file grew in #239 widens what it will NOT report, and a
-# detector that only ever gets wider is on a one-way trip to reporting nothing.
-# So each widening ships a MUST_FIRE that proves the neighbouring shape is
-# still caught: eval-shaped is exempt but eval-shaped-plus-one-word is not,
-# %q-rendered is exempt but a plain substitution is not, comment text is not a
-# site but a `#` inside the quoted source is. The MUST_PASSes are the other
-# half -- a detector that reddens everything states no verdict either.
+# Every audited category widens what the detector will NOT report, so each one
+# ships a MUST_FIRE proving the neighbouring shape is still caught:
+# eval-shaped is exempt but eval-shaped-plus-one-word is not, %q-rendered is
+# exempt but a plain substitution is not, comment text is not a site but a `#`
+# inside the quoted source is. MUST_PASSes are the other half -- a detector
+# that reddens everything states no verdict either.
 # ---------------------------------------------------------------------------
 
 _CLEAN_PARTNER = 'run_in_container bash -lc \'python3 "$1"\' _ "$SCRIPT"\n'
 
 
-# declarations defaults to EMPTY here, not to DECLARED_SPLICES. The real
-# declarations are pinned to the real launchers, so against a synthetic fixture
-# they are -- correctly -- stale, and every MUST_PASS went red for a reason
-# other than the one it names. That is the staleness rule working, so the fix
-# is to scope the fixtures out of it rather than to soften it; the rule keeps
-# its own MUST_FIRE below, and the live run is where the real entries must
-# still be observed.
+# declarations defaults to EMPTY here, not to DECLARED_SPLICES: the real
+# declarations are pinned to the real launchers and would be -- correctly --
+# stale against a synthetic fixture, reddening every MUST_PASS for the wrong
+# reason. Scoping fixtures out of the stale rule keeps the rule intact (it has
+# its own MUST_FIRE below; the live run still requires every real entry to be
+# observed).
 def _run_fixture(
     tmp: str,
     name: str,
@@ -587,10 +561,9 @@ def self_test() -> int:
         must_fire("stale-declaration", EXIT_RED, "stale declaration", rc, out)
 
         # Doctrine 5 is two clauses -- stale is RED and ambiguous is RED -- and
-        # only the first had a control, so the loop that reports the second was
-        # reached by nothing. An unexercised RED path is indistinguishable from
-        # a RED path that does not work, which is what the rest of this file
-        # exists to say about gates.
+        # without a control for the second, its reporting loop is reached by
+        # nothing. An unexercised RED path is indistinguishable from one that
+        # does not work.
         ambiguous: tuple[Declaration, ...] = (
             {
                 "file": "dupe_a.sh",

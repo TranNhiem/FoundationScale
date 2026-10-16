@@ -35,19 +35,17 @@ def _check_corpus_wiring(cfg, s, env, shared, registry=None) -> CheckResult:
 
     INPUT CONTRACT (unverified against the FoxBrain repo):
       * env[corpus_wiring.env_var] (design: FOXBRAIN_SFT_JSONLS): os.pathsep-
-        separated list of JSONL paths IN TRAINING ORDER; the first entry is
-        the batch-0 source. Empty entries refused.
-      * corpus_wiring.recipe_files: source files of the recipe entrypoint; at
-        least one must textually contain a call to ``_env_jsonls(`` — this is
-        a grep, declared as such: it proves the responsible code path names
-        the env reader, not that the call is live on every branch. A human
-        must confirm that before first launch (see 'does NOT close').
+        separated list of JSONL paths IN TRAINING ORDER; entry 0 is the
+        batch-0 source. Empty entries refused.
+      * corpus_wiring.recipe_files: at least one must textually call
+        ``_env_jsonls(`` — a grep only: it shows the code path names the env
+        reader, NOT that the call is live on every branch. A human must
+        confirm that before first launch.
       * corpus_wiring.attestation_path: JSON {"reader": str, "sample_sha256":
         hex, "note": str?}. The sample hash is MACHINE-VERIFIED: we decode the
-        first row of the first resolved corpus file ourselves and require
-        equality — an attestation over a different sample, or a file that
-        changed since, FAILS. What no machine can verify is that 'reader' is
-        a human who paid attention; the artifact pins WHO asserted it.
+        first row of the first resolved corpus file and require equality — a
+        hash over a different sample or a file that changed since FAILS.
+        'reader' itself cannot be verified; the artifact pins WHO asserted it.
     """
     err = _shared_or_error(_Check("corpus_wiring", "", None, _stub_fn), shared, ["corpus_files"])
     if err:
@@ -80,11 +78,9 @@ def _check_corpus_wiring(cfg, s, env, shared, registry=None) -> CheckResult:
     evidence["pinned_files"] = pinned
     expected = len(pinned)
     if resolved != pinned:
-        # Name the drift, not just its cardinality: 'resolved 5 != frozen 4'
-        # makes an operator diff two path lists by eye. Naming the phantom
-        # entry is the difference between a verdict and a hint, and the
-        # repository's own review rule applies to failure strings too: every
-        # claim carries its denominator AND names its offenders.
+        # Name the drift, not just the cardinality: name the phantom/dropped
+        # entries so the operator can diff by eye. Every failure claim carries
+        # its denominator AND names its offenders.
         extras = [r for r in resolved if r not in pinned]
         dropped = [f for f in pinned if f not in resolved]
         named = []

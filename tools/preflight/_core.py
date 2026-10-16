@@ -71,12 +71,10 @@ def _finalize(
     detail: str,
     evidence: Mapping[str, Any] | None,
 ) -> CheckResult:
-    """The Gate.ok downgrade ladder, restated for checks.
-
-    Same order, same semantics: a requested PASS over zero units becomes
-    VACUOUS; short-of-denominator becomes UNDERCOVERED; numerator outrunning
-    the denominator becomes OVERCOVERED. The check author cannot override any
-    of the three, which — as in Gate.ok — is the point.
+    """Gate.ok downgrade ladder applied to checks: a requested PASS over zero
+    units becomes VACUOUS, short-of-denominator becomes UNDERCOVERED, and a
+    numerator outrunning the denominator becomes OVERCOVERED — in that order.
+    The check author cannot override any of the three.
     """
     evidence = dict(evidence or {})
     if verdict is Verdict.PASS:
@@ -115,10 +113,9 @@ def _finalize(
 
 
 def _discipline(res: CheckResult) -> CheckResult:
-    """PASS with an EMPTY evidence map is not a PASS — design item 4 made the
-    evidence payload part of the record shape, and an absent one is the claim
-    'we counted and hashed' detached from every count and hash. Downgrade to
-    ERROR: it is an author defect in this file, not a property of the run."""
+    """PASS with an EMPTY evidence map is not a PASS: the verdict schema
+    requires counts/hashes attached to every clearance. Downgrade to ERROR —
+    an empty map is an author defect in this file, not a property of the run."""
     if res.verdict is Verdict.PASS and not res.evidence:
         return CheckResult(
             res.check_id,

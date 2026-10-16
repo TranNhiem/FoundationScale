@@ -1,40 +1,25 @@
 #!/usr/bin/env python3
 """Countables drift gate: shipped markdown vs a measured census JSON.
 
-WHY this gate is shaped the way it is
--------------------------------------
-The first version of this gate scanned every digit group in every markdown
-file and INFERRED, from proximity, which census key each number referred to.
-Run over the real repository it returned
-
-    VERDICT RED: 12 agreed / 865 drifted / 2158 unclassified
-                 over 7259 digit groups scanned in 45 documents
-
-and every one of the 865 was false: "2 dashes" was read as a shim-name
-count, "## 3." as the DECISIONS.md line count, "74%" coverage as a gate
-file count. It had also walked .venv. Its self-test passed because no
-control exercised the association axis -- which key does this number claim?
-An uncontrolled axis is an unmeasured axis wearing a verdict.
-
-WHICH COUNTABLE A BARE NUMBER REFERS TO IS NOT DECIDABLE. This gate never
-infers it. A number is in scope ONLY when a context-anchored pattern --
-anchored on the surrounding WORDS -- claims it. The rules, quoted from the
-corrector fix_countables.py and obeyed throughout:
+A bare number's referent is not decidable: any proximity-based inference
+associates numbers with the wrong key ("2 dashes" read as a shim-name count,
+"## 3." as a line count) and floods the report with false drift. This gate
+never infers a referent -- a number is in scope ONLY when a context-anchored
+pattern, anchored on the surrounding WORDS, claims it. The rules, quoted from
+the corrector fix_countables.py and obeyed throughout:
 
 1. EVERY pattern is context-anchored. A bare \\b982\\b match would flag
    "the 982-line DECISIONS.md" (which is CORRECT) as a test count. Numbers
    are only touched where the surrounding words identify what they count.
-2. Historical masking is CLAUSE-level, never line-level. "...drafted
-   against a census of 13,667 lines ... The package NOW measures 16,929
-   lines across 19 files..." is ONE line carrying a dead claim and a live
-   claim. Masking the whole line would shield a live stale number behind a
-   historical marker.
+2. Historical masking is CLAUSE-level, never line-level. One line can carry
+   a dead claim and a live claim ("...drafted against a census of 13,667
+   lines ... The package NOW measures 16,929 lines ..."), and masking the
+   whole line would shield the live one behind a historical marker.
 3. A number and the file count beside it are rewritten TOGETHER or not at
-   all -- one measurement stated in two tokens; updating the LOC and leaving
-   "across 19 files" would state a pairing that never existed in any census.
+   all -- one measurement stated in two tokens.
 
 There is NO "unclassified" category. A number no pattern claims is out of
-scope and is never printed. The 2158-line noise column was the defect.
+scope and is never printed (a printed noise column is the defect).
 
 Exit-code namespace (exactly this and no other; this gate never exits 1):
     0  CLEAR      -- every matched site agrees, over a nonzero denominator
@@ -84,14 +69,12 @@ EXCLUDED_PARTS: Final[tuple[str, ...]] = (
 def exclusions_agree(raw: object) -> tuple[bool, str]:
     """Does the census exclude at least everything this gate excludes? (#244)
 
-    The producer and the consumer each held a private answer to "what is the
-    repository", and the two answers differed by `build`. A pip build tree
-    added a second copy of the whole package to a published number; CI's fresh
-    checkout had no build/ and the two sides disagreed by exactly src_loc, with
-    no instrument able to say why. Neither list was wrong on its own -- the
-    defect was that neither could see the other.
+    Producer (census tool) and consumer (this gate) each hold a definition of
+    "what is the repository", and the two answers differ over entries like
+    `build`: a pip build tree adds a second copy of the package to a published
+    number and the sides disagree with nothing able to say why.
 
-    So the census now states its method and its exclusion set, and this gate
+    So the census states its method and its exclusion set, and this gate
     refuses to read a census whose definition is narrower than its own. Subset,
     not equality: the census may exclude MORE (it walks source trees, this gate
     only walks documents), it may never exclude less.
@@ -141,7 +124,7 @@ class PatternSpec:
 # Derived ONLY from the shipped clause evidence; each pattern cites the real
 # clause that justifies its anchor. Clauses that merely collide on a value
 # (94.2% coverage, "#181", "8xH100", "24 stages") are NOT countables of
-# these keys and get no pattern -- that is the lesson of the 865.
+# these keys and get no pattern.
 PATTERNS: Final[tuple[PatternSpec, ...]] = (
     PatternSpec(
         label="N-line DECISIONS.md (decisions_loc)",
@@ -167,9 +150,9 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         "and M shell LOC pair (h100_loc+h100_sh_loc)",
         # evidence: docs/review/D2_current_architecture.md, two phrasings of one
         # clause -- ":172 `validation_campaigns/h100_validation/` contributes 31,313 Python LOC and
-        # 4,986 shell LOC" and ":83 `validation_campaigns/h100_validation/` adds another 31,313
-        # Python LOC and 4,986 shell LOC". #243: the shell half had no census
-        # key at all, so half of a two-number clause sat in nothing.
+        # 4,986 shell LOC" and ":83 ... adds another 31,313 Python LOC and 4,986
+        # shell LOC". Both halves bound: the shell half once had no census key
+        # at all, so half of a two-number clause sat in nothing.
         regex=re.compile(
             r"`?validation_campaigns/h100_validation/`? (?:contributes|adds another) "
             r"(?P<py>" + NUMBER + r") Python LOC"
@@ -203,8 +186,8 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         "(h100_sh_loc+h100_sh_files)",
         # evidence: docs/review/D4_feature_evaluation.md, the SAME table cell as
         # the spec above -- "`launchers/*.sh` (9,495 LOC, 5 files);
-        # `validation_campaigns/h100_validation/*.sh` (4,986 LOC, 4 files)". Two specs, because they
-        # are two clauses naming two subtrees; one spec spanning both would tie
+        # `validation_campaigns/h100_validation/*.sh` (4,986 LOC, 4 files)". Two specs, because
+        # they are two clauses naming two subtrees; one spec spanning both would tie
         # a correct half to a stale half.
         regex=re.compile(
             r"`?validation_campaigns/h100_validation/\*\.sh`?\s*\((?P<loc>" + NUMBER + r") LOC,"
@@ -219,20 +202,19 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         regex=re.compile(r"(?P<num>" + NUMBER + r") shell LOC in `?launchers/`?"),
         bindings=(("launch_sh_loc", "num"),),
     ),
-    # --- #357: the RL plane's published countables ------------------------
+    # --- the RL plane's published countables ------------------------------
     #
-    # Four numbers were stated about the RL plane and none of them sat in a
-    # census denominator, so a restatement could not drift -- there was nothing
-    # to drift FROM. These three anchor the sentence that now carries them.
-    # The evidence comments quote the SHIPPED line; the numbers in them are
-    # part of that quotation, not a measurement frozen into this file.
+    # These anchor the sentence that publishes the RL plane's counts: a number
+    # sitting in no census denominator cannot drift, there being nothing to
+    # drift FROM. The numbers in the evidence comments below are quotations of
+    # the SHIPPED line, not measurements frozen into this file.
     PatternSpec(
         label="the RL plane is N modules (rl_files)",
         # evidence: docs/ARCHITECTURE.md
         #   "The RL plane is 25 modules; `src/foundationscale/rl/` measures ..."
         # `[Tt]he` because the clause opens a sentence today and may not
         # tomorrow; the "RL plane is" phrase is the anchor, since a bare count
-        # followed by "modules" is the unanchored shape #233 rejects.
+        # followed by "modules" is the unanchored shape this gate rejects.
         regex=re.compile(r"[Tt]he RL plane is `?(?P<num>" + NUMBER + r")`? modules\b"),
         bindings=(("rl_files", "num"),),
     ),
@@ -242,7 +224,7 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         #   "`src/foundationscale/rl/` measures 17347 lines and ..."
         # Optional backticks sit OUTSIDE both the path and the capture: markup
         # may delimit either side, but it must not contaminate the value nor
-        # make a restatement invisible to this gate (#249).
+        # make a restatement invisible to this gate.
         regex=re.compile(
             r"`?src/foundationscale/rl/`? measures `?(?P<num>" + NUMBER + r")`? lines\b"
         ),
@@ -254,32 +236,26 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         #   "the default install registers 14 algorithm names."
         # "default install" is deliberately IN the anchor. register() is a
         # public runtime API, so a caller's additions are outside the census
-        # denominator; a looser anchor ("N algorithm names") would let a claim
-        # about the RUNTIME registry bind to a STATIC count of the source.
+        # denominator; a looser anchor ("N algorithm names") would bind a claim
+        # about the RUNTIME registry to a STATIC count of the source.
         regex=re.compile(
             r"the default install registers `?(?P<num>" + NUMBER + r")`? "
             r"algorithm names\b"
         ),
         bindings=(("rl_algorithm_names", "num"),),
     ),
-    # --- #240: the mermaid inventory and its prose twin -------------------
+    # --- the mermaid inventory and its prose twin ----------------------------
     #
-    # These eight anchors exist because of a number that was never right, not
-    # one that rotted. D2 stated `tools/` at 11,226 LOC; at a38781b, the commit
-    # that WROTE the clause, tools/ was 8,838, and at HEAD it is 8,695 -- the
-    # figure matches no commit in the history. The clause's own file count (8)
-    # was correct that day, so the denominator really was tools/ and the LOC
-    # was simply wrong from birth.
-    #
-    # It survived a full drift-gate rollout because tools_loc carried no
-    # PatternSpec: the gate reported it among the 30 UNMEASURED keys and read
-    # CLEAR, and UNMEASURED next to CLEAR reads as covered. A drift gate
-    # catches numbers that ROT. Nothing catches a number that was wrong the day
-    # it was written except putting it in a denominator, which is what these do.
+    # These eight anchors cover numbers stated in mermaid node labels, one of
+    # which (D2's `tools/` LOC) was wrong on the day it was written. A number
+    # in no denominator cannot drift at all -- it sits UNMEASURED beside a
+    # CLEAR verdict and reads as covered. A drift gate catches numbers that
+    # ROT; only a denominator can catch a number wrong at birth, which is what
+    # these provide.
     #
     # Mermaid node labels are anchored on their node text (`tools/<br/>`, not a
-    # bare `N Python files`) for the #233 reason: an unanchored shape would
-    # match every node in the diagram and blame whichever key was checked first.
+    # bare `N Python files`): an unanchored shape would match every node in the
+    # diagram and blame whichever key was checked first.
     PatternSpec(
         label="tools/ contains N Python LOC (tools_loc)",
         # evidence: docs/review/D2_current_architecture.md
@@ -375,16 +351,12 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
             ("imports_src", "src"),
         ),
     ),
-    # --- #241: the countable that lives in the build configuration ----------
+    # --- the countable that lives in the build configuration ----------------
     #
-    # #240 was a false countable inside the scanned corpus. This is the same
-    # defect one layer out, where the gate could not look at all: the scan set
-    # is `docs README.md`, so every number stated in the Makefile and in
-    # ci.yml -- the two files that DECIDE what CI measures -- sat in no
-    # denominator. Both said "3 of 3 files under checks/ are unchecked" in the
-    # commit that ADDED the fourth file, having copied the "3 files" out of
-    # mypy's own "Found 10 errors in 3 files (checked 4 source files)": the
-    # error-bearing count, printed as the denominator.
+    # The scan set is `docs README.md`, so every number stated in the Makefile
+    # and ci.yml -- the two files that DECIDE what CI measures -- sat in no
+    # denominator (both read "3 of 3 files under checks/ are unchecked" while a
+    # fourth existed, copying mypy's error-bearing count as a denominator).
     #
     # The clause states the count ONCE, deliberately. An "N of N" phrasing
     # would bind one census key through two groups, and Site.tokens is keyed by
@@ -392,19 +364,14 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
     # the phrase would rewrite, which is rule 4's failure mode rather than its
     # satisfaction. One quantity, one token.
     #
-    # #249: the trailing literal is `` `? checks/ `` and not `checks/`, because
-    # the first spelling was markup-blind. The pattern was written against the
-    # two evidence sites it was born from -- the Makefile and ci.yml, both plain
-    # text -- and docs/review/D6_developer_experience.md:197 states the same
-    # clause in markdown, as "all 4 files under `checks/`". Backticks, so no
-    # match, so no token, so no drift: D6 sat inside the scanned corpus (docs/
-    # is in COUNTABLES_CORPUS) and outside every denominator, and it carried 4
-    # while the Makefile and ci.yml both carried 5. `make countables` reported
-    # CLEAR over it for the whole interval. That is #240's shape -- a countable
-    # in a slot no pattern anchors -- reached by #233's mechanism, an instrument
-    # that cannot see through inline-code markup. The corpus is prose ABOUT a
-    # repository, so a path written as a path and a path written as code are the
-    # same claim, and an anchor that distinguishes them is measuring typography.
+    # The trailing literal is `` `? checks/ `` and not `checks/`: the Makefile
+    # and ci.yml write the path plain while
+    # docs/review/D6_developer_experience.md:197 states the same clause in
+    # markdown as "all 4 files under `checks/`". Backticks must not decide a
+    # match -- a path written as a path and a path written as code are the same
+    # claim -- otherwise that site sits in the scanned corpus and outside every
+    # denominator and a stale count reads CLEAR. An anchor that distinguishes
+    # them measures typography.
     PatternSpec(
         label="all N files under checks/ are unchecked (checks_files)",
         # evidence: Makefile, .github/workflows/ci.yml and D6, one clause each
@@ -413,13 +380,12 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         regex=re.compile(r"all\s+(?P<num>" + NUMBER + r")\s+files under `?checks/"),
         bindings=(("checks_files", "num"),),
     ),
-    # The mutation corpus, stated in the Makefile and re-derived by #242's CI
-    # matrix. Two specs rather than one four-group spec: they are two clauses
-    # on two lines, and the gate reads a clause. Each group binds a DIFFERENT
-    # census key, which is what makes a multi-key spec legal at all -- binding
-    # one key through two groups is rule 4's failure mode (Site.tokens is keyed
-    # by census key, so the second group would overwrite the first and only
-    # half the phrase would rewrite).
+    # The mutation corpus, stated in the Makefile. Two specs rather than one
+    # four-group spec: they are two clauses on two lines, and the gate reads a
+    # clause. Each group binds a DIFFERENT census key, which is what makes a
+    # multi-key spec legal at all -- binding one key through two groups is rule
+    # 4's failure mode (Site.tokens is keyed by census key, so the second group
+    # would overwrite the first and only half the phrase would rewrite).
     PatternSpec(
         label="mutation corpus size pair (total_rows+mut_modules)",
         # evidence: Makefile
@@ -440,24 +406,21 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         ),
         bindings=(("must_fire", "fire"), ("must_pass", "passes")),
     ),
-    # --- #243: the anchored and unanchored twin ----------------------------
+    # --- the anchored and unanchored twin ------------------------------------
     #
-    # In ONE file, docs/review/D4_feature_evaluation.md, line 46 states the
-    # bash launchers at 9,495 LOC and line 3 states them at 9,274. Line 46 is
-    # correct because the `launchers/*.sh (N LOC` spec above anchors that
-    # phrasing; line 3 is stale because "the bash launchers (N + M .sh LOC)" is
-    # a phrasing no spec had. `make countables` read CLEAR over both.
+    # In ONE file, docs/review/D4_feature_evaluation.md, one line states the
+    # bash launchers at 9,495 LOC and another at 9,274. The first is covered by
+    # the `launchers/*.sh (N LOC` spec; the second used a phrasing no spec had,
+    # and `make countables` read CLEAR over both.
     #
     # So drift is not a property of a NUMBER, it is a property of a PHRASING.
     # One countable restated a second way is a second site, and an unanchored
-    # site does not merely go unchecked -- it sits three lines from a checked
-    # one and inherits its credibility. `src/foundationscale` was stated SIX
-    # ways across four files and every one of them said 16,213 while the
-    # package measured 18,706.
+    # site does not merely go unchecked -- it sits beside a checked one and
+    # inherits its credibility.
     #
     # These specs are therefore transcriptions of the shipped phrasings, not
     # generalisations of them: a loose `(?P<num>N) lines` would match the prose
-    # around it and reintroduce the 865-false-drift association defect (#233).
+    # around it and reintroduce the association defect this gate replaces.
     PatternSpec(
         label="src/foundationscale/ (now) measures N lines (src_loc)",
         # evidence: docs/review/README.md twice, and the identical
@@ -467,19 +430,18 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         #    training code."
         #   "`src/foundationscale/` now measures **18,706 lines**."
         #
-        # This is ONE spec where #243's first draft had three, and the
-        # consolidation is the actual remedy rather than a tidy-up. The corpus
-        # said the same thing as "is N lines", "taking the package from H to N
-        # lines" and "taking `src/` to **N lines**"; three phrasings need three
-        # anchors, and the moment a fourth is written the gate is blind again.
-        # Converging the prose on one form makes the anchor cheap to keep.
+        # ONE spec where earlier drafts had three, and the consolidation is the
+        # real remedy: the corpus also said "is N lines", "taking the package
+        # from H to N lines" and "taking `src/` to **N lines**" -- each extra
+        # phrasing needs its own anchor, and a fourth makes the gate blind
+        # again. Converging the prose on one form keeps the anchor cheap to
+        # keep.
         #
-        # The two "taking ... to N" forms were also CAUSAL -- they said a
-        # 2,546-line move produced the figure. Correcting the token to 18,706
-        # left the grammar asserting that the move added 5,039 lines, which is
-        # false: a gate can keep a NUMBER current but it cannot keep a SENTENCE
-        # true. So the prose now states the measurement flatly and attributes
-        # the growth separately, which is a shape --fix cannot break.
+        # The "taking ... to N" forms were also CAUSAL, so --fix could correct
+        # the number while leaving the grammar claiming a code move produced
+        # the figure: a gate can keep a NUMBER current but not a SENTENCE true.
+        # The prose now states the measurement flatly and attributes growth
+        # separately -- a shape --fix cannot break.
         regex=re.compile(
             r"`src/foundationscale/` (?:now )?measures \*{0,2}(?P<num>" + NUMBER + r") lines"
         ),
@@ -531,23 +493,21 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         label="the test suite (N .py LOC) (tests_loc)",
         # evidence: docs/review/D4_feature_evaluation.md
         #   "and the test suite (25,689 .py LOC) -- have **no direct findings**"
-        # #266: the article is `[Tt]he` because this clause can open a sentence.
-        # It did, at D1:121, and a case-sensitive `the` put that site in no
-        # denominator for as long as the pattern has existed -- it read 28550
-        # against a measured 29578 and `make countables` said CLEAR. Same class
-        # as #249 (markup) and #263 (whitespace): the anchor was keyed to one
-        # surface form of the sentence rather than to the claim.
+        # The article is `[Tt]he` because this clause can open a sentence (it
+        # does, at D1:121): a case-sensitive `the` left that site in no
+        # denominator while `make countables` said CLEAR. Same class as the
+        # markup-blind and whitespace-sensitive anchors -- the anchor was keyed
+        # to one surface form of the sentence rather than to the claim.
         regex=re.compile(r"[Tt]he test suite \((?P<num>" + NUMBER + r") \.py LOC\)"),
         bindings=(("tests_loc", "num"),),
     ),
     PatternSpec(
         label="(N tracked test files) (tests_files)",
         # evidence: docs/review/D1_codebase_review.md:121 -- the OTHER half of
-        # the #266 sentence. The file count sits in its own parenthetical, one
+        # the sentence above. The file count sits in its own parenthetical, one
         # clause away from the LOC count, so anchoring the LOC half alone would
-        # have left `54 tracked test files` (measured: 65) unmeasured under a
-        # line the gate now reports as agreeing, which is worse than not
-        # anchoring it at all.
+        # leave a stale file count unmeasured under a line the gate reports as
+        # agreeing -- worse than not anchoring it at all.
         regex=re.compile(r"\((?P<num>" + NUMBER + r") tracked test files"),
         bindings=(("tests_files", "num"),),
     ),
@@ -580,7 +540,7 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
     ),
     PatternSpec(
         label="the bash launchers (N + M .sh LOC) pair (launch_sh_loc+h100_sh_loc)",
-        # evidence: docs/review/D4_feature_evaluation.md -- THE #243 exemplar,
+        # evidence: docs/review/D4_feature_evaluation.md -- the unanchored twin,
         # three lines from the anchored `launchers/*.sh (9,495 LOC, 5 files)`
         # and disagreeing with it:
         #   "the bash launchers (9,274 + 4,986 .sh LOC)"
@@ -608,24 +568,19 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         #   "the measured census (115,229 git-tracked .py/.sh/.md lines repo-wide;"
         # The clause names its own method, so it binds the key that uses that
         # method and no other -- tracked_py_sh_loc is a DIFFERENT number and
-        # substituting it would be the drift this gate exists to catch.
-        #
-        # #244: the word was "measured", which named no method at all, and the
-        # key behind it walked the working directory. The phrasing now carries
-        # the method, so a reader can tell which of the three repo-wide numbers
-        # this is without opening the census.
+        # substituting it would be the drift this gate exists to catch. The
+        # phrasing carries the method, so a reader can tell which repo-wide
+        # number this is without opening the census.
         regex=re.compile(r"(?P<num>" + NUMBER + r") git-tracked \.py/\.sh/\.md lines repo-wide"),
         bindings=(("tracked_py_sh_md_loc", "num"),),
     ),
-    # -- docs/ARCHITECTURE.md (#315) ------------------------------------------
-    # The specs above were written by walking the DATED review corpus, so every
-    # phrasing they know is a phrasing D1-D10 happened to use. docs/ARCHITECTURE.md
-    # is the LIVING architecture document and it states nine countables in nine
-    # phrasings none of them use -- so it was scanned, matched nothing, and
-    # contributed zero sites while `make countables` reported CLEAR over 80.
-    # Seven of its nine numbers were stale, one by 11,322 lines. The corpus was in
-    # the denominator; this document's WORDING was not, which is the same defect
-    # one level down.
+    # -- docs/ARCHITECTURE.md -------------------------------------------------
+    # The specs above were written by walking the DATED review corpus (D1-D10),
+    # so the only phrasings they know are the ones that corpus used. The LIVING
+    # architecture document states countables in nine phrasings none of them
+    # use: it is scanned, matches nothing, contributes zero sites, and
+    # `make countables` reports CLEAR over its stale numbers. Every document
+    # wording that states a countable needs its own anchor.
     PatternSpec(
         label="src/ is N LOC across M files pair (src_loc+src_files)",
         # evidence: docs/ARCHITECTURE.md
@@ -680,8 +635,8 @@ PATTERNS: Final[tuple[PatternSpec, ...]] = (
         # evidence: docs/ARCHITECTURE.md
         #   "Repo-wide: 123547 git-tracked `.py`/`.sh`/`.md` lines."
         # A SECOND spec for this key, not a widening of the first: the review
-        # corpus writes "N git-tracked .py/.sh/.md lines repo-wide" and this
-        # document puts the number before the noun and backticks the extensions.
+        # corpus puts the number before the noun and writes the extensions
+        # plain; this document prefixes `Repo-wide:` and backticks them.
         # Widening the earlier regex to admit both orderings would make it match
         # on the extensions alone, which is how a value collision becomes a site.
         regex=re.compile(
@@ -700,11 +655,11 @@ HISTORICAL_MASKS: Final[tuple[Pattern[str], ...]] = (
     # clause runs to sentence end (a '.' followed by whitespace/EOL) so a
     # following "The package NOW measures ..." on the SAME line is untouched.
     #
-    # #243: this said `drafted` only, while all three shipped footnotes say
-    # "This document was WRITTEN against a census of 13,667 lines". A mask is
-    # a phrasing too, and a mask that misses is worse than no mask: the dead
+    # The verb matches `(?:drafted|written)`: the shipped footnotes say "This
+    # document was WRITTEN against a census of 13,667 lines". A mask is a
+    # phrasing too, and a mask that misses is worse than no mask: the dead
     # number stays live in the denominator and a --fix would have rewritten
-    # the history. Same lesson as the specs above, mirrored.
+    # the history.
     re.compile(r"(?:drafted|written) against a census of " + NUMBER + r" lines.*?(?=\.(?:\s|$))"),
     # evidence: validation_campaigns/h100_validation/h100/EVIDENCE.md
     #   "The launcher exports **14** variables (an earlier count of 12 was
@@ -785,14 +740,13 @@ def collect_files(paths: Sequence[Path]) -> tuple[list[Path], int]:
     files: set[Path] = set()
     excluded = 0
     for p in paths:
-        # #241: a DIRECTORY is walked for prose (*.md); a FILE named on the
-        # command line is scanned whatever its suffix. Before this, the suffix
+        # A DIRECTORY is walked for prose (*.md); a FILE named on the
+        # command line is scanned whatever its suffix. Without this, the suffix
         # test below rejected explicitly-named non-markdown, so Makefile and
         # .github/workflows/ci.yml could not enter the scan set even when
         # passed by name -- and every countable stated in the build
         # configuration, the files that decide what CI measures, sat in no
-        # denominator. That is where #241's "3 of 3 files under checks/" lived
-        # while #240's gate reported CLEAR over the docs beside it.
+        # denominator.
         named_file = p.is_file()
         candidates = [p] if named_file else sorted(p.rglob("*.md"))
         for c in candidates:
@@ -912,9 +866,9 @@ def gate_exit_code(report: Report) -> int:
 
 
 # The census tool is the ONLY thing that walks the repository. The gate never
-# does its own file selection -- duplicating the walk here is exactly #244, the
-# gate and its oracle disagreeing about what the repository IS, which is worse
-# than either being wrong alone.
+# does its own file selection -- a second walk would let the gate and its
+# oracle disagree about what the repository IS, which is worse than either
+# being wrong alone.
 CENSUS_TOOL: Final[Path] = Path(__file__).resolve().parent.parent / "tools" / "countables_census.py"
 
 
@@ -963,15 +917,16 @@ def compare_census(given: Mapping[str, int], fresh: Mapping[str, int]) -> tuple[
 def census_is_current(given: Mapping[str, int]) -> tuple[bool, str]:
     """Re-measure the repository so ``--fix`` cannot write stale numbers.
 
-    #314. The census file carries NO provenance -- no commit, no timestamp, no
-    input digest -- so there is nothing to date it against; the only way to know
-    it still describes this tree is to measure again. That costs ~1s.
+    The census file carries NO provenance -- no commit, no timestamp, no
+    input digest -- so there is nothing to date it against; the only way to
+    know it still describes this tree is to measure again (~1s).
 
     Only ``--fix`` pays it, and the asymmetry is the point. A stale READ-ONLY
-    verdict is a wrong answer the operator can re-run. A stale ``--fix`` INSTALLS
-    wrong numbers into the documents and then reports CLEAR over them -- the
-    drift it just wrote becomes invisible to the one gate that would have caught
-    it. Refusing to write is recoverable; writing a laundered number is not.
+    verdict is a wrong answer the operator can re-run. A stale ``--fix``
+    INSTALLS wrong numbers into the documents and then reports CLEAR over
+    them -- the drift it just wrote becomes invisible to the one gate that
+    would have caught it. Refusing to write is recoverable; writing a
+    laundered number is not.
     """
     fresh, why = measure_census_now()
     if fresh is None:
@@ -979,34 +934,30 @@ def census_is_current(given: Mapping[str, int]) -> tuple[bool, str]:
     return compare_census(given, fresh)
 
 
-# --- #379: the denominator neither census measurement can see -----------------
+# --- untracked files: the denominator neither census measurement can see -----
 #
-# census_is_current() (#314) compares the supplied census against a fresh
+# census_is_current() compares the supplied census against a fresh
 # measurement, and BOTH take their denominator from the git INDEX (`git
 # ls-files`, as run by tools/countables_census.py). An untracked, non-ignored
 # .py/.sh/.md file is invisible to both sides by construction: the comparison
-# agrees, --fix writes CLEAR, and the operator's very next act -- `git add` +
-# `git commit`, the only reason --fix was run at all -- puts the file into
-# the index and falsifies every number just written. Measured: a new 298-line
-# test module, untracked when --fix ran; CLEAR 86/86 locally; CI, over the
-# committed tree, 19 of 86 anchored sites drifted (tests_loc 49452 vs 49749,
-# tests_files 111 vs 112, tracked_py_sh_md_loc 179505 vs 179802).
+# agrees, --fix writes CLEAR, and the operator's very next `git add` + `git
+# commit` -- the only reason --fix was run at all -- puts the file into the
+# index and falsifies every number just written.
 #
 # The remedy is not inside the comparison -- there is nothing to compare --
 # but beside it: ask the index whether it is about to grow.
 
 # The suffixes the census counts, stated once, mirroring the census tool's
-# own filter. A scattered literal here would be the producer/consumer drift
-# of #244 in miniature; the refusal below and the fixture controls read this
+# own filter. A scattered literal here would be producer/consumer drift of
+# #244 in miniature; the refusal below and the fixture controls read this
 # one table.
 COUNTABLE_SUFFIXES: Final[tuple[str, ...]] = (".py", ".sh", ".md")
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 
-# Three states, spelled out, because two of them must never collapse. OK:
-# the index is known not to be about to grow. FOUND: here are the names.
-# UNMEASURED: git did not answer -- and an index git cannot describe is NOT
-# an index known to be clean, so --fix refuses this state too, naming the
-# reason in the message.
+# Three states, never collapsed to two. OK: the index is known not to be
+# about to grow. FOUND: here are the names. UNMEASURED: git did not answer --
+# an index git cannot describe is NOT an index known to be clean, so --fix
+# refuses this state too, naming its own reason.
 UNTRACKED_OK: Final[str] = "ok"
 UNTRACKED_FOUND: Final[str] = "found"
 UNTRACKED_UNMEASURED: Final[str] = "unmeasured"
@@ -1015,12 +966,11 @@ UNTRACKED_UNMEASURED: Final[str] = "unmeasured"
 def untracked_countables(repo: Path) -> tuple[str, tuple[str, ...], str]:
     """Untracked, non-ignored files under `repo` the census would count.
 
-    Returns (state, names, why). state is UNTRACKED_OK with names empty,
-    UNTRACKED_FOUND with names the sorted repo-relative list as git prints it,
-    or UNTRACKED_UNMEASURED with names empty and why carrying the reason --
-    which of the two it is (git could not be run at all, vs ran and exited
-    non-zero), because those demand different operator action and one
-    undifferentiated "failed" would hide which.
+    Returns (state, names, why). UNTRACKED_OK with names empty;
+    UNTRACKED_FOUND with names the sorted repo-relative list as git prints it;
+    UNTRACKED_UNMEASURED with names empty and why carrying the reason --
+    "git could not be run at all" vs "ran and exited non-zero" are kept apart,
+    because they demand different operator action.
     """
     # Closed argv: the git binary, a path derived from __file__, literals. No
     # shell. `-z` so an embedded space in a name cannot smuggle a second one.
@@ -1086,7 +1036,7 @@ ControlFn = Callable[[Path], tuple[bool, str]]
 # controls below assert against, so they must be stable literals. Every key any
 # PatternSpec binds appears here -- a pattern whose key is absent is skipped by
 # scan() and would sit in the self-test's blind spot rather than in its
-# denominator, which is the #240 shape one layer down.
+# denominator.
 SELF_CENSUS: Final[dict[str, int]] = {
     "decisions_loc": 982,
     "h100_loc": 31313,
@@ -1265,12 +1215,12 @@ def self_test() -> int:
         ), f"no_parts_refused={not ok_a} no_method_refused={not ok_b}"
 
     def c_mermaid_node(root: Path) -> tuple[bool, str]:
-        # #240: the clause that was false at birth lived in a mermaid node
-        # label, not in prose. Every pattern before #240 anchored on sentence
-        # text, so a diagram could state any number it liked and the gate read
-        # CLEAR over it. This asserts the node label is a SITE -- and that the
-        # pair rewrites together, since a node carries files and LOC in one
-        # label and half a corrected node is a worse artifact than none.
+        # The clause that was false at birth lived in a mermaid node label,
+        # where sentence-anchored patterns never looked -- a diagram could state
+        # any number and the gate read CLEAR over it. This asserts the node
+        # label is a SITE -- and that the pair rewrites together, since a node
+        # carries files and LOC in one label and half a corrected node is a
+        # worse artifact than none.
         doc = mk(
             root / "mermaid",
             "d.md",
@@ -1302,16 +1252,15 @@ def self_test() -> int:
         return ok, f"blamed={wrong}"
 
     def c_config_files_scanned(root: Path) -> tuple[bool, str]:
-        # #241: the anchor above is worthless unless the files carrying it can
-        # ENTER the scan set. Before #241 they could not -- collect_files
-        # rejected any candidate whose suffix was not .md, including one named
-        # explicitly on the command line -- so a new PatternSpec pointed at the
-        # Makefile would have matched nothing and reported itself as a
-        # zero-match instrument warning, not as coverage. This control runs the
-        # real collect_files over a suffixless `Makefile` and a `.yml`, which
-        # is the pair the gate is now invoked with, and only then checks that
-        # each is a drifted site. Asserting the drift without asserting the
-        # membership would be the same vacuity one layer down.
+        # The anchor above is worthless unless the files carrying it can ENTER
+        # the scan set. collect_files used to reject any candidate whose suffix
+        # was not .md -- including one named explicitly on the command line --
+        # so a PatternSpec pointed at the Makefile would have matched nothing
+        # and warned zero-match instead of covering. This control runs the real
+        # collect_files over a suffixless `Makefile` and a `.yml`, which is the
+        # pair the gate is now invoked with, and only then checks each is a
+        # drifted site: asserting drift without asserting membership is the
+        # same vacuity one layer down.
         cfg = root / "cfg"
         cfg.mkdir(parents=True, exist_ok=True)
         mk(cfg, "Makefile", "# all 3 files under checks/ are unchecked by mypy.\n")
@@ -1330,12 +1279,11 @@ def self_test() -> int:
         return ok, f"collected={len(collected)} drifted={rep.drifted} fixed={fixed}/2"
 
     def c_phrasing_twin(root: Path) -> tuple[bool, str]:
-        # #243 verbatim, reduced to two lines. The SAME countable, stated the
-        # anchored way and the prose way, disagreeing. Before #243 the gate read
-        # CLEAR here: it saw the table cell agree and never saw the prose at
-        # all. The assertion is not just "the stale one drifts" -- it is that
-        # BOTH end up equal, because the failure being gated is two numbers for
-        # one fact, not a wrong number.
+        # The SAME countable, stated the anchored way and the prose way,
+        # disagreeing. Before this the gate read CLEAR here: it saw the table
+        # cell agree and never saw the prose at all. The assertion is not just
+        # "the stale one drifts" -- it is that BOTH end up equal, because the
+        # failure being gated is two numbers for one fact, not a wrong number.
         doc = mk(
             root / "twin",
             "d.md",
@@ -1353,9 +1301,9 @@ def self_test() -> int:
         return ok, f"drifted={rep.drifted} agreeing={rep.agreeing} twins_equal={twins}"
 
     # The census-correction footnote, shipped verbatim in three review
-    # documents, is the #196/#243 shape at its sharpest: a dead number and a
-    # live one, two sentences apart, on ONE line. It gets BOTH controls,
-    # because the two ways it can fail are opposite.
+    # documents, is the shape at its sharpest: a dead number and a live one,
+    # two sentences apart, on ONE line. It gets BOTH controls, because the two
+    # ways it can fail are opposite.
     _FOOTNOTE = (
         "> **Census correction (applied post-draft).** This document was written against a "
         "census of {dead} lines in `src/foundationscale/`. The T2 move has since relocated "
@@ -1364,12 +1312,12 @@ def self_test() -> int:
     )
 
     def c_written_against_masked(root: Path) -> tuple[bool, str]:
-        # MUST_PASS. The mask's own phrasing is a phrasing: all three footnotes
-        # say "written against", the mask said "drafted against", so before
-        # #243 the 13,667 was read as a LIVE src_loc claim -- and --fix would
-        # have rewritten recorded history into a number it never was.
-        # Asserting agreeing==1 as well as drifted==0 is the point: a mask that
-        # swallowed the live half too would also report zero drifts.
+        # MUST_PASS. The mask's own phrasing is a phrasing: the footnotes say
+        # "This document was WRITTEN against", so a mask matching `drafted` only
+        # reads the 13,667 as a LIVE src_loc claim -- and --fix would have
+        # rewritten recorded history into a number it never was. Asserting
+        # agreeing==1 as well as drifted==0 is the point: a mask that swallowed
+        # the live half too would also report zero drifts.
         text = _FOOTNOTE.format(dead="13,667", live="18,706")
         doc = mk(root / "written", "d.md", text)
         rep = scan_doc(doc)
@@ -1401,22 +1349,19 @@ def self_test() -> int:
         return ok, f"drifted={rep.drifted} rewrites={n} history_intact={'13,667' in after}"
 
     def c_markup_blind_anchor(root: Path) -> tuple[bool, str]:
-        # MUST_FIRE, #249. Both spellings of ONE clause, both stale, in one
+        # MUST_FIRE. Both spellings of ONE clause, both stale, in one
         # document: the plain form the anchor was born against and the markdown
-        # form that defeated it. The plant is the exact string measured in the
-        # wild -- docs/review/D6_developer_experience.md:197 read "all 4 files
-        # under `checks/`" while the Makefile and ci.yml both read 5, and the
-        # gate called the tree CLEAR because the backticks put that site in no
-        # denominator.
+        # form that defeated it ("all 4 files under `checks/`" while the
+        # Makefile and ci.yml both read 5, the backticked site in no
+        # denominator).
         #
         # Three assertions, because the fix has three ways to be wrong. drifted
         # ==2 proves the backticked form is now SEEN (a fix that widened the
         # pattern but skipped the site would read 1). Both `after` clauses
         # prove each was CORRECTED, not merely counted. And the backtick has to
         # survive the rewrite byte-for-byte: a repair that resolves drift by
-        # eating the markup would silently reformat prose it does not own, and
-        # the second clause below would then read "under checks/`" -- caught
-        # here rather than in a reviewer's diff.
+        # eating the markup would silently reformat prose it does not own.
+        # MUST_FIRE, #249
         doc = mk(
             root / "markup",
             "d.md",
@@ -1437,11 +1382,10 @@ def self_test() -> int:
         return ok, f"drifted={rep.drifted} rewrites={n} backtick_intact={'`checks/`' in after}"
 
     def c_sentence_initial_anchor(root: Path) -> tuple[bool, str]:
-        # MUST_FIRE, #266. The plant is D1:121 verbatim, which is where the
-        # hole was measured: ONE sentence stating the test-suite countable
-        # twice -- LOC in the first parenthetical, file count in the second --
-        # and neither half in any denominator. Two independent reasons, which
-        # is why one fix would not have been enough:
+        # MUST_FIRE. The plant is one sentence stating the test-suite
+        # countable twice -- LOC in the first parenthetical, file count in the
+        # second -- and neither half in any denominator. Two independent
+        # reasons, which is why one fix would not have been enough:
         #
         #   1. the clause opens the sentence, so `the test suite` never matched
         #      `The test suite`. One character, and the site read 28550 against
@@ -1529,14 +1473,12 @@ def self_test() -> int:
         return True, "ok"
 
     def c_untracked_index_named(root: Path) -> tuple[bool, str]:
-        # MUST_FIRE, #379, the measured instance reduced to one file: an
-        # EMPTY index with a new module, countable suffix, sitting in the
-        # working tree beside it. census_is_current sees nothing (both sides
-        # measure the same tree), so without this check --fix writes CLEAR
-        # over numbers `git add` is about to falsify. The report must come
-        # back FOUND and must name the file -- a refusal that does not name
-        # what it saw is unactionable, the same standard compare_census is
-        # held to.
+        # MUST_FIRE: an EMPTY index with a new countable-suffix file sitting
+        # in the working tree beside it. census_is_current sees nothing (both
+        # sides measure the same tree), so without this check --fix writes CLEAR
+        # over numbers `git add` is about to falsify. The report must come back
+        # FOUND and must name the file -- a refusal that does not name what it
+        # saw is unactionable.
         plant = "tests_new_contract.py"
         ok_git, why = mk_repo(root / "repo", {plant: "x = 1\n"})
         if not ok_git:
@@ -1681,14 +1623,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return EXIT_REFUSE
         print(f"fix-precondition: {detail}")
-        # #379: freshness is necessary and not sufficient. Both census
+        # Freshness is necessary and not sufficient. Both census
         # measurements take their denominator from the git index, so an
-        # UNTRACKED countable-suffix file is invisible to that comparison by
-        # construction and joins the denominator at the operator's very next
-        # act, `git add`. Refuse before anything is written. The UNMEASURED
-        # state refuses as well, with its own reason on the wire: an index
-        # git cannot describe is not an index known to be clean, and must
-        # never read as one.
+        # UNTRACKED countable-suffix file is invisible to that comparison and
+        # joins the denominator at the operator's very next act, `git add`.
+        # Refuse before anything is written. The UNMEASURED state refuses as
+        # well, with its own reason on the wire: an index git cannot describe
+        # is not an index known to be clean.
         untr_state, untracked, untr_why = untracked_countables(REPO_ROOT)
         if untr_state == UNTRACKED_UNMEASURED:
             print(f"REFUSE (unmeasured index): {untr_why}", file=sys.stderr)
@@ -1704,7 +1645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_REFUSE
         print(f"fix-precondition: {untr_why}")
 
-    # #379, read-only side: NOT a refusal. census_is_current() documents the
+    # Read-only side: NOT a refusal. census_is_current() documents the
     # asymmetry -- a stale read-only verdict is recoverable by re-running, a
     # stale --fix launders wrong numbers into the corpus -- and this preserves
     # it. An untracked countable costs one NOTE line here, on the wire so CI
@@ -1761,8 +1702,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # SCOPE, on the wire. CLEAR is a verdict about the anchored sites below and
     # about nothing else -- a census key with no pattern is not "agreeing", it
-    # is unmeasured. Leaving that unsaid is the #233 failure one level up: the
-    # verdict would be read as covering the census it was only sampled from.
+    # is unmeasured. Saying so keeps the verdict from being read as covering
+    # the census it was only sampled from.
     bound = {key for spec in PATTERNS for key, _ in spec.bindings}
     unbound = sorted(set(census) - bound)
     print(

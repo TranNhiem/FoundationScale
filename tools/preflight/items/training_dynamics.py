@@ -21,14 +21,14 @@ from .._core import (
 
 
 def _check_training_dynamics(cfg, s, env, shared, registry=None) -> CheckResult:
-    """Item 9: loss bands at pinned iterations, the <0.1 hard floor, LR on
-    every evidence row, and sec/iter measured ONLY past iteration 100.
+    """Item 9: loss bands at pinned iterations, hard floor (<0.1), lr on every
+    evidence row, and sec/iter from rows past iteration 100 only.
 
     Contract: dynamics.metrics_jsonl rows {"iteration": int, "loss": float,
-    "lr": float, "iter_time_s": float}. Every record scanned is an evidence
-    row, so EVERY record must carry a numeric lr — a row without it
-    disqualifies the sweep (that is what 'lr on every evidence row' means
-    operationally). Bands failing to find their iteration FAIL by name.
+    "lr": float, "iter_time_s": float}. Every scanned record is an evidence
+    row and MUST carry a numeric lr; one without it fails the sweep. A band
+    with no record at its iteration is UNDERCOVERED; out-of-band loss FAILs
+    by name.
     """
     evidence: dict[str, Any] = {"bands": s["bands"], "hard_floor": s["hard_floor"]}
     try:

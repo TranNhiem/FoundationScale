@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """tools/live_save_gate.py -- adjudicate a checkpoint written by a LIVE training run.
 
-Why this tool exists
---------------------
-``tools/real_checkpoint_probe.py`` proved the gates meet real, static artifacts
-honestly: it refused to invent denominators, saved VACUOUS rather than faked a
-completeness PASS, and documented every abstention. A production run needs one
-step further: a *decision*, returned to the launcher, cheap enough to run inside
-the job seconds after a save, on both artifact shapes this estate produces:
+Produces a decision, returned to the launcher, cheap enough to run inside the job
+seconds after a save, on both artifact shapes this estate produces:
 
   * FULL-FT checkpoint   -- full trainable tensor population (Megatron DCP *or*
                             HF safetensors layout, depending on stage).
@@ -16,8 +11,8 @@ the job seconds after a save, on both artifact shapes this estate produces:
                             model's denominator is the canonical false alarm
                             that gets verification tooling uninstalled.
 
-Provenance discipline (the core rule, unchanged from the probe)
----------------------------------------------------------------
+Provenance discipline (the core rule)
+-------------------------------------
 Every denominator comes from a source the run under judgment did not write:
 
   denominator                source (read fresh, every call)
@@ -29,78 +24,55 @@ Every denominator comes from a source the run under judgment did not write:
                               affirmative dense statement CORROBORATED by an
                               expert-family census over the UNFILTERED base
                               header (MINT_ZERO_ONLY_IN_PROBE; see
-                              derive_declared_block). Measured on the estate,
-                              discharging the UNVERIFIED marker this row
-                              replaces: the E4B config.json carries
-                              text_config.enable_moe_block = False with
-                              text_config.num_experts present-but-null, and its
-                              headers hold zero expert-family names -- so the
-                              census reads 0 and the mint is satisfiable on the
-                              real artifact.
+                              derive_declared_block).
   declared_fqns (full)       ONE value, TWO mutually exclusive bases; which
                              one applies is MEASURED per save, never assumed
                              per row. (a) base model.safetensors *header key
-                             set* (2,130 tensors per estate measurement --
-                             re-read, never trusted from this comment), minus
-                             documented frozen scope -- applicable ONLY when
-                             the save on disk IS the HF layout, which the
+                             set* (re-read, never trusted from this comment),
+                             minus documented frozen scope -- applicable ONLY
+                             when the save on disk IS the HF layout, which the
                              gate verifies, never assumes: overlap with this
                              key set must reach 0.90 of the on-disk artifact
-                             FQNs, else this basis is refused with the
-                             refusal stated (declared_fqns stays None and
-                             save_complete VACUOUS-blocks) rather than
-                             compare against a guessed mapping.
+                             FQNs, else this basis is refused (declared_fqns
+                             stays None and save_complete VACUOUS-blocks)
+                             rather than compare against a guessed mapping.
   declared_fqns (full, DCP)  (b) --fqn-map: a JSON list of ARTIFACT-namespace
                              FQNs -- the ONLY completeness basis when the
                              artifact layout is not the HF namespace (the
                              estate's Megatron/DCP saves). Censused from the
-                             INDEPENDENT base before the run, read back by
-                             the launcher from the emitter's attempt record,
-                             never from the run under judgment; and since
-                             the #78 re-scope its namespace is MEASURED AT
-                             SUBMIT by this gate's own 0.90 discriminator in
-                             reverse (the census overlapped against the
-                             model*.safetensors header key set under
-                             $HF_MODEL -- >=0.90 means an HF-layout base
+                             INDEPENDENT base before the run, read back by the
+                             launcher from the emitter's attempt record, never
+                             from the run under judgment. Its namespace is
+                             MEASURED AT SUBMIT by this gate's 0.90
+                             discriminator in reverse (the census overlapped
+                             against the model*.safetensors header key set
+                             under $HF_MODEL -- >=0.90 means an HF-layout base
                              resolved in and the submit refuses; a partial
-                             overlap is a stated abstention and also
-                             refuses). The label is now a measured property
-                             with a control that was observed firing
-                             (doctrine 3), not the producer's say-so; still
-                             the ONLY way completeness is measured when the
-                             artifact layout is not the HF namespace.
+                             overlap is a stated abstention and also refuses).
   declared_fqns (lora)       --adapter-modules: the launch-time live-module
                              census -- the module population the trainer's own
                              matcher attaches to, censused from the INDEPENDENT
                              base tree before the run starts, in the artifact's
-                             own namespace. (#78: the pre-census basis -- HF
-                             base header x targets x rank -- was MEASURED
-                             disjoint from every save this estate can produce:
-                             on a healthy PROBE save on <compute-node> it fell to 0
-                             declared, save_complete went VACUOUS and the drop
-                             control was unconstructable -- the founding
-                             all([]) shape at the oracle layer.) The census
-                             file is refused if it resolves inside the judged
-                             tree, and its residual shared-code fate (census
-                             and run share the trainer's matcher) is named in
-                             every report's fqns_basis rather than hidden.
-                             Shapes are declared only when the census carries
-                             parent dims AND the config resolves a rank;
-                             otherwise shape-checking abstains by name.
+                             own namespace. The census file is refused if it
+                             resolves inside the judged tree, and its residual
+                             shared-code fate (census and run share the
+                             trainer's matcher) is named in every report's
+                             fqns_basis rather than hidden. Shapes are declared
+                             only when the census carries parent dims AND the
+                             config resolves a rank; otherwise shape-checking
+                             abstains by name.
   expected_expert_bytes      sum over expert-family keys in the BASE header
                              (layout-invariant byte total; survives the DCP
                              FQN rename that defeats declared_fqns)
 
 The checkpoint's own metadata and the run's own manifest are NEVER denominator
-sources. The decision code this claim is about now lives in
-``foundationscale.gates.adjudication``, which calls neither ``load_manifest``
-nor ``CheckpointGateContext.from_path``: it builds its context from
-denominators resolved independently of the artifact under judgement. Scoping
-the claim to THIS file would make it true by construction -- the file is an
-argparse wrapper and has no denominator logic left to constrain.
+sources. The decision code lives in ``foundationscale.gates.adjudication``,
+which calls neither ``load_manifest`` nor ``CheckpointGateContext.from_path``:
+it builds its context from denominators resolved independently of the artifact
+under judgement. This file is an argparse wrapper with no denominator logic.
 
-The library gate does not share that policy, and the difference is load-bearing
-(#218). ``CheckpointGateContext.from_path(path)`` without an explicit
+WARNING: the library gate does NOT share that policy, and the difference is
+load-bearing. ``CheckpointGateContext.from_path(path)`` without an explicit
 ``declared=`` takes its four denominators off the manifest sitting beside the
 checkpoint, and ``_coerce`` routes any bare path there -- so ``gate.run(path)``
 can judge a save against a declaration that save wrote. The launchers avoid it
@@ -119,12 +91,12 @@ Exit codes
                        the injection with ERROR/a coverage verdict -- a
                        malfunction, not a detection), a control status this
                        loop does not recognize, or a control that could not be
-                       CONSTRUCTED on this artifact
-                       (an unexercised detector proves nothing; that is a
-                       blocking reason here, not a footnote -- except where the
-                       control's *claim itself* is absent, e.g. expert aliasing
-                       on a genuinely dense artifact, which is stated as
-                       "inapplicable" and covered by the universal drop control).
+                       CONSTRUCTED on this artifact (an unexercised detector
+                       proves nothing; that is a blocking reason here, not a
+                       footnote -- except where the control's *claim itself* is
+                       absent, e.g. expert aliasing on a genuinely dense
+                       artifact, which is stated as "inapplicable" and covered
+                       by the universal drop control).
   3  UNMEASURED     -- the tool could not measure (unreadable artifact, missing
                        base model files, unresolvable run mode, tool bug), or the
                        operator's adapter-naming knobs disagreed with each other
@@ -160,33 +132,24 @@ import traceback
 # ---------------------------------------------------------------------------
 # T2_lib_script_boundary#0: the decision API moved into the package.
 #
-# Everything below used to be defined HERE, in a script, which meant the only
-# supported way to adjudicate a checkpoint was to shell out to this CLI. It now
-# lives in foundationscale.gates.adjudication and is re-exported so that every
-# existing reference -- tests doing `lsg.derive_declared_block(...)`, the
-# mutation table's anchors, the launchers' call sites -- resolves unchanged.
+# The implementation lives in foundationscale.gates.adjudication and is
+# re-exported so that every existing reference -- tests doing
+# `lsg.derive_declared_block(...)`, the mutation table's anchors, the launchers'
+# call sites -- resolves unchanged.
 #
 # CAUTION for test authors: re-export binds a NAME, not the defining module's
 # globals. Monkeypatching `live_save_gate._probe_derive_declared` does NOT change
 # what the moved functions read, because they read their own module's globals.
-# Patch `foundationscale.gates.adjudication` instead. The suites that do this
-# were migrated with the move; see tests/test_live_save_gate_*.py.
+# Patch `foundationscale.gates.adjudication` instead.
 #
-# The surface is 94 names, and it used to be 98. Finding #219 inverted the
-# probe dependency -- the declaration machinery moved INTO the package as
-# foundationscale.gates.probe, so the try/except ImportError ladder that used
-# to reach sideways into tools/real_checkpoint_probe.py is gone. Four names
-# went with it: `_PROBE_IMPORT_ERROR` (the sentinel), `_DeriveDeclaredFn` and
-# `_AliasControlFn` (the Protocols that typed the slots the ladder filled), and
-# `Protocol` itself (re-exported only because those two needed it). They are
-# not deprecated aliases kept for a release; they name machinery that no longer
-# exists, and re-exporting a name for a thing that is gone would advertise a
-# compatibility this file cannot provide. The shrink is deliberate, and it is
-# pinned in both directions rather than by a count: tests/packaging/test_reexport_surface.py
-# derives the library's unconditional surface from its AST and fails if any of
-# it is missing here, while re-listing a name the library no longer defines
-# fails harder still -- as an ImportError at the top of this file, which is how
-# the four were found.
+# Four names were dropped because their machinery no longer exists and
+# re-exporting them would advertise an unavailable compatibility:
+# `_PROBE_IMPORT_ERROR`, `_DeriveDeclaredFn`, `_AliasControlFn`, `Protocol`.
+# The surface is pinned in both directions by
+# tests/packaging/test_reexport_surface.py: it derives the library's
+# unconditional surface from its AST and fails if any of it is missing here,
+# while re-listing a name the library no longer defines raises ImportError at
+# the top of this file.
 # ---------------------------------------------------------------------------
 from foundationscale.gates.adjudication import (
     _ALIAS_STORAGE_ID,  # noqa: F401
@@ -472,9 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     for g in d.gate_results:
         # GateResult.to_dict() serializes the id under "gate", not "gate_id"; the
         # attribute is gate_id but the wire key is not, and reading the attribute
-        # name off a dict crashed this renderer with KeyError on every run that got
-        # far enough to print. Nothing exercised the render path until now, which is
-        # why a KeyError shipped: the only honest fix is the key the schema defines.
+        # name off a dict raises KeyError. Use the key the schema defines.
         print(f"  [{g['verdict']:>12s}] {g['gate']}: {str(g.get('detail'))[:160]}")
     _h("MUST_FIRE controls (on copies of this artifact)")
     for c in d.controls:

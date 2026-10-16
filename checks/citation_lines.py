@@ -5,74 +5,60 @@ Usage:
   citation_lines.py [ROOT]      audit every git-tracked file under ROOT (default .)
   citation_lines.py --self-test run the controls in a temporary tree and exit
 
-The claim, stated narrowly on purpose. This repository cites its own source in
-prose and comments as `path.ext:N` and `path.ext:N-M`. Nothing put those tokens
-in a denominator, so a citation could rot silently when the file it names was
-edited -- two were found stale by hand, and the class had no instrument. This
-gate proves exactly one thing: every in-repo citation names a line that EXISTS.
-It does NOT prove the line says what the surrounding prose claims it says. That
-is a stronger claim and this gate does not make it: a citation pointing at the
-wrong line of the right file passes here. A gate that implies the broader claim
-while measuring only the narrower one is how a false GREEN gets manufactured.
+Contract, narrowed on purpose: this gate proves EXACTLY one thing -- every
+in-repo citation names a line that EXISTS. It does NOT prove the line says what
+the surrounding prose claims: a citation aimed at the wrong line of the right
+file passes here. Implying the broader claim while measuring only the narrower
+one is how a false GREEN gets manufactured.
 
-Doctrine wiring:
+Rules:
   (1) The denominator is every citation-shaped token in every git-tracked file
-      that decodes as UTF-8, and it is printed on every path. The file list
-      comes from `git ls-files`, never a filesystem walk: a walk measures the
-      machine (stale build trees, untracked scratch), not the repository. The
-      token shape is a path ending in one of .py .sh .md .toml .yml .yaml .json
-      .cfg .txt .ini, a colon, then N or N-M; the path must not be preceded by
-      a path character and the number must not be followed by an identifier
-      character, so `a.py:12` inside `x/a.py:1234abc` matches no truncated
+      that decodes as UTF-8, printed on every path. The file list comes from
+      `git ls-files`, never a filesystem walk (a walk measures build scratch,
+      not the repository). Token shape: a path in one of .py .sh .md .toml
+      .yml .yaml .json .cfg .txt .ini, a colon, then N or N-M; the path must
+      not be preceded by a path character and the number must not be followed
+      by an identifier character, so `x/a.py:1234abc` matches no truncated
       form. A zero-height denominator is a broken scanner, not a clean tree:
-      REFUSE 96, never CLEAR. `all([])` is True and that is this repository's
-      founding defect.
+      REFUSE 96, never CLEAR. `all([])` is True and that is a founding defect
+      of this class of check.
   (2) Resolution is three steps, in this order and only this order: the path
-      exactly as written, if it is a tracked path; the path joined to the
-      citing file's own directory, with `.` and `..` normalised lexically
-      (never resolve(), which touches the filesystem and follows symlinks);
-      and a UNIQUE suffix match among tracked files, accepted only when
-      exactly one tracked path ends with `/` + the cited path (or equals it).
-      More than one match is ambiguous and is NOT resolved: picking one would
-      be a guess, and a guess inside a resolver is how a gate invents a
-      verdict.
+      exactly as written if it is tracked; the path joined to the citing file's
+      own directory with `.` and `..` normalised lexically (never resolve(),
+      which touches the filesystem and follows symlinks); a UNIQUE suffix match
+      -- exactly one tracked path ends with `/` + the cited path (or equals
+      it). More than one match is ambiguous and NOT resolved: picking one would
+      be a guess, and a guess inside a resolver invents a verdict.
   (3) Three states. RESOLVED and in range (1 <= N <= M <= the target's line
       count) is a pass. RESOLVED and out of range -- or malformed, N > M -- is
-      the RED, reported with the citing file and line, the token, the resolved
+      RED, reported with the citing file and line, the token, the resolved
       target, and the target's true line count. UNRESOLVED is UNMEASURED,
-      never RED: this repository cannot see files outside itself, so a
-      citation of an external path is a claim the gate has no standing to
-      judge.
-  (4) There is no allowlist, and the third state is why. Two constructs in the
-      tree have exactly the shape of a citation and are not citations: the
-      `name:rc` arguments passed to `make_stub_campaign` in
-      validation_campaigns/h100_validation/run_standing_gates.sh (eleven of
-      them, spelled like `gate_alpha.py:5`), and the `site` string literals
-      compared in validation_campaigns/h100_validation/fs_required_knobs.py
-      (spelled like "launcher.sh:2"). The gate cannot tell them from a
-      citation BY SHAPE and does not try. It does not need to: their paths
-      name no tracked file, so step (2) puts them in UNMEASURED -- the same
-      rule that handles a genuine out-of-repo citation. An allowlist would be
-      the gate excepting its own residue, which is a worse instrument than
-      one that reports honestly what it cannot see.
-  (5) The bare `:NNN` and `:NNN-MMM` form -- a line citation whose file is
-      implied by context rather than written (heaviest in tools/mutations.json
-      prose and in the campaign's patch stages) -- is counted on its own
-      DECLARED UNMEASURED axis: the count, the number of containing files, and
-      the top few files by count. The gate does not infer which file each one
-      means. Inferring the subject of a citation from proximity is the defect
-      that produced hundreds of false verdicts in this repository's countables
-      gate; the honest report is the number of claims the instrument cannot
-      see. The bare form matches only where the colon is not preceded by a
-      path, identifier, or colon character, so `a.py:12`, `http://x` and `::`
-      do not feed it.
-  (6) --self-test plants each failure mode in a temporary tree and asserts
-      THIS scanner and THIS resolver produce the expected state, passing the
-      file list in explicitly rather than shelling out to git. It then re-runs
-      the must-fire controls with the range comparison neutered to always
-      report "in range" and asserts they STOP firing. A harness that cannot
-      fire proves nothing, and a gate whose harness cannot fire cannot be
-      trusted: that run exits 96.
+      never RED: this repository cannot see files outside itself, so an
+      external citation is a claim the gate has no standing to judge.
+  (4) There is no allowlist, and the third state is why. Citation-shaped
+      non-citations exist in the tree -- `name:rc` arguments to
+      `make_stub_campaign` in
+      validation_campaigns/h100_validation/run_standing_gates.sh (eleven,
+      spelled like `gate_alpha.py:5`) and `site` string literals in
+      validation_campaigns/h100_validation/fs_required_knobs.py (spelled like
+      "launcher.sh:2"). The gate cannot tell them from a citation BY SHAPE and
+      does not try: their paths name no tracked file, so rule (2) puts them in
+      UNMEASURED like any external citation. An allowlist would be the gate
+      excepting its own residue.
+  (5) The bare `:NNN` / `:NNN-MMM` form -- a line citation whose file is implied
+      by context (heaviest in tools/mutations.json prose and the campaign's
+      patch stages) -- is counted on its own DECLARED UNMEASURED axis: count,
+      containing files, top files by count. The gate never infers which file a
+      bare citation means: inferring the subject from proximity produced
+      hundreds of false verdicts in this repository's countables gate. The bare
+      form matches only where the colon is not preceded by a path, identifier,
+      or colon character, so `a.py:12`, `http://x` and `::` do not feed it.
+  (6) --self-test plants each failure mode in a temporary tree and asserts THIS
+      scanner and THIS resolver produce the expected state, passing the file
+      list in explicitly rather than shelling out to git. It then re-runs the
+      MUST_FIRE controls with the range comparison neutered to always report
+      "in range" and asserts they go silent. A harness that cannot fire proves
+      nothing: that run exits 96.
 
 Exit-code namespace (exactly this and no other; this gate never exits 1):
     0  CLEAR      -- every resolved citation is in range
@@ -242,8 +228,8 @@ def scan(root: Path, files: Sequence[str], in_range: RangeCheck = real_in_range)
     """Scan an explicit (root, files) corpus -- the self-test passes fixtures in.
 
     `files` is the tracked-path list; nothing here shells out to git, so the
-    same function reads the real repository (list from `git ls-files`) and the
-    temporary control trees (doctrine 6).
+    same function reads the real repository and the temporary control trees
+    (doctrine 6).
     """
     tracked = set(files)
     cache: dict[str, int] = {}
@@ -591,11 +577,11 @@ def self_test() -> int:
         else:
             misbehaved.append(label)
 
-    # The positive control on the control harness itself: with the range
-    # comparison neutered so it always reports "in range", every MUST_FIRE
-    # control must now FAIL. If one still fires, the harness cannot fire, the
-    # gate cannot be trusted, and neither can the build. The comparison is
-    # parameterised -- no source text is edited at runtime.
+    # Positive control on the harness itself: with the range comparison
+    # neutered to always report "in range", every MUST_FIRE control must now
+    # go silent. If one still fires, the harness cannot fire and the gate --
+    # and the build -- cannot be trusted. The comparison is parameterised: no
+    # source text is edited at runtime.
     still_firing: list[str] = []
     for label, kind, fn in controls:
         if kind != "MUST_FIRE":

@@ -2,39 +2,26 @@
 """Doc-pointer gate: every pointer in shipped markdown must have a file behind it.
 
 Usage:
-  doc_pointers.py [ROOT]      audit every git-tracked *.md under ROOT (default .)
+  doc_pointers.py [ROOT]      audit every git-tracked *.md under root (default .)
   doc_pointers.py --self-test run the controls in a temporary tree and exit
 
-The class (#281). The README is a contents page: it closes most of its 27 sections
-with a pointer to a chapter under `docs/`. Eighteen of those chapters did not exist.
-Nothing was red, because a pointer is a DECLARATION and this repository had a gate
-over declarations only for build stages (#190/#191, gate_stage_orphans). A dangling
-pointer is the documentation instance of that same class -- a declaration with no
-artifact behind it -- and it had no gate, so the count could only grow.
-
-Doctrine wiring:
-  (1) The denominator is printed on every path. A run that resolved zero pointers is
-      UNMEASURED (95), never CLEAR -- `all([])` is True and that is this repository's
-      founding defect.
-  (2) TWO notations are extracted and each reports its OWN sub-denominator. This is
-      #186's lesson stated as machinery: that gate read one of two citation notations
-      and twelve pointers sat in no denominator while it printed CLEAR. If a notation
-      ever goes inert here, its count goes to zero IN THE OUTPUT, where it is visible.
-  (3) Resolution is permissive on purpose -- a target is satisfied if it resolves
+A dangling pointer is a declaration with no artifact behind it -- the same defect
+class as gate_stage_orphans (#190/#191), in prose. Doctrine wiring:
+  (1) The denominator is printed on every path; zero resolved pointers is UNMEASURED
+      (95), never CLEAR -- `all([])` is True (this repository's founding defect).
+  (2) TWO notations are extracted, each reporting its OWN sub-denominator, so an
+      extractor that goes inert shows 0 in the OUTPUT instead of vanishing silently.
+  (3) Resolution is permissive on purpose: a target is satisfied if it resolves
       relative to the citing file (how a reader on GitHub follows it) OR relative to
-      the repository root (this tree's prevailing convention for `docs/...`). A target
-      that satisfies NEITHER is unambiguously dangling, so a RED here is not an
-      argument about convention.
-  (4) BOTH sides read git's index, not the filesystem. The corpus is tracked *.md; a
-      target is satisfied only by a tracked path. This matters more than it sounds:
-      a pointer to a file that exists on the author's disk but was never committed
-      reads as fine locally and is dangling for every other reader on earth. A gate
-      whose corpus is the index and whose resolver is the filesystem would call that
-      clean. (#244's lesson: the census and the gate have to agree about what the
-      repository IS.)
-  (5) --self-test plants each notation's dangling form and asserts THIS extractor and
-      THIS resolver produce the RED, then plants the resolvable form and asserts CLEAR.
-      A control that does not self-match measures nothing.
+      the repository root (this tree's prevailing `docs/...` convention). RED means
+      the target satisfies neither reading -- not a convention argument.
+  (4) BOTH sides read git's index, not the filesystem: the corpus is tracked *.md and
+      a target is satisfied only by a tracked path. An uncommitted file reads fine
+      locally but 404s for every other reader; census and resolver must agree about
+      what the repository IS.
+  (5) --self-test plants each notation's dangling form (expects RED) and its
+      resolvable form (expects CLEAR) against THIS extractor and THIS resolver. A
+      control that does not self-match measures nothing.
 """
 
 from __future__ import annotations
@@ -54,25 +41,24 @@ RC_UNMEASURED = 95
 MD_LINK = re.compile(r"\[[^\]\n]*\]\(([^)\s]+)\)")
 # Notation 2: this repository's own end-of-section citation, [-> path].
 #
-# The target runs to the first delimiter, and the closing bracket is NOT required
-# to follow it. That is not laxity, it is the measured shape of the notation: two
-# of the README's own pointers carry a prose tail --
+# The target runs to the first delimiter; the closing bracket is NOT required to
+# follow it. That matches the notation as actually written -- pointers can carry a
+# prose tail:
 #     [-> docs/ARCHITECTURE.md; the full L0-L6 design is
 #     [-> docs/EXAMPLES.md - the catalogue that should exist]
-# -- and an extractor anchored on `\s*\]` sees neither. That is #186 recurring
-# inside the gate written to close #281: a notation variant in no denominator.
+# An extractor anchored on `\s*\]` sees neither, leaving such pointers outside any
+# denominator while it reports CLEAR.
 ARROW = re.compile(r"\[->\s*([^\]\s;,]+)")
 
 NOTATIONS: dict[str, re.Pattern[str]] = {"md-link": MD_LINK, "arrow": ARROW}
 
 SKIP_PREFIX = ("http://", "https://", "mailto:", "#", "<")
 
-# Code formatting is the use/mention line. A path inside backticks is being SHOWN,
-# not followed: `docs/CONTRACT.md` in SELF_AUDIT.md names a document that section
-# argues should be written, and README's transcripts quote shell that mentions
-# paths. Counting those as pointers manufactures dangles -- three of the twenty in
-# this gate's first hand-rolled census were exactly that. The stripped span count
-# is printed so this narrowing stays measured rather than silent.
+# Code formatting is the use/mention line: a path inside backticks is SHOWN, not
+# followed (`docs/CONTRACT.md` in SELF_AUDIT.md names a document that section argues
+# should be written; README's transcripts quote shell mentioning paths). Counting
+# those as pointers manufactures dangles. The stripped span count is printed so this
+# narrowing stays measured rather than silent.
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 INLINE_CODE = re.compile(r"(?P<t>`+)(?:(?!(?P=t))[^\n])*?(?P=t)")
 
@@ -139,9 +125,9 @@ def tracked_markdown(root: Path) -> list[Path]:
 def tracked_paths(root: Path) -> set[str]:
     """The resolution universe: every tracked path, plus every directory holding one.
 
-    Directories are synthesised because a pointer may legitimately target one
-    (`docs/review/`), and git tracks files only -- a directory is not an entry in
-    the index, so without this a real pointer would read as dangling.
+    Directories are synthesised because git tracks files only, but a pointer may
+    legitimately target one (`docs/review/`); without this every such pointer would
+    read as dangling.
     """
     universe: set[str] = set()
     for rel in _ls_files(root):
@@ -184,9 +170,8 @@ def resolves(universe: set[str], citing_rel: str, target: str) -> bool:
     """True if target names a tracked path, read from the citing file OR from root.
 
     Permissive by design (doctrine 3): the citing-file base is how a reader on
-    GitHub follows the link, the root base is this tree's prevailing convention
-    for `docs/...` pointers written from inside `docs/`. A target that satisfies
-    neither is dangling under every reading, so the RED is not a style argument.
+    GitHub follows the link, the root base is the tree's `docs/...` convention. A
+    target satisfying neither is dangling under every reading.
     """
     bases = (str(PurePosixPath(citing_rel).parent), "")
     for base in bases:
@@ -314,9 +299,9 @@ CASES: list[Case] = [
         "MUST_FIRE an untracked file does not satisfy a pointer",
         {"README.md": "[-> docs/GHOST.md]\n"},
         # Written to disk, never staged. A filesystem-reading resolver would call
-        # this CLEAR; every reader who clones the repo would get a 404. This is
-        # the control for doctrine 4, and it fails if the resolver ever regresses
-        # to os.path.exists.
+        # this CLEAR; every reader who clones the repo gets a 404. This is the
+        # control for doctrine 4 -- it fails if the resolver regresses to
+        # os.path.exists.
         {"docs/GHOST.md": "# On my disk only\n"},
         RC_RED,
         "resolution reads the index, not the author's working tree (doctrine 4)",
@@ -496,14 +481,13 @@ def self_test() -> int:
     fire = sum(1 for c in CASES if c[3] == RC_RED)
     clear = sum(1 for c in CASES if c[3] == RC_CLEAR)
     unmeasured = sum(1 for c in CASES if c[3] == RC_UNMEASURED)
-    # The suite's canonical last line. launchers/test_checks_gates.sh parses it with
+    # launchers/test_checks_gates.sh parses this line with
     #   sed -n 's/^self-test denominator: \([0-9]*\) of \([0-9]*\) controls.*/\1/p'
-    # on `tail -n 1`, holds have==want, and holds `have` to a measured FLOOR -- so a
-    # control set that silently SHRINKS is red even though every surviving control
-    # still passes. rc=0 alone is not accepted, by that suite's explicit convention.
-    # Both control families are summed into the one denominator on purpose: the
-    # extractor controls are the ones guarding against #186 recurring here, and a
-    # floor that only counted the end-to-end cases would let them be deleted.
+    # on `tail -n 1`, holds have==want, and holds `have` to a measured FLOOR -- a
+    # control set that silently SHRINKS is red even if every survivor passes. rc=0
+    # alone is not accepted. Both control families are summed into one denominator
+    # on purpose: an end-to-end floor alone would let the extractor controls be
+    # deleted.
     have = passed + unit_ok
     want = len(CASES) + len(UNIT_CONTROLS)
     print(

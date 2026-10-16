@@ -26,9 +26,9 @@ from ._errors import (
 def _sha256_and_lines(path: Path) -> tuple[str, int]:
     """Streamed sha256 and a wc -l line count (count of b'\\n'), one pass.
 
-    wc -l counts newline characters, not "lines"; a trailing unterminated line
-    is invisible to both wc and to this function — the contract states so rather
-    than disagreeing with the reference tool it replaces.
+    Like wc -l, counts newline characters: a trailing unterminated line is
+    invisible to both. The contract states this rather than dissenting from the
+    reference tool it replaces.
     """
     h = hashlib.sha256()
     lines = 0
@@ -46,14 +46,13 @@ def _read_safetensors_header(path: Path) -> dict[str, dict[str, Any]]:
     Any deviation raises ArtifactError -> the caller BLOCKS; a shard whose
     format we cannot price is not a shard we clear.
 
-    Chaining contract, load-bearing for _check_frozen_manifest: an OS-level
-    refusal (open/read) is re-raised with the originating OSError chained as
-    __cause__; a bytes-level format defect (truncated length prefix, bad JSON,
-    malformed shape, unpriced dtype) raises bare, with __cause__ None. That is
-    the only reliable separator between "the environment refused the read"
-    (ERROR, fail closed — the operator goes to the machine) and "the artifact
-    is corrupt" (a FAIL the check exists to name — the operator goes to the
-    checkpoint), and the two demand opposite responses.
+    Chaining contract (load-bearing for _check_frozen_manifest): an OS-level
+    refusal (open/read) is re-raised with the originating OSError as __cause__;
+    a bytes-level format defect (truncated length prefix, bad JSON, malformed
+    shape, unpriced dtype) raises bare, __cause__ None. This separates
+    "environment refused the read" (ERROR, fail closed) from "artifact is
+    corrupt" (FAIL, the check exists to name it), and the two demand opposite
+    operator responses.
     """
     try:
         with path.open("rb") as fh:
@@ -73,10 +72,9 @@ def _read_safetensors_header(path: Path) -> dict[str, dict[str, Any]]:
     try:
         meta = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        # `from None`, not chained: this function's docstring chaining contract
-        # reserves an OSError __cause__ for environmental refusals (frozen_manifest
-        # classifies on exactly that), and the decode error's text already rides
-        # inside the message, so discarding the exception object costs no evidence.
+        # `from None`, not chained: the chaining contract reserves an OSError
+        # __cause__ for environmental refusals (frozen_manifest classifies on that);
+        # the decode error's text is already in the message, so no evidence is lost.
         raise ArtifactError(
             f"{path}: header is not JSON ({exc}); cannot count tensors — BLOCK, not guess"
         ) from None
@@ -138,9 +136,9 @@ def _parse_iso(text: str) -> _dt.datetime | None:
 def _manifest_hash_for(frozen: Mapping[str, Any], cfg_sha: str) -> tuple[str, dict[str, Any]]:
     """One canonical payload + hash, used by BOTH the check and the fixture world.
 
-    A single source of truth is load-bearing: launch_provenance ties checkpoint
-    provenance records to *this* hash, and the self-test world must compute the
-    identical value or the fixture would prove nothing about the real equality.
+    Single source of truth: launch_provenance ties checkpoint provenance records
+    to *this* hash, and the self-test world must compute the identical value or
+    the fixture proves nothing about the real equality.
     """
     payload = {
         "schema": 1,

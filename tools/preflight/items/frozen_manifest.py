@@ -46,22 +46,19 @@ def _check_frozen_manifest(cfg, s, env, shared, registry=None) -> CheckResult:
     evidence: dict[str, Any] = {}
     checked = 0
 
-    # Three failure classes reach this loop and only two verdict vocabularies
-    # were previously used, so one class was misfiled. They are kept distinct:
-    #   * absent or unparseable shard — a defect of the ARTIFACT under
-    #     clearance: a FAIL this check exists to NAME ("your checkpoint is
-    #     missing a shard" sends the operator to the artifact);
-    #   * an OS-level refusal (EACCES, EIO, a file vanishing mid-sweep) — a
-    #     defect of the CHECK's ability to run: ERROR, fail closed ("the
-    #     preflight cannot read this filesystem" sends them to the machine).
-    #     The model-file-missing MUST_FIRE lane caught the conflation by
-    #     rightly demanding the NAMED verdict, not merely any blocking one.
+    # Three failure classes reach this loop; keep verdicts distinct:
+    #   * absent or unparseable shard — defect of the ARTIFACT under
+    #     clearance: FAIL, naming what is missing (sends the operator to the
+    #     artifact). MUST_FIRE requires the NAMED verdict here.
+    #   * OS-level refusal (EACCES, EIO, a file vanishing mid-sweep) — defect
+    #     of the CHECK's ability to run: ERROR, fail closed (sends the
+    #     operator to the machine).
     # stat() orders the evidence: FileNotFoundError is absence; any other
     # OSError is environmental; once stat succeeds, an ArtifactError from
-    # _read_safetensors_header WITHOUT a chained OSError cause is a bytes-level
-    # defect, while one carrying an OSError __cause__ is an open/read refusal
-    # that arrived (or a file that vanished) after stat succeeded — still
-    # environmental, because the filesystem moved under the check mid-sweep.
+    # _read_safetensors_header WITHOUT a chained OSError __cause__ is a
+    # bytes-level defect, while one carrying an OSError __cause__ is an
+    # open/read refusal or a file that vanished after stat — still
+    # environmental.
     mismatches: list[str] = []
     tensor_total = 0
     param_total = 0
@@ -125,8 +122,8 @@ def _check_frozen_manifest(cfg, s, env, shared, registry=None) -> CheckResult:
         "header_param_sum": param_total,
         # Files declared but never priced: absent/corrupt shards land here so
         # the FAIL evidence names exactly what was NOT examined — 'checked'
-        # counts only fully parsed units, so this list is where the under-count
-        # stays legible to both humans and JSON consumers.
+        # counts only fully parsed units; this list keeps the under-count
+        # legible to humans and JSON consumers.
         "unexamined": model_unexamined,
     }
     if tensor_total != s["model"]["tensor_count"]:

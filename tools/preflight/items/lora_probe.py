@@ -26,22 +26,19 @@ def _check_lora_probe(cfg, s, env, shared, registry=None) -> CheckResult:
     """Item 6: the 20-iter LoRA probe actually attached, trained, and merged.
 
     INPUT CONTRACT (unverified against the FoxBrain repo):
-      * lora.run_log: text log of the probe run. Must contain >0 lines
-        matching 'Adding lora to', and >0 such lines naming EACH class in
-        lora.target_classes (substring). Must contain a trainable-params line
-        matching r'trainable[^\\n]*?params?[^\\n]*?([0-9][0-9,]*)' whose value
-        sits inside lora.trainable_band.
+      * lora.run_log: must contain >0 lines matching 'Adding lora to', >0 naming
+        EACH class in lora.target_classes (substring), and a trainable-params
+        line matching r'trainable[^\\n]*?params?[^\\n]*?([0-9][0-9,]*)' whose
+        value sits inside lora.trainable_band.
       * lora.probe_metrics_jsonl: JSONL {"iteration": i, ...}; iterations must
-        be exactly 1..lora.expected_iters complete; the max-iteration record
-        must carry "lora_b_norm": {class: float} with every target class > 0.
+        be exactly 1..lora.expected_iters; the max-iteration record must carry
+        "lora_b_norm": {class: float} with every target class > 0.
       * lora.delta_audit_json: {class: {"delta_l2": >0, "tensors_checked":
-        int>=1}} for EVERY target class — the merged Δ-audit, with its own
-        per-class denominator.
+        int>=1}} for EVERY target class.
       * lora.merged_dir: merged HF export. Parity = sum of st_size over every
         regular file beneath it MUST equal lora.pinned_merged_total_bytes.
         NEVER the dir's own index.json metadata_size/total_size: a self-index
-        is the artifact attesting about itself, and the design says so in so
-        many words.
+        is the artifact attesting about itself.
     """
     evidence: dict[str, Any] = {}
     classes = list(s["target_classes"])
@@ -227,10 +224,9 @@ def _check_lora_probe(cfg, s, env, shared, registry=None) -> CheckResult:
     for dirpath, _dirnames, filenames in os.walk(merged):
         for fn in filenames:
             p = Path(dirpath) / fn
-            # Deliberately stat ONLY: any model.safetensors.index.json in this
-            # walk is summed as BYTES-ON-DISK, never parsed for its claimed
-            # total_size. Design: parity is vs. the pinned 14.89 GiB — never
-            # vs. self-index.
+            # Deliberately stat ONLY: index.json files are summed as
+            # bytes-on-disk, never parsed for claimed total_size. Parity is
+            # vs. the pinned size — never vs. self-index.
             observed += p.stat().st_size
             n_files += 1
     evidence["merged"] = {

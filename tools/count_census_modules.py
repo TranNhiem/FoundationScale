@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""Count what a census --out artifact DECLARES (#88): the one production
+"""Count what a census --out artifact DECLARES: the production
 implementation of the LoRA census denominator. Invoked inline by
 launchers/launch_g4e4b_lora_1tray.sh; exercised by
 tools/census_denominator_control.py.
 
-The contract, measured against the writer (launchers/lora_target_census.py):
+Accepted shapes (as written by launchers/lora_target_census.py):
 
     {"adapter_modules": [<module record>, ...], "source": "<provenance>"}
 
--- a WRAPPED object whose module records live UNDER the named key
-"adapter_modules". A bare JSON list of records is the other accepted shape.
-A record is a non-empty string module stem, or a dict carrying a non-empty
-string 'fqn' (dims, duplicates and per-entry adjudication are the gate's
-business -- _load_adapter_modules; this counter only takes the denominator).
+-- a wrapped object whose module records live under the "adapter_modules"
+key, or a bare JSON list of records. A record is a non-empty string module
+stem, or a dict with a non-empty string 'fqn' (dims, duplicates and
+per-entry adjudication belong to the gate's _load_adapter_modules; this
+counter only takes the denominator).
 
-EVERYTHING ELSE IS REFUSED, with a message naming the shape actually found:
-an unrecognised root is UNMEASURED and BLOCKS (doctrine 4). Never a guess
-between shapes -- #88 was exactly that guess: len(root) over the wrapped
-payload printed 2 (the wrapper-KEY count) on a real census declaring 168,
-and 2 cleared the launcher's numeric guard SILENTLY, handing a false
-denominator to every downstream --adapter-modules claim (doctrine 2).
+Everything else is refused with a message naming the shape found: an
+unrecognised root is UNMEASURED and BLOCKS (doctrine 4). Never guess
+between shapes -- len(root) over a wrapped payload returns the wrapper-key
+count (2) instead of the declared module count, which would clear the
+launcher's numeric guard SILENTLY and hand a false denominator to every
+downstream --adapter-modules claim (doctrine 2).
 
 Success prints ONLY the bare count on stdout -- the launcher's
 $(... 2>&1) capture plus its ^[1-9][0-9]*$ guard rely on stdout carrying
-nothing else. Zero is printable here on purpose: an empty census is counted
-honestly as 0 and the launcher's vacuity arm refuses it by name (doctrine
-1). Refusals go to stderr with a nonzero exit.
+nothing else. Zero is printable here on purpose: an empty census is
+counted honestly as 0 and the launcher's vacuity arm refuses it by name
+(doctrine 1). Refusals go to stderr with a nonzero exit.
 
 Stdlib only: the host python on this path has no torch (fix44).
 """

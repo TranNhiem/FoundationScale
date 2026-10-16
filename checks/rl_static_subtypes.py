@@ -9,9 +9,9 @@ House contract:
   rc 96 = cannot measure: no usable repo mypy config, no committed baseline
           for completeness, or mypy itself failed fatally
 
-This file imports no torch and imports no foundationscale modules. It parses
-the tree with stdlib ast only to find CLAIMS, then writes a temporary probe
-module and lets mypy decide whether each claim is a real subtype.
+No torch or foundationscale imports here: the tree is parsed with stdlib ast
+to find CLAIMS, then each claim is written to a temporary probe module and
+mypy decides whether it is a real subtype.
 """
 
 from __future__ import annotations
@@ -115,11 +115,10 @@ def _discover_protocols() -> dict[str, ProtocolInfo]:
 
 
 def _local_import_map(tree: ast.Module) -> dict[str, str]:
-    # ast.walk, not tree.body: registry.py imports every binding INSIDE
-    # _install_default_algorithms() to break a module-import cycle, so a
-    # top-level-only walk reads an empty map -- and an empty map is
-    # indistinguishable from "this module imports nothing", which is what
-    # makes the miss silent rather than loud.
+    # Must use ast.walk, not tree.body: registry.py imports its bindings inside
+    # _install_default_algorithms() to break an import cycle, so a top-level-only
+    # walk sees an empty map -- indistinguishable from "this module imports
+    # nothing", making the miss silent.
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -215,11 +214,11 @@ def _discover_algorithm_pairs() -> set[Pair]:
             )
             continue
         if symbol not in import_map:
-            # Defaulting the defining module to ALGORITHM_MODULE here would
-            # emit a probe importing a name that module does not export, and
-            # mypy's attr-defined error would read as a SUBTYPE failure. A
-            # symbol whose module cannot be resolved is UNRESOLVED, which is
-            # a different verdict from "not a subtype".
+            # Do not default the defining module to ALGORITHM_MODULE: the probe
+            # would import a name that module does not export and mypy's
+            # attr-defined error would masquerade as a SUBTYPE failure. An
+            # unresolvable module is UNRESOLVED, a different verdict from
+            # "not a subtype".
             pairs.add(
                 Pair(
                     key=f"registry:{key}",
@@ -270,8 +269,7 @@ def _discover_algorithm_pairs() -> set[Pair]:
 def _discover_structural_pairs(protocols: Mapping[str, ProtocolInfo]) -> set[Pair]:
     """Conservative claims: LossFn candidates must live in rl/losses.py.
 
-    This is discovery of claims only. A class is never accepted here; it is
-    merely written into a probe that mypy can reject.
+    Discovery of claims only; acceptance is deferred to mypy via a probe.
     """
     pairs: set[Pair] = set()
     wanted = protocols.get(f"{INTERFACES_MODULE}.LossFn")
@@ -455,15 +453,13 @@ def _verdict(rc: int, message: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False, prog="rl_static_subtypes.py")
     parser.add_argument("--write-baseline", action="store_true")
-    # The baseline is this gate's ONLY doctorable input, and without a way to
-    # point at another copy the only control a suite could run is the gate's
-    # own --self-test -- the same instrument twice, which measures nothing new.
-    # checks/mutation_scope.py carries --mutate-py for exactly this reason.
+    # --baseline is this gate's ONLY doctorable input; without it a suite's
+    # only control is --self-test on the same instrument. See
+    # checks/mutation_scope.py --mutate-py for the analogous lever.
     parser.add_argument("--baseline", type=Path, default=BASELINE)
-    # --self-test is the name every other checks/ gate uses for "run your own
-    # controls"; --must-fire is kept as the alias this gate was authored with,
-    # because the Makefile convention pairs a self-test with the real run and a
-    # gate the aggregate cannot invoke by the usual name is an orphan (#293).
+    # --self-test is the standard name across checks/ gates; --must-fire is kept
+    # as the alias this gate was authored with so the Makefile aggregate can
+    # invoke it by the usual name.
     parser.add_argument("--must-fire", "--self-test", action="store_true", dest="must_fire")
     parser.add_argument("-h", "--help", action="store_true")
     args = parser.parse_args(argv)

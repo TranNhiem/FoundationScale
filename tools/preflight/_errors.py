@@ -16,8 +16,8 @@ class ToolError(RuntimeError):
 class ConfigError(RuntimeError):
     """The config file parsed but fails validation (exit 1, BLOCKED, keys named).
 
-    Aggregates EVERY problem rather than raising on the first: an operator fixing
-    one missing key per run discovers the last one after the launch window closed.
+    Aggregates EVERY problem rather than raising on the first, so one run surfaces
+    every missing key instead of one-at-a-time per run.
     """
 
     def __init__(self, problems: Sequence[str]) -> None:

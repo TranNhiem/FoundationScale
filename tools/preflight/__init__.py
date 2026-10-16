@@ -1,35 +1,30 @@
 #!/usr/bin/env python3
 """Executable pre-flight blocklist for the FoundationScale-gated E4B launch.
 
-Why this file exists
---------------------
-The launch it gates is real: Gemma-4-E4B, GB200 tray (4 GPUs), LoRA and full
-fine-tuning, under Megatron-Bridge. The design that this file operationalizes
-(``docs/risk-review §4``, "What CLEAR must mean before the re-run") is ten
-items of prose; prose cannot block a launch. Every item is implemented here
-as a check that runs on the LOGIN NODE with no GPU and no torch import —
-the only tensor facts required (names, shapes, dtypes) live in safetensors
-headers, which are 8 length bytes plus JSON, readable with stdlib alone.
+Implements the ten CLEAR items of ``docs/risk-review §4`` ("What CLEAR must
+mean before the re-run") as executable checks gating the Gemma-4-E4B launch
+(GB200 tray, 4 GPUs, LoRA and full fine-tuning, under Megatron-Bridge). Every
+check runs on the LOGIN NODE with no GPU and no torch import: the only tensor
+facts required (names, shapes, dtypes) live in safetensors headers (8 length
+bytes plus JSON), readable with stdlib alone.
 
 If a future check genuinely needs torch: import it INSIDE that check, and
 treat ``ImportError`` as a BLOCK that names the check, never as a skip.
-There is no such check today, and that absence is deliberate.
+No check needs torch today.
 
-The clearance algebra (design item 4, the load-bearing one)
------------------------------------------------------------
-Reuse ``foundationscale.gates.core.Verdict`` and ``Coverage`` unchanged —
-their members fit every state a pre-flight check can land in. What this file
-does NOT reuse is the gate REPORT's tolerance for SKIP next to real passes.
-Design item 4 states SKIP/VACUOUS/INAPPLICABLE ==> NOT-VERIFIED, so the
-clearance predicate here is, verbatim:
+Clearance algebra (design item 4)
+---------------------------------
+Reuses ``foundationscale.gates.core.Verdict`` and ``Coverage`` unchanged, but
+NOT the gate report's tolerance for SKIP next to real passes. Per design item
+4, SKIP/VACUOUS/INAPPLICABLE ==> NOT-VERIFIED, so the clearance predicate is,
+verbatim:
 
     bool(results) and all(r.verdict is Verdict.PASS and r.coverage.checked > 0)
 
-That is strictly stronger than ``Verdict.blocking``, on purpose: this tool's
-only output that anyone acts on is the word CLEAR, and the framework's
-founding incident is the word "pass" emitted over an empty examination.
-Every non-PASS line renders with a (NOT-VERIFIED) tag so the design's
-vocabulary survives contact with stdout.
+This is strictly stronger than ``Verdict.blocking``, on purpose: this tool's
+only actionable output is the word CLEAR, and CLEAR must never be emitted
+over an empty examination. Every non-PASS line renders with a (NOT-VERIFIED)
+tag so the design's vocabulary survives contact with stdout.
 
 Exit codes: 0 = CLEAR, 1 = BLOCKED, 2 = the tool itself could not run
 (which is also not a clearance).

@@ -1,28 +1,17 @@
 """Runner and declaration gate for ``validation_campaigns/`` ``--self-test`` modules.
 
 ``pyproject.toml`` sets ``testpaths = ["tests"]``, so pytest never collects anything under
-``validation_campaigns/``. Campaign modules ship a ``--self-test`` flag that plants controls
-and returns 0 only if every control passes. A gate nobody invokes states no coverage, and
-this repository has already closed that "orphan gate" defect class more than once. This gate
-invokes them.
+``validation_campaigns/``. This gate runs each campaign module with ``--self-test``.
 
-The population is MEASURED, not hand-listed: a tracked campaign module is in scope when its
-AST contains a ``--self-test`` string-literal node. A measured denominator normally carries
-the shrinking risk -- delete the self-test and the file leaves the denominator, and the
-absence reads as a pass. That hole is closed here by making the two rules two-way:
-
-    R1 says every MEASURED (literal-bearing) file must appear in a DECLARED set.
-    R6 says every DECLARED file must be measured as literal-bearing.
-
-Deleting a self-test therefore does not shrink anything quietly: the file drops out of the
-measured set while staying in the declared set, and R6 fires MISDECLARED. Adding one does not
-pass unnoticed either: it enters the measured set with no declaration, and R1 fires UNDECLARED.
-Neither side can move alone. This is why no hand-written ``NO_SELF_TEST`` table exists -- the
-62 campaign files with no self-test need no reason strings, because they are outside the claim
-rather than excused from it, and the banner reports their count as a measurement.
+The measured population is the tracked campaign modules whose AST contains a ``--self-test``
+string literal. To keep that denominator from shrinking silently, the rules are two-way:
+R1 every measured file must be declared; R6 every declared file must be measured. Deleting a
+self-test leaves the measured set but stays declared, so R6 fires MISDECLARED; adding one
+enters the measured set undeclared, so R1 fires UNDECLARED. Files with no self-test are
+outside the claim and need no reason strings -- the banner reports their count.
 
 WHAT IS CLAIMED:
-    - Each RUNNABLE module exists on disk, contains a ``--self-test`` string literal in its
+    - Each RUNNABLE module exists on disk, carries a ``--self-test`` string literal in its
       AST, was executed as ``[sys.executable, path, "--self-test"]`` within the per-module
       timeout, and returned exit code 0.
     - RUNNABLE and NOT_RUNNABLE_HERE partition the measured population: R1 undeclared,
@@ -30,15 +19,12 @@ WHAT IS CLAIMED:
       R6 declared-but-not-literal-bearing.
 
 WHAT IS NOT CLAIMED:
-    - NOT_RUNNABLE_HERE is an UNMEASURED population, never a pass: its members are not
-      asserted to pass, and nothing is claimed about them beyond the declaration itself.
-    - Detection parses each module with ``ast`` and looks for the string literal. A flag name
-      built by concatenation or computed at runtime would be invisible to this check, and a
-      mention inside a comment is deliberately invisible -- a comment is not a flag.
-    - That a self-test's CONTROLS are adequate. This gate claims only that the self-test
-      exists, ran, and returned 0. A self-test whose controls abstain and which then exits 0
-      passes this gate while measuring nothing; where that is known to be true of a declared
-      module, its reason string says so.
+    - NOT_RUNNABLE_HERE is UNMEASURED, never a pass.
+    - Detection reads the ``ast`` literal only: a flag name built by concatenation is
+      invisible, and a comment mention is invisible on purpose -- a comment is not a flag.
+    - Control adequacy: this gate claims only that the self-test exists, ran, and returned 0.
+      A self-test whose controls abstain and which exits 0 passes while measuring nothing;
+      where that is known to be so, the reason string says so.
 
 EXIT CODES: 0 = CLEAR, 5 = RED, 95 = UNMEASURED, 96 = REFUSE. Never 1.
 """
@@ -478,9 +464,8 @@ def repo_root() -> Path:
 def tracked_campaign_files(root: Path) -> tuple[list[str], str | None]:
     """Tracked campaign ``.py`` files from the git index; error string on failure.
 
-    The git index is the denominator, never a filesystem walk, because a walk measures the
-    machine -- stale build trees, ``__pycache__``, untracked scratch -- rather than the
-    repository.
+    The git index is the denominator, never a filesystem walk: a walk measures stale build
+    trees and untracked scratch rather than the repository.
     """
     try:
         proc = subprocess.run(
@@ -503,8 +488,7 @@ def self_test_literal_count(path: Path) -> int | None:
     """Count ``--self-test`` string-literal AST nodes; None if unreadable or unparseable.
 
     A comment mentioning the flag is invisible to ``ast`` on purpose: a comment is not a
-    flag, and a gate that counted comments would put a file into its denominator on the
-    strength of prose.
+    flag, and counting them would admit files on the strength of prose.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -665,10 +649,9 @@ def _stub_source(code: int, message: str) -> str:
 def _self_test_declaration_rules(root: Path, camp: str) -> list[tuple[str, bool, str]]:
     """Plant a tree where each of R1..R6 must fire, and one where none may.
 
-    Returns one ``(name, behaved, detail)`` record per control rather than only the
-    failures. The count is the point: a suite leg holds this gate's denominator to a
-    floor, so a control set that quietly shrinks has to be visible as a smaller number
-    and not merely as a still-clean banner.
+    Returns one ``(name, behaved, detail)`` record per control, not just failures: the count
+    is the denominator held to a floor, so a shrinking control set shows as a smaller number
+    rather than a still-clean banner.
     """
     controls: list[tuple[str, bool, str]] = []
     stubs = {
@@ -768,9 +751,9 @@ def _self_test_declaration_rules(root: Path, camp: str) -> list[tuple[str, bool,
 def self_test() -> int:
     """Plant a temporary tree and prove every rule R1..R6 fires, plus the runner states.
 
-    The trailing ``SELF-TEST DENOMINATOR`` line is the machine-readable part: the suite
-    leg parses it and refuses a tally below a floor, so deleting a control is a RED
-    rather than a quieter pass.
+    The trailing ``SELF-TEST DENOMINATOR`` line is the machine-readable part: the suite leg
+    parses it and refuses a tally below a floor, so deleting a control is a RED rather than
+    a quieter pass.
     """
     camp = "validation_campaigns"
     controls: list[tuple[str, bool, str]] = []

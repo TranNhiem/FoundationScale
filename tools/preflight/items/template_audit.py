@@ -24,28 +24,27 @@ from .._core import (
 
 
 def _check_template_audit(cfg, s, env, shared, registry=None) -> CheckResult:
-    """Item 2 (CPU): the chat template must keep CoT inside the masked span.
+    """Item 2 (CPU): assert the chat template keeps CoT inside the masked span.
 
-    INPUT CONTRACT (unverified against the FoxBrain repo — see 'What this fix
-    does NOT close'):
-      * template.probe_command: argv; the substrings '{file}' and '{rows}' are
-        substituted. Ran once per declared file via subprocess. It must print
+    INPUT CONTRACT (not verified against the FoxBrain repo — a green result
+    here does not prove the probe reflects real training templates):
+      * template.probe_command: argv; substrings '{file}' and '{rows}' are
+        substituted. Runs once per declared file via subprocess. Must print
         EXACTLY rows_per_file JSON lines, each:
             {"row": int, "tokens_stock": int, "tokens_patched": int,
              "cot_span": [start, end], "masked_span": [start, end]}
         spans are token-index half-open ranges into that row's encoding.
-      * template.files: the corpus JSONL files probed (8 rows each in the
-        design; rows_per_file makes the count explicit).
+      * template.files: corpus JSONL files probed (8 rows each in the design;
+        rows_per_file makes the count explicit).
       * env[template.keep_cot_env] (design: FOXBRAIN_GEMMA4_KEEP_COT): must be
         set and != "0".
       * template.chat_template_path: chat_template.jinja; md5 always recorded,
         compared when template.chat_template_md5 is pinned.
 
-    Assertions per design: masked_span ⊇ cot_span for EVERY row examined;
-    stock-vs-patched token-count diff computed for every row (both numbers
-    required — a row missing a variant means the diff was never measured over
-    it); row count exactly rows_per_file × len(files) (a probe that returns
-    fewer rows than asked produced an under-denominator audit); KEEP_COT pin.
+    Assertions: masked_span ⊇ cot_span for EVERY row; both tokens_stock and
+    tokens_patched required per row (one missing means the diff was never
+    measured over that row); row count must equal rows_per_file × len(files)
+    (a short probe output is an under-covered claim and FAILs); KEEP_COT pin.
     """
     cov_unit = "rows"
     expected = int(s["rows_per_file"]) * len(s["files"])

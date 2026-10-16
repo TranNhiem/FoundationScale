@@ -3,31 +3,26 @@
 
 WHAT IS MEASURED
     `git ls-files src/foundationscale tools`, filtered to `*.py` without `__init__.py`, is the
-    population.  Every file in it must appear in EXACTLY ONE of three sets: MODULE_PATHS in
+    population.  Every file must appear in EXACTLY ONE of three sets: MODULE_PATHS in
     tools/mutate.py -- read as TEXT and parsed with `ast`, never imported -- which is COVERED;
     PENDING_ENROLMENT, declared below (load-bearing code the battery does not read yet); and
     OUT_OF_SCOPE, declared below (excluded, each with a stated reason).  Five defects turn the
     gate RED, all accumulated and reported together, never truncated at the first: R1 UNDECLARED
     (tracked, in no set), R2 DOUBLE (in two or more sets), R3 STALE (a declared path -- including
-    a MODULE_PATHS value, a fourth path source -- that the git index does not contain; a
-    declaration naming a file that does not exist is a claim about nothing), R4 EMPTY REASON
-    (whitespace where the reason should be), and R5 GENERIC (one reason string defending two or
-    more different files -- a reason that can be pasted onto another file is a reason for
-    neither).
+    a MODULE_PATHS value -- that the git index does not contain; a declaration naming a file that
+    does not exist is a claim about nothing), R4 EMPTY REASON (whitespace where the reason should
+    be), and R5 GENERIC (one reason string defending two or more different files -- a pastable
+    reason is a reason for neither).
 
-WHY IT IS A DEFECT (#316 is the proof, not the motivation)
-    tests/tooling/test_mutation_anchor_freshness.py already pins MODULE_PATHS at 9 entries.
-    That assertion pins a NUMBER chosen once; it says nothing about the TREE.  The map cannot
-    shrink by accident, but it can fall arbitrarily far behind while the pin stays green -- and
-    it did: #316 added a fifth objective gate, 444 new lines of adjudication logic, to
-    src/foundationscale/gates/objective_gates.py, at 1,691 LOC the largest unmapped library
-    file, and every gate in the repository stayed green.  No check was wrong; the denominator
-    itself had silently stopped reaching part of the adjudication surface.  PENDING_ENROLMENT
-    is therefore an UNMEASURED population, NOT a green one: its members' rules are not checked,
-    only counted, and the count is printed on every CLEAR line so the gap cannot grow quietly.
-    And coverage-floor touching a file means its LINES EXECUTE under tests; the battery
-    covering a file means its RULES are checked against mutants.  Those are different claims,
-    and the first is not evidence for the second.
+    PENDING_ENROLMENT is an UNMEASURED population, NOT a green one: its members' rules are not
+    checked, only counted, and the count is printed on every CLEAR line so the gap cannot grow
+    quietly.  Coverage-floor touching a file means its LINES EXECUTE under tests; the battery
+    covering a file means its RULES are checked against mutants.  Those are different claims.
+
+WHY IT IS A DEFECT
+    A pin on the NUMBER of MODULE_PATHS entries says nothing about the TREE.  The map cannot
+    shrink by accident, but it can fall arbitrarily far behind while the pin stays green, and the
+    denominator silently stops reaching part of the adjudication surface.
 
 WHAT IS NOT MEASURED (deliberately)
     Which set an undeclared file belongs in is the author's decision; the gate names R1 and
@@ -37,11 +32,10 @@ WHAT IS NOT MEASURED (deliberately)
     has been bitten by import side effects, so its scope map is parsed as text or not at all.
 
 DENOMINATOR
-    The git index, via `git ls-files src/foundationscale tools` -- never a filesystem walk.
-    The working tree can carry stale artefacts (a build/ directory once double-counted the
-    package); the index is what the repository claims to be.  Zero tracked files is UNMEASURED,
-    never a pass: `all([])` is True, and a vacuous green is the exact truth this repository's
-    doctrine exists to refuse.
+    The git index, via `git ls-files src/foundationscale tools` -- never a filesystem walk; the
+    working tree can carry stale artefacts and the index is what the repository claims to be.
+    Zero tracked files is UNMEASURED, never a pass: `all([])` is True, and a vacuous green is the
+    exact truth this repository's doctrine exists to refuse.
 
 EXIT CODES
     0   CLEAR      -- the partition holds; the banner states the full split, pending included:
@@ -865,8 +859,8 @@ def parse_module_paths(text: str) -> tuple[dict[str, str] | None, str]:
     """Extract the `MODULE_PATHS = {...}` literal from mutate.py source, or say why not.
 
     Returns (None, reason) on ANY failure to grasp the map; the caller turns that into
-    UNMEASURED.  Importing the module is not an option: its module-level state has side
-    effects this gate will not inherit.
+    UNMEASURED.  Never import the module: its module-level state has side effects this
+    gate will not inherit.
     """
     try:
         tree = ast.parse(text, filename="tools/mutate.py")
@@ -1059,8 +1053,8 @@ def evaluate(
 # Controls.  Each MUST_FIRE runs the REAL detector over a SYNTHETIC declaration -- the shipped
 # constants are never mutated -- and asserts the SPECIFIC rule fired, not merely that
 # something was refused.  MUST_PASS controls cover a clean synthetic partition, every
-# UNMEASURED path (the abstention must be reachable, not merely declared), and the live
-# shipped partition over the live git index: this gate is born green, on purpose.
+# UNMEASURED path (the abstention must be reachable), and the live shipped partition over the
+# live git index: this gate is born green, on purpose.
 # --------------------------------------------------------------------------------------------
 
 _SYNTH_TRACKED: frozenset[str] = frozenset(
@@ -1166,11 +1160,11 @@ def c_live_tree_partition_is_clean() -> bool:
 
 
 def c_mutate_py_flag_is_wired() -> bool:
-    # --mutate-py is what makes the gate discriminable from outside, so it needs a control of
-    # its own: a flag that PARSES but is never read would leave every suite leg measuring the
-    # shipped tree while believing it measured a doctored one. The discrimination is the point.
-    # Pointed at a path that does not exist the gate must reach UNMEASURED; if the flag were
-    # ignored it would fall through to the live tree and return CLEAR instead.
+    # --mutate-py is what makes the gate discriminable from outside, so it needs a control of its
+    # own: a flag that PARSES but is never read would leave every suite leg measuring the shipped
+    # tree while believing it measured a doctored one. Pointed at a path that does not exist the
+    # gate must reach UNMEASURED; if the flag were ignored it would fall through to the live tree
+    # and return CLEAR instead.
     with tempfile.TemporaryDirectory() as td:
         missing = str(Path(td) / "absent_mutate.py")
         buf = io.StringIO()
@@ -1212,9 +1206,9 @@ def self_test() -> int:
     fires = sum(1 for _, k, _ in CONTROLS if k == "MUST_FIRE")
     passes = len(CONTROLS) - fires
     # The tally is printed in the declared "SELF-TEST DENOMINATOR: N of N controls behaved"
-    # wording because launchers/test_checks_gates.sh parses it and holds N to a FLOOR. rc=0
-    # is not the measurement: a self-test whose control list silently shrinks to one still
-    # exits 0, so the denominator is what the suite actually checks.
+    # wording because launchers/test_checks_gates.sh parses it and holds N to a FLOOR. rc=0 is
+    # not the measurement: a self-test whose control list silently shrinks still exits 0, so the
+    # denominator is what the suite actually checks.
     if failures:
         print(
             f"SELF-TEST DENOMINATOR: {len(CONTROLS) - len(failures)} of {len(CONTROLS)} "
@@ -1265,11 +1259,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--self-test", action="store_true", help="run the control suite instead of the gate"
     )
-    # run() has always taken the covered-set source as a parameter; only main() pinned it.
-    # Exposing it is what makes the gate DISCRIMINABLE from outside: a suite leg can hand it
-    # a copy of tools/mutate.py with one path removed and watch R1 fire over the real tree
-    # and the real declarations, with the covered set as the only variable. Nothing in the
-    # working tree is touched. The shipped declaration constants stay pinned deliberately --
+    # Exposing the covered-set source is what makes the gate DISCRIMINABLE from outside: a suite
+    # leg can hand run() a copy of tools/mutate.py with one path removed and watch R1 fire over
+    # the real tree and the real declarations, with the covered set as the only variable. Nothing
+    # in the working tree is touched. The shipped declaration constants stay pinned deliberately --
     # they are the thing under test, not an input.
     parser.add_argument(
         "--mutate-py",

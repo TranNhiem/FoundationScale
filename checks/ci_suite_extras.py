@@ -7,34 +7,19 @@ Usage:
                                          SYNTHETIC in-memory workflows; exits 0 only if
                                          every control lands in its required state
 
-THE DEFECT (measured, real)
----------------------------
-.github/workflows/ci.yml executes the pytest suite from more than one job: `check`
-runs pytest directly, and `mutation` runs tools/mutate.py, which runs the WHOLE suite
-per mutant. Before the fix, `check` installed .[checkpoint,train,dev] while `mutation`
-installed .[checkpoint,dev]. When a new test module needed the `train` extra, all 9
-mutation shards died at COLLECTION with "No module named 'tokenizers'" -- and the
-battery reported that as `assert 96 == 5`: an UNMEASURED mutant reading as a WRONG
-VERDICT. Nothing gated the divergence, because each job's install line was reviewed
-as if it were local to that job. It is not: the suite is the unit, and every job that
-executes the suite inherits the suite's dependency set, not its own.
-
 THE CLAIM
 ---------
-CLAIM: every CI job that EXECUTES the pytest suite installs the SAME set of extras.
-Divergence is the defect. This gate has NO ORACLE for which extras set is correct --
-it cannot know that the suite needs `train`, and it must not pretend to know. It
-decides only that the suite-executing jobs AGREE. Which set is right is the workflow
-author's question; that there is ONE set is this gate's.
+Every CI job that EXECUTES the pytest suite installs the SAME set of extras. Divergence
+is the defect: an extra missing from one suite-executing job becomes a collection error
+the battery reports as a wrong verdict. This gate has NO ORACLE for which extras set is
+correct -- it decides only that the suite-executing jobs AGREE.
 
 THE DENOMINATOR
 ---------------
-The set of jobs that execute the suite. A job executes the suite if any of its steps'
-run text contains a real pytest invocation, OR invokes tools/mutate.py (which runs
-the suite internally). Jobs that never execute the suite are outside the claim and
-cannot turn it red no matter what they install. The denominator -- count and names --
-is printed in EVERY verdict line, including the CLEAR one, because a verdict without
-its denominator is the vacuous pass with better typography.
+The set of jobs that execute the suite: steps whose run text contains a real pytest
+invocation, OR invokes tools/mutate.py (which runs the suite per mutant). Jobs that
+never execute the suite cannot turn it red no matter what they install. The denominator
+(count and names) is printed in EVERY verdict line, including the CLEAR one.
 
 FOUR STATES (this repository's contract, non-negotiable)
 --------------------------------------------------------
@@ -45,7 +30,7 @@ FOUR STATES (this repository's contract, non-negotiable)
   95 EXIT_UNMEASURED  the workflow is unreadable/unparseable, OR ZERO suite-executing
                       jobs found, OR exactly ONE found. Zero and one are UNMEASURED,
                       never CLEAR: all([]) is True, and one job cannot disagree with
-                      itself, so "agreement" over either denominator is vacuous.
+                      itself.
   96 EXIT_REFUSE      bad CLI usage.
 
 WHAT THIS GATE CANNOT SEE
@@ -58,8 +43,7 @@ WHAT THIS GATE CANNOT SEE
     hidden inside an eval'd string, a function defined and never called, or a
     continuation line shaped to dodge the probe is outside the instrument.
   * tools/mutate.py lines carrying a metadata-only flag (--list-modules,
-    --self-test, --help, --version) are NOT suite executions -- the shard
-    enumerator is the measured false positive; the list is inline and stated.
+    --self-test, --help, --version) are NOT suite executions.
   * What an extra CONTAINS. Two names for the same dependency set diverge; one name
     for two different sets across branches agrees. The gate gates names, not truths.
 """
@@ -202,12 +186,11 @@ def _runs_mutate(line: str) -> bool:
 
 
 def job_facts(block: JobBlock) -> JobFacts:
-    # STATED LIMITATION: the haystack for BOTH probes is the WHOLE job block, not an
-    # individually attributed step. That is sound here because a job has one install
-    # step; to keep it sound if that ever stops being true, EVERY install line's
-    # extras are collected, and evaluate() goes RED if one job yields more than one
-    # DISTINCT extras set. Comment lines and blank lines are skipped: prose mentions
-    # of pytest or .[dev] are not commands.
+    # STATED LIMITATION: both probes scan the WHOLE job block, not an attributed step.
+    # Sound here because a job has one install step; if that ever changes, EVERY
+    # install line's extras are collected, and evaluate() goes RED if one job yields
+    # more than one DISTINCT extras set. Comment and blank lines are skipped: prose
+    # mentions of pytest or .[dev] are not commands.
     extras_sets: set[frozenset[str]] = set()
     executes = False
     for line in block.lines:

@@ -29,28 +29,23 @@ from .._errors import (
 
 
 def _check_conversion_coverage(cfg, s, env, shared, registry=None) -> CheckResult:
-    """Item 5: every one of the pinned tensors is converted or EXPLICITLY allow-listed.
+    """Item 5: every pinned tensor must be converted or explicitly allow-listed.
 
     INPUT CONTRACT (unverified against the FoxBrain / Megatron-Bridge repo):
-      * frozen.model.files (safetensors) supply the tensor NAMESPACE via
-        headers; the count must re-equal the manifest pin here too (denomina-
-        tors source from the manifest, but re-deriving them at the point of
-        use is the proof they were not swapped).
-      * conversion.coverage_map_json: {"tensors": [...]} produced by the
-        Megatron-Bridge conversion probe, one entry per name:
-          {"name": str, "bytes": int, "coverage": "converted"}             — or —
+      * frozen.model.files (safetensors) supply the tensor NAMESPACE via headers;
+        the header count must re-equal the manifest pin, proving denominators
+        were not swapped.
+      * conversion.coverage_map_json: {"tensors": [...]} from the Megatron-Bridge
+        conversion probe, one entry per name:
+          {"name": str, "bytes": int, "coverage": "converted"}  or
           {"name": str, "coverage": "allowlist", "rule": "tied"|"shared_kv"}
         'converted' names must exist in the headers with EQUAL stored bytes.
-        'allowlist' names may be absent from headers (they share storage) but
-        their rule must be GROUNDED: 'tied' requires the HF config key
-        conversion.tied_grounding (e.g. tie_word_embeddings) == true;
-        'shared_kv' requires conversion.shared_kv_grounding (the E4B key a
-        human must supply; null ⇒ any shared_kv entry FAILS). Unknown rules
-        FAIL: an allow-list entry nobody can ground is an unexamined tensor
-        wearing permission.
-      * conversion.hf_config_json: E4B config.json. conversion.divisibility is
-        the design's "settles TP-divisibility, MoE-block pattern, EP=4
-        divisibility": a list of {"field": dotted.key, "divisible_by": N} or
+        'allowlist' names may be absent (shared storage) but must be GROUNDED:
+        'tied' requires conversion.tied_grounding (e.g. tie_word_embeddings) == true;
+        'shared_kv' requires conversion.shared_kv_grounding (the E4B key a human
+        must supply; null ⇒ FAIL). Unknown rules FAIL.
+      * conversion.hf_config_json: E4B config.json. conversion.divisibility is a
+        list of {"field": dotted.key, "divisible_by": N} or
         {"field": ..., "equals": X} assertions, each evaluated here.
       * conversion.iter_metrics_jsonl: JSONL records; the iteration==1 record
         must carry "loss" within conversion.iter1_loss_band (design pins

@@ -1,36 +1,28 @@
 # checks/verification_matrix_results.py
 #!/usr/bin/env python3
-"""Adjudicate the WHOLE verification matrix from its receipts.
+"""Adjudicate the whole verification matrix from its receipts.
 
 matrix.json is the DECLARATION; per-pass receipts under
 validation_campaigns/verification_matrix/receipts/<row_id>/<pass_id>.json
-hold the ONLY results. This gate reads both and re-derives the aggregate on
-every invocation -- no count of greens is ever stored anywhere, because a
-stored count is a claim about the receipts that can drift away from them.
-Absent receipts read UNMEASURED, never green and never red: "we did not
-measure this" and "this failed" are different states and the exit contract
-already has codes for both. A receipt whose claim_sha256 or
-adjudicator_sha256 no longer matches the row as it reads today is STALE and
-reads UNMEASURED with a reason naming the drift -- a stale receipt is
-evidence for a claim nobody is making anymore.
+hold the ONLY results. The aggregate is re-derived on every invocation --
+no green count is ever stored anywhere. Absent receipts read UNMEASURED,
+never green, never red; a receipt whose claim_sha256 or adjudicator_sha256
+no longer matches the row is STALE and reads UNMEASURED with a reason
+naming the drift.
 
-Exit contract, and nothing else is permitted: 0 CLEAR, 5 RED, 95 UNMEASURED,
-96 REFUSE. Never exit 1, never exit 2 -- argparse usage errors included,
-because a usage error is a refusal to run, not a crash (#387).
+Exit contract, and nothing else is permitted: 0 CLEAR, 5 RED, 95
+UNMEASURED, 96 REFUSE. Never exit 1 or 2 -- argparse usage errors
+included, because a usage error is a refusal to run, not a crash.
 
-Aggregate precedence: any RED row takes the whole gate to 5, because a
-measured refutation is the most decision-relevant fact a campaign can
-produce; next any REFUSAL (missing adjudicator, malformed receipt, broken
-matrix) at 96, because the evidence tree as presented cannot be trusted;
-next any UNMEASURED at 95. CLEAR only when every declared row stands green.
-An empty rows list REFUSES 96: all([]) is True, and a matrix with no rows is
-not a clean matrix, it is not a matrix.
+Aggregate precedence: RED (measured refutation) > REFUSE, 96 (missing
+adjudicator, malformed receipt, broken matrix) > UNMEASURED, 95. CLEAR
+only when every declared row stands green. An empty rows list REFUSES 96:
+all([]) is True, and a matrix with no rows is not a matrix.
 
---self-test builds every fixture in a tempfile.TemporaryDirectory and never
-reads the real matrix.json; each control prints [PASS]/[FAIL] with the
-observed value, and the self-test's own exit code follows the same contract
-(0 all controls pass, 5 any control fails -- a self-test that cannot refute
-its own gate proves nothing).
+--self-test builds every fixture in a tempfile.TemporaryDirectory and
+never reads the real matrix.json; each control prints [PASS]/[FAIL] with
+the observed value. The self-test's own exit code follows the same
+contract: 0 all controls pass, 5 any control fails.
 """
 
 from __future__ import annotations
@@ -137,10 +129,10 @@ def _adjudicate_row(
     repo_root: Path,
     receipts_mod: ModuleType,
 ) -> tuple[str, str]:
-    """One row's re-derived verdict, applying rule 3 (missing adjudicator
-    file -> refusal, never red), rule 5 (no receipts -> unmeasured), rule 6
-    (stale hashes -> unmeasured naming the drift), and the malformed-receipt
-    refusal that keeps corrupt evidence from shrinking the denominator."""
+    """One row's re-derived verdict: missing adjudicator file -> refusal,
+    never red; no receipts -> unmeasured; stale hashes -> unmeasured naming
+    the drift; malformed receipts refuse so corrupt evidence never silently
+    drops out of the denominator."""
     row_id = row["id"]
     adjudicator = row.get("adjudicator")
     adjudicator_bytes: bytes | None = None
@@ -178,12 +170,10 @@ def adjudicate_matrix(
 ) -> int:
     """Adjudicate every declared row and return the four-state gate code.
 
-    WHY one function callable with any rows list and any emit target: the
-    real run and the self-test must exercise the SAME derivation. A
-    self-test that re-implements the gate proves nothing about the gate.
-    The denominator is always len(rows) -- every row the matrix declares,
-    whether or not it has receipts -- and it is stated in the summary so a
-    reader can see what 'measured' was measured out of."""
+    One function callable with any rows list and emit target so the real
+    run and the self-test exercise the SAME derivation. The denominator is
+    always len(rows) -- every declared row, receipts or not -- and is
+    stated in the summary."""
     if not rows:
         emit(
             "REFUSED (96): the matrix declares 0 rows -- all([]) is True, but a matrix "

@@ -1,8 +1,7 @@
 """``python -m tools.preflight`` entry point.
 
-Kept to three lines on purpose: importing the package front door pulls in
-``_cli``, so any logic living here would be executed twice under ``-m``
-(once as ``tools.preflight._cli``, once as ``__main__``).
+Keep this file minimal: the package front door imports ``_cli``, so any logic
+here would run twice under ``-m``.
 """
 
 from __future__ import annotations

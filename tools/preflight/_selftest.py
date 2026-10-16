@@ -26,12 +26,10 @@ from ._fixtures import (
 def run_self_test(out: Callable[[str], None] = print) -> tuple[int, dict[str, Any]]:
     """Both halves, per check, on fresh synthesized worlds.
 
-    MUST_PASS: healthy world -> the check must PASS (a check that blocks on
-    everything satisfies every MUST_FIRE lane while verifying nothing — the
-    exact hole verify_controls' MUST_PASS guard exists to close).
+    MUST_PASS: healthy world -> the check must PASS (closes the hole where a
+    check blocks on everything and verifies nothing).
     MUST_FIRE: each declared lane -> the check must NOT return PASS; a lane
-    that leaves the verdict PASS is a detector proven not to fire on the
-    defect class it claims.
+    that keeps PASS is a detector that does not fire on its claimed defect.
 
     Exitcode 0 iff every check proves both halves. The returned dict carries
     the denominators so callers (and tests) consume them structurally.
@@ -69,11 +67,9 @@ def run_self_test(out: Callable[[str], None] = print) -> tuple[int, dict[str, An
                     # mechanism on ONE real peer (with its real lanes) keeps
                     # the self-test sub-quadratic. Runtime runs all peers.
                     #
-                    # The ternary carries the comment now because it is the only
-                    # binding of `peers`: an earlier reading called it dead and
-                    # proposed deleting it, but its `else None` arm is what binds
-                    # `peers` for every non-verdict_schema check. The redundant
-                    # half was the `if` block that recomputed the same list.
+                    # Do not delete this ternary as a duplicate: its `if` arm
+                    # is the ONLY binding of `peers`, and its `else None` is
+                    # what binds `peers` for non-verdict_schema checks.
                     peers = [REGISTRY["frozen_manifest"]] if chk.id == "verdict_schema" else None
                     res = _execute(chk, world.cfg, world.env, shared, registry=peers)
             rec["must_pass"] = res.verdict.value

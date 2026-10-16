@@ -1,56 +1,45 @@
 # Four jobs, on purpose.
 #
-# `check` is ordinary hygiene: lint, format, types, tests across supported Pythons.
+# `check`: lint, format, types, tests across supported Pythons.
 #
 # `controls` is the job this framework exists for. It runs every registered gate's
-# fixtures — each MUST_FIRE control is a deliberately defective input, e.g. the
-# 128-experts-aliased-to-16 checkpoint, and the build fails if the gate does not
-# block on it. That is how a gate is prevented from rotting into a no-op that
-# reports success on everything, which the audit watched a verification tool do
-# (all_identity: True over an empty tensor set — all([]) is True).
-# The entry point also exits nonzero if the registry is empty: a controls run
-# that verified nothing is the same vacuous pass one level up.
+# fixtures — each MUST_FIRE control is a deliberately defective input (e.g. the
+# 128-experts-aliased-to-16 checkpoint) and the build fails if the gate does not
+# block on it. That is how a gate is kept from rotting into a no-op that reports
+# success on everything (all([]) is True over an empty set). The entry point also
+# exits nonzero if the registry is empty: a controls run that verified nothing is
+# the same vacuous pass one level up.
 #
-# `launchers` closes finding #81: launchers/test_launcher_contracts.sh carried
-# 134 controls and was invoked by no CI step — a suite that only runs when a
-# human remembers is a control that never RUNS, which is to say not a control.
-# Under #257 that file was split: the checks/*.py gate self-tests now live in
-# launchers/test_checks_gates.sh, and this job runs BOTH (149 + 31 = 180
-# controls). Running only one would be worse than running neither loudly —
-# the anti-orphan leg's corpus is the two suites concatenated, so a half-run
-# indicts every helper cited solely from the absent half.
-# The job runs it from the repository root (measured CWD-sensitivity: called
-# from inside launchers/, its watchdog sub-suite reports "0/8 launcher
-# unreadable" and fails closed) and credits a pass only on the suite's own
-# summary line showing zero failures over the measured denominator — an exit
-# code alone cannot tell 134 green controls from a run that died before its
-# tally. The summary verifier itself gets MUST_FIRE legs: three doctored logs
-# must be refused before the real one is trusted. A bash -n sweep over every
-# *.sh under launchers/ gates syntax first and fails on zero matched files,
-# because a sweep that found nothing is unmeasured, not clean.
+# `launchers` runs both halves of the launchers test suite
+# (test_launcher_contracts.sh + test_checks_gates.sh). A suite invoked by no CI
+# step is a control that never RUNS. Both must run: the anti-orphan leg's corpus
+# is the two suites combined, so a half-run indicts every helper cited solely
+# from the absent half. The job runs from the repository root (the suites resolve
+# paths CWD-relative and fail closed with "0/8 launcher unreadable" otherwise) and
+# credits a pass only on the suite's own summary line showing zero failures over
+# the measured denominator — an exit code alone cannot tell 134 green controls
+# from a run that died before its tally. The summary verifier itself gets
+# MUST_FIRE legs: three doctored logs must be refused before the real one is
+# trusted. A bash -n sweep over every *.sh under launchers/ gates syntax first and
+# fails on zero matched files — a sweep that found nothing is unmeasured, not
+# clean.
 #
 # `mutation` runs tools/mutate.py: the test suite is executed against
 # systematically mutated sources, and any mutant the suite does not kill fails
-# the job. It is deliberately NOT part of `check` — it is slower (~2 min) and it
-# asks a different question: `check` asks "does the code pass the suite",
-# mutation asks "does the suite detect wrong code". It runs on every push;
-# whether branch protection gates merges on it is a repo setting, not something
-# this file controls. What this file guarantees is that it runs and that a
+# the job. Deliberately NOT part of `check` — it is slower (~2 min) and it asks a
+# different question: `check` asks "does the code pass the suite", mutation asks
+# "does the suite detect wrong code". This file guarantees it runs and that a
 # survivor turns it red.
 #
 # The skip-hole fix, recorded so it stays fixed
 # ---------------------------------------------
-# Measured at the time it was found: with torch the suite was 387 passed / 3
-# xfailed; without torch, 346 passed / 41 skipped / 3 xfailed — and this
-# workflow, installing only .[dev], reported green. The 41 skips were the tests
-# that write a real
-# checkpoint to disk and read it back, including the bridge test that reproduces
-# the incident this repository publishes. A check that could not fail bought
-# confidence anyway. The fix has four parts:
+# A green run once hid 41 skipped tests: with torch absent (only .[dev]
+# installed) the checkpoint round-trip tests silently skipped — including the
+# bridge test that reproduces the incident this repository publishes. A check
+# that cannot fail is not evidence. The fix has four parts:
 #
 #   1. `check` installs .[checkpoint,dev] — torch present, nothing can skip for
-#      lack of a dependency. The matrix stays at 3.10/3.11/3.12; nothing was
-#      dropped (see the matrix comment).
+#      lack of a dependency. The matrix stays at 3.10/3.11/3.12.
 #   2. FS_FORBID_SKIPS=1 is set job-wide and tests/conftest.py turns any skip
 #      into a failure that names the test and its reason. Job-wide on purpose:
 #      the probe step must see the same arming the pytest step sees.
@@ -59,10 +48,6 @@
 #      probe. Same discipline `controls` applies to gates, one level up.
 #   4. A coverage floor (--cov-fail-under=90) so the next mechanism for
 #      silently shrinking what the suite exercises also shows up red.
-#
-# The tree is now 412 passed / 0 skipped / 0 xfailed with torch. The numbers
-# above are kept as the measurement that motivated the fix, not as current
-# state — dating a claim is cheaper than re-deriving why it was made.
 
 name: CI
 
@@ -76,11 +61,10 @@ on:
     - cron: "17 18 * * *"
   workflow_dispatch:
 
-# Measured 2026-10-11: a run is 25 jobs / ~635 job-minutes, 20 of them mutation shards, and
-# the account's 20-job concurrency cap left jobs queued up to 290 minutes (runs took 1.5-8.3 h
-# wall clock). A newer push to the same branch supersedes the older run. On main every SHA
-# gets its own group: a group holds one PENDING run, and a newer pending run replaces the
-# older one even without cancel-in-progress (measured: two main runs came back `cancelled`).
+# A run is ~25 jobs (20 of them mutation shards) and the account's concurrency
+# cap leaves jobs queued; a newer push to the same branch supersedes the older
+# run. On main every SHA gets its own group: a group holds one PENDING run, and a
+# newer pending run replaces the older one even without cancel-in-progress.
 concurrency:
   group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -112,17 +96,17 @@ jobs:
           cache: pip
       - name: Install
         # .[checkpoint] provides torch (+ safetensors): without it 41 tests skip
-        # and this job used to report green anyway. The pytorch CPU wheel index
-        # keeps the torch download small; PyPI stays the primary index for
-        # everything else. pytest-cov is installed here because pyproject.toml's
-        # [dev] extra does not carry it and the pytest step needs --cov.
+        # and this job reports green anyway. The pytorch CPU wheel index keeps the
+        # torch download small; PyPI stays the primary index for everything else.
+        # pytest-cov is installed here because pyproject.toml's [dev] extra does not
+        # carry it and the pytest step needs --cov.
         #
-        # #228 adds .[train]. tests/train/test_train_execution.py imports transformers
-        # and datasets at module scope on purpose — it exists to run the code
-        # AFTER train/loop.py's guarded dependency import, and a module that
-        # importorskip'd its way past that would pin nothing. Without the extra
-        # this job errors at collection rather than reporting green over an
-        # unrun path, which is the direction the whole finding is about.
+        # .[train] is required too. tests/train/test_train_execution.py imports
+        # transformers and datasets at module scope on purpose — it exists to run
+        # the code AFTER train/loop.py's guarded dependency import, and a module
+        # that importorskip'd its way past that would pin nothing. Without the
+        # extra this job errors at collection rather than reporting green over an
+        # unrun path.
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -171,31 +155,23 @@ jobs:
       - name: Ruff
         # tools/ is included: the mutation runner is the thing that decides
         # whether the suite is trustworthy, so it is not exempt from the checks
-        # the suite is held to. checks/ is included for the same reason and was
-        # added by #231 -- the standing legs below (WF-YAML, BASH-LC) and the
-        # packaging gate all live there, so it held three of this workflow's own
-        # controls while being the one directory no linter read.
-        #
-        # examples/ added by #280, and it is the same finding twice. The only
-        # runnable example shipped dead on line 22 while ~1,100 tests were green,
-        # because no test imported it; it was ALSO unformatted since the day it
-        # was written, because no linter read it. Both are the one class -- the
-        # first file a new user opens sat in no denominator at all.
+        # the suite is held to. checks/ is included for the same reason — this
+        # workflow's own controls (the WF-YAML and BASH-LC legs and the packaging
+        # gate) all live there. examples/ is the same class: the only runnable
+        # example shipped dead and unformatted because no test imported it and
+        # no linter read it — a file outside every denominator is exactly the
+        # file a new user opens first.
         run: ruff check src tests tools checks examples
       - name: Ruff format
         run: ruff format --check src tests tools checks examples
       - name: Mypy
-        # The two LIVE tools are checked, for the same reason Ruff checks tools/ above:
-        # `mypy src` left the emitter and the gate unchecked, and that is exactly how
-        # _declared_fqns_from_base carried a 3-tuple annotation over a 4-tuple return
-        # (#105) with the whole suite green -- mypy names it twice, at the return and
-        # at the 4-way unpack, so this step is the control that defect never had.
-        # Named individually rather than as `tools`: tools/__init__.py makes the dir a
-        # package while live_save_gate imports its sibling script-style, so the same
-        # file resolves under two module names and mypy refuses the directory. The
-        # remaining tools/ modules are unchecked -- stated, not implied.
-        # checks/ is no longer the tracked remainder -- it has its own step
-        # below. Ruff covered it from #231; mypy now does too.
+        # The two LIVE tools are checked, for the same reason Ruff checks tools/
+        # above: `mypy src` leaves the emitter and the gate unchecked. Named
+        # individually rather than as `tools`: tools/__init__.py makes the dir a
+        # package while live_save_gate imports its sibling script-style, so the
+        # same file resolves under two module names and mypy refuses the
+        # directory. The remaining tools/ modules are unchecked -- stated, not
+        # implied. checks/ has its own step below.
         run: mypy src tools/emit_run_manifest.py tools/live_save_gate.py tools/real_checkpoint_probe.py
       - name: Mypy (checks/)
         # A SEPARATE invocation, mirroring `make typecheck-checks`, not extra
@@ -203,25 +179,17 @@ jobs:
         # scripts and folding it into the same command changes how mypy
         # resolves the other paths. Split so the two stay the same command.
         #
-        # This step gates. Until it did, checks/ was excluded from mypy (#231)
-        # and the Makefile target that reported on it was prefixed with `-`,
-        # so it could not fail -- 22 errors reading green in both places at
-        # once. Among them was a real defect: packaging_reachability.py called
-        # .get() on Distribution.entry_points, which is a list before 3.10 and
-        # an EntryPoints after and has never been a mapping on any release.
-        # This directory holds three of this workflow's own gates, so an
-        # unchecked gate directory is the vacuous pass one level up -- #230's
-        # shape, where CI's mypy scope had silently drifted narrower than the
-        # Makefile's.
+        # This step gates (it must not carry a `-` prefix in the Makefile
+        # either): until it did, 22 mypy errors read green in both places at
+        # once. This directory holds three of this workflow's own gates, so an
+        # unchecked gate directory is the vacuous pass one level up — the mistake
+        # where CI's mypy scope silently drifts narrower than the Makefile's.
         run: mypy checks
       - name: Pytest (coverage floor 90; skips are failures — FS_FORBID_SKIPS)
-        # --cov-fail-under=90 against a measured 92.79% total. The floor was 70
-        # when written, sized around gates/fixtures.py at 63% and gates/controls.py
-        # at 0%; both now sit at 98% and 97%, so 70 had become a floor nothing
-        # could touch — a gate that cannot fail, in the file that argues against
-        # them. 90 leaves ~2.8 points of headroom and still goes red on the
-        # collapse cases this defends: a new unexercised module, a quietly emptied
-        # test file, tests no longer collected.
+        # --cov-fail-under=90 against a measured 92.79% total. The floor still
+        # goes red on the collapse cases this defends: a new unexercised module,
+        # a quietly emptied test file, tests no longer collected. A floor too far
+        # below the measured total is a gate that cannot fail.
         #
         # It is a TOTAL, and a total can be subsidised. The per-module floors
         # that catch that live in checks/coverage_floor.py and run as their own
@@ -230,102 +198,69 @@ jobs:
         # across the board, a per-module floor goes red when exactly one module
         # rots while the rest carry it.
         #
-        # #85: the floor also measures the two tools/ modules that ADJUDICATE —
-        # tools/live_save_gate.py (adjudicates the first real save) and
-        # tools/emit_run_manifest.py (refuses dishonest emissions).
-        #
-        # #228 corrects HOW. #85 asked for them per-file
-        # (`--cov=tools/live_save_gate.py`), and coverage.py reads a source entry
-        # as a package or directory NAME, never a path: both were dropped with
-        # `CoverageWarning: ... was never imported (module-not-imported)` and
-        # contributed zero rows for the whole life of that line. The widening
-        # never widened, and the comment asserting it had no denominator behind
-        # it. #85's stated reason was wrong too: tools/ IS an importable package
-        # (tools/__init__.py, measured 100%).
-        #
-        # `--cov=tools` is the form that resolves. The six non-adjudicating
-        # helpers are omitted in pyproject.toml [tool.coverage.run], stated there
-        # with their measured percentages; a NEW tools/*.py is deliberately not
-        # omitted, so it enrols at 0% and drags this total red.
-        #
-        # Measured 2026-09-03 under the resolving form: 92.79% over 31 files.
-        # emit_run_manifest.py comes in at 80.92% — below this very floor, which
-        # is what "the widening never widened" was hiding, and the first real
-        # case the per-module gate has to hold.
+        # `--cov=tools` must be the NAME, not a path. coverage.py reads a source
+        # entry as a package or directory NAME: `--cov=tools/x.py` is dropped
+        # with `CoverageWarning: ... was never imported (module-not-imported)`
+        # and contributes zero rows. The floor measures the two adjudicating
+        # tools (tools/live_save_gate.py, tools/emit_run_manifest.py); the six
+        # non-adjudicating helpers are omitted in pyproject.toml
+        # [tool.coverage.run], and a NEW tools/*.py is deliberately not omitted —
+        # it enrols at 0% and drags this total red.
         run: pytest --cov=foundationscale --cov=tools --cov-report=term-missing --cov-report=json --cov-fail-under=90
 
-      # #228, and the step the comment above promises. --cov-report=json on the
-      # line above is what makes it possible at all: it writes coverage.json, and
-      # this gate adjudicates that report MODULE BY MODULE against a floor table
-      # generated from measurement (checks/coverage_floor.py --update), never
-      # hand-written.
+      # Per-module coverage floors, the step the context above promises.
+      # --cov-report=json on the pytest line writes coverage.json, and this gate
+      # adjudicates that report MODULE BY MODULE against a floor table generated
+      # from measurement (checks/coverage_floor.py --update), never hand-written.
       #
       # It runs HERE rather than in `controls`, and the order is load-bearing: the
       # report is this job's artifact and exists nowhere else. If coverage.json is
       # absent the gate exits 95 (UNMEASURED), never 0 -- "the report was not
-      # there" is not "every module passed", which is the all([]) shape this
-      # repository exists to refuse.
+      # there" is not "every module passed". The report must be regenerated in
+      # THIS job, not carried in: a stale report reads CLEAR because growing
+      # modules get compared to their own older statement counts. Freshness is
+      # decided per file by comparing the report's line sets against coverage's
+      # own parse of the file on disk, and a stale report is UNMEASURED (95),
+      # never RED: statement sets can legitimately differ across interpreter
+      # versions, so "we cannot tell" must not be published as "it is broken".
       #
       # The floor table has two labelled halves. RATCHET entries sit at or above
       # the default 90 and hold a module where it already is. DEBT entries sit
-      # below it and are admissions with a denominator, not standards: measured
-      # 2026-09-03, train/__main__.py 0.00%, train/__init__.py 50.00%,
-      # train/loop.py 78.43%, tools/emit_run_manifest.py 80.92% and
-      # checkpoint/dcp_meta.py 81.36% all pass the 92.79% aggregate above,
-      # carried across the line by the other 23 modules. That is the subsidy, and
-      # this step is what states it out loud.
+      # below it and are admissions with a denominator, not standards (e.g.
+      # train/__main__.py 0.00%, train/loop.py 78.43%,
+      # tools/emit_run_manifest.py 80.92%): they pass the aggregate carried by
+      # the other modules, and this step is what states that subsidy out loud.
       #
-      # --self-test FIRST and as a separate step, for the packaging reason given
-      # further down: the controls are the licence to believe the verdict.
-      # Sixteen of them here -- eleven MUST_FIRE, five MUST_PASS -- including both
-      # arms of the in-tree/out-of-tree report-key split, because an out-of-tree
-      # row must be excludable without ever becoming a way to launder an in-tree
-      # one.
-      #
-      # Four of the sixteen guard FRESHNESS (#318). The gate used to adjudicate
-      # coverage.json without ever asking whether it describes the CURRENT source:
-      # a report generated before the tree grew read CLEAR, because the modules
-      # that grew were compared against their own older statement counts. That is
-      # why the order above is load-bearing in a second way -- the report must be
-      # regenerated in THIS job, not carried in. Freshness is decided per file by
-      # comparing the report's line sets against coverage's own parse of the file
-      # on disk, and a stale report is UNMEASURED (95), never RED: statement sets
-      # can legitimately differ across interpreter versions, so "we cannot tell"
-      # must not be published as "it is broken" (the #83/#111/#229 class).
-      #
-      # Those four drive the comparison through an INJECTED parser resolver, not
-      # the real coverage.parser, because launchers/test_checks_gates.sh runs this
-      # same --self-test under `python3 -S`: site-packages is unimportable there,
-      # deliberately, so the verdict cannot depend on what happens to be installed
-      # (the #83/#111/#229 class again). A control that needs an optional
-      # third-party import is not a control in that harness -- it reports
-      # UNMEASURED and shrinks the denominator. One of the four injects an ABSENT
-      # resolver over the same report a sibling certifies CLEAR, so "the parser is
-      # missing" is proven REFUSED rather than waived, with the resolver as the
-      # only variable. The real parser is still exercised end to end by the step
-      # below, over the report this job regenerated.
+      # --self-test FIRST and as a separate step: the controls are the licence to
+      # believe the verdict. Sixteen of them — eleven MUST_FIRE, five MUST_PASS —
+      # including both arms of the in-tree/out-of-tree report-key split (an
+      # out-of-tree row must be excludable without ever becoming a way to
+      # launder an in-tree one) and four FRESHNESS controls. Those four drive the
+      # comparison through an INJECTED parser resolver, not the real
+      # coverage.parser, because launchers/test_checks_gates.sh runs this same
+      # --self-test under `python3 -S`: site-packages is unimportable there by
+      # design and a control that needs an optional third-party import is not a
+      # control in that harness. One of the four injects an ABSENT resolver so
+      # "the parser is missing" is proven REFUSED rather than waived. The real
+      # parser is still exercised end to end by the step below.
       - name: Coverage floor controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/coverage_floor.py --self-test
       - name: Per-module coverage floors (a total can be subsidised)
         run: python3 checks/coverage_floor.py
 
-      # #466. The boundary control also runs in the `controls` job, and that is
-      # not duplication -- the two jobs install DIFFERENT dependency sets, so
-      # they measure different amounts of the same claim, and each says which.
+      # The boundary control also runs in the `controls` job, and that is not
+      # duplication -- the two jobs install DIFFERENT dependency sets, so they
+      # measure different amounts of the same claim, and each says which.
       #
-      # The `controls` job installs [checkpoint,dev]: no transformers, so t1_2
-      # answers 95 at `import transformers` before the injection is reached and
-      # its four legs ABSTAIN. That is the honest reading on a minimal machine,
-      # and the reachability probe added in #466 is what makes it honest instead
-      # of three FAILs for a defect that is not there. But an abstention is not
-      # a measurement: t1_2 is one of the five rows #463 found violating the
-      # #417 rule, and leaving it abstained everywhere would mean CI never
-      # checks the row most recently known to have been wrong.
-      #
-      # This job installs [checkpoint,train,dev], which includes transformers,
-      # on all three interpreters -- so here all 36 legs are MEASURED. Cost is
-      # seconds: every leg patches the measurement delegate out before calling
-      # main(), so nothing loads a model and no GPU is touched.
+      # `controls` installs [checkpoint,dev]: no transformers, so t1_2 answers 95
+      # at `import transformers` before the injection is reached and its four legs
+      # ABSTAIN. That is the honest reading on a minimal machine (the reachability
+      # probe makes it an abstention rather than three FAILs for a defect that is
+      # not there), but an abstention is not a measurement. This job installs
+      # [checkpoint,train,dev] with transformers on all three interpreters, so
+      # here all 36 legs are MEASURED. Cost is seconds: every leg patches the
+      # measurement delegate out before calling main(), so nothing loads a model
+      # and no GPU is touched.
       - name: Boundary control self-test (MUST_FIRE before any row reading counts)
         run: |
           cd validation_campaigns/verification_matrix
@@ -345,25 +280,15 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        # [checkpoint], not just [dev] -- and this is the SAME lesson the `check`
-        # job and the Makefile's `install` target already learned, landing in a
-        # third place it was never applied (the #230 class: a fix that reached
-        # some of its sites).
-        #
-        # MEASURED: this job has failed on every run since the weight-parity
-        # controls landed. In one Python 3.12 venv, `.[dev]` gives exit 1 with
-        # four `checkpoint.weight_parity` fixtures raising ModuleNotFoundError
-        # and the gate reporting "0 of 1 MUST_PASS control(s) reached PASS";
-        # adding [checkpoint] to that same venv gives exit 0, 10/10 gates. Only
-        # the extra differed, so the extra is the cause.
-        #
-        # Note WHICH way it failed, because it is the good direction: torch's
-        # absence did not quietly shrink the denominator to the nine gates that
-        # do not need it. #56's rule fired -- every healthy fixture for that gate
-        # abstained, so healthy-input behaviour was verified zero times, and a
-        # gate proven only able to block is unproven in the direction that gets
-        # gates disabled. The machinery was right; this job's environment was
-        # not. Do not "fix" this by relaxing the gate.
+        # [checkpoint], not just [dev] — torch's absence must fail loudly rather
+        # than quietly shrink the denominator to the nine gates that do not need
+        # it. Without the extra, four `checkpoint.weight_parity` fixtures raise
+        # ModuleNotFoundError and the gate reports "0 of 1 MUST_PASS control(s)
+        # reached PASS". That failure is the RIGHT direction: every healthy
+        # fixture for that gate abstaining means healthy-input behaviour was
+        # verified zero times, and a gate proven only able to block is unproven in
+        # the direction that gets gates disabled. Do not "fix" this by relaxing
+        # the gate.
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[checkpoint,dev]" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -385,27 +310,22 @@ jobs:
       - name: Packaging reachability (declared names must resolve)
         run: python3 checks/packaging_reachability.py
 
-      # Training-plane probe (#245). Four review documents asserted that the
-      # package "contains no training code". That was true of training
-      # PRIMITIVES and false of the package: src/foundationscale/train/ builds
-      # a transformers.Trainer and calls train()/save_model(), importing torch
-      # and transformers at FUNCTION scope, so every module-scope marker the
-      # original ad-hoc command looked for stayed at zero over a tree that
-      # demonstrably trains (#223).
+      # Training-plane probe (#245). Guards the claim that the package "contains
+      # no training code": true of training PRIMITIVES, false of the package —
+      # src/foundationscale/train/ builds a transformers.Trainer and calls
+      # train()/save_model(), importing torch and transformers at FUNCTION scope so
+      # every module-scope marker a one-liner probe looks for stays at zero over a
+      # tree that demonstrably trains. That is why this step exists as a committed
+      # instrument: nothing went red when train/ landed, and the countables gate
+      # could not catch it either — it anchors NUMBERS, and this was a CLAIM.
       #
-      # The reason it survived is the reason this step exists: the "measured
-      # src/ probe" those documents cite was a campaign one-liner, not a
-      # committed instrument, so nothing went red when train/ landed. The
-      # countables gate could not catch it either -- it anchors NUMBERS, and
-      # this was a CLAIM.
-      #
-      # Two axes are reported separately (primitives, delegation) so neither
-      # can be quoted alone, and a third scans every git-tracked *.md -- not
-      # just docs/, because README.md carries this claim too -- for the retired
+      # Two axes are reported separately (primitives, delegation) so neither can
+      # be quoted alone, and a third scans every git-tracked *.md (not just
+      # docs/, because README.md carries this claim too) for the retired
       # phrasings. rc=5 here means that sentence is back in the tree.
       #
-      # --self-test FIRST and as a separate step, for the packaging reason
-      # above: the controls are the licence to believe the verdict.
+      # --self-test FIRST and as a separate step: the controls are the licence to
+      # believe the verdict.
       - name: Training-plane probe controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/training_plane_probe.py --self-test
       - name: Training-plane probe (two axes, and no retired doc assertion)
@@ -414,47 +334,41 @@ jobs:
       # Makefile tooling (#247). Every recipe line in the Makefile must invoke
       # its tool as `$(PY) -m <tool>`, never as a bare name resolved off PATH.
       #
-      # This job is the one place the defect is INVISIBLE -- actions/setup-python
+      # THIS job is the one place the defect is INVISIBLE: actions/setup-python
       # puts pip, pytest, ruff and mypy on PATH, so a bare name works here and
       # fails only on the developer laptop the Makefile exists to serve. That
       # asymmetry is exactly why the gate has to run HERE: the machine that
-      # cannot reproduce the failure is the machine that must refuse to merge
-      # it. #232 fixed four bare `python` invocations by hand and CI stayed
-      # green through all five surviving instances of the same class.
+      # cannot reproduce the failure is the machine that must refuse to merge it.
       #
-      # --self-test FIRST and as a separate step, same reason as the two gates
-      # above: a detector whose controls have not run has no licence to be
-      # believed, and here the controls are what prove the scanner can still
-      # see a bare name at all.
+      # --self-test FIRST and as a separate step: a detector whose controls have
+      # not run has no licence to be believed, and here the controls are what
+      # prove the scanner can still see a bare name at all.
       - name: Makefile tooling controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/makefile_tooling.py --self-test
       - name: Makefile tooling (no bare tool names in any recipe)
         run: python3 checks/makefile_tooling.py
 
       # Makefile <-> CI mirror (#286). The Makefile's `check` target and THIS
-      # file are supposed to run the same checks, and until now that mirror was
-      # a hand-synchronised convention with no reader. It had already drifted in
-      # both directions: #230 widened the Makefile's mypy denominator and left
-      # this file behind, and the `check` target was simultaneously carrying a
-      # `-$(PY) -m mypy checks` prefix that silently swallowed the failure CI
-      # would have reported. Two drifts, opposite directions, one file pair.
+      # file are supposed to run the same checks, and that mirror needs a reader:
+      # it has already drifted in both directions (the Makefile's mypy denominator
+      # widened while this file lagged, and the `check` target simultaneously
+      # carried a `-$(PY) -m mypy checks` prefix that silently swallowed the
+      # failure CI would have reported).
       #
       # The steps go HERE, immediately below makefile_tooling, because the two
-      # gates read the same pair of files and a reader tracing "what enforces
-      # the Makefile" should find both in one place.
+      # gates read the same pair of files and a reader tracing "what enforces the
+      # Makefile" should find both in one place.
       #
       # The gate compares WHICH check scripts run on each side -- the set of
       # script paths, tool names and `python -m` modules -- and NOT their argv.
-      # That narrowing is deliberate and is printed in a banner on every verdict,
-      # CLEAR and RED alike: the two sides legitimately differ in output paths
-      # ($(CURDIR)/... here against "$RUNNER_TEMP/..."), in sharding (one
-      # whole-corpus tools/mutate.py run against the per-module matrix below),
-      # and in whether a --self-test is invoked directly or reached through
-      # checks/campaign_self_tests.py. The gate's first draft keyed on the
-      # literal argument string, reported four findings on a correct tree, and
-      # all four were false -- a gate that is RED on a correct tree gets an
-      # exception added or gets deleted, so the denominator was moved to the
-      # thing the claim is actually about.
+      # That narrowing is deliberate and is printed in a banner on every verdict:
+      # the two sides legitimately differ in output paths ($(CURDIR)/... here
+      # against "$RUNNER_TEMP/..."), in sharding (one whole-corpus
+      # tools/mutate.py run against the per-module matrix below), and in whether a
+      # --self-test is invoked directly or reached through
+      # checks/campaign_self_tests.py. Keying on the literal argument string
+      # reported four findings on a correct tree and all four were false -- a gate
+      # that is RED on a correct tree gets an exception added or gets deleted.
       #
       # --self-test FIRST and as a separate step, same reason as every gate
       # above. Its 10 controls include BOTH drift directions on planted inputs
@@ -468,22 +382,21 @@ jobs:
         run: python3 checks/makefile_ci_mirror.py
 
       # CI suite extras (#253). Every job in THIS FILE that executes the pytest
-      # suite must install the same extras. The measured failure it closes: #228
-      # added tests/train/test_train_execution.py, the `check` job's install gained
-      # `train`, the `mutation` job's did not -- and mutation runs the WHOLE
-      # suite once per mutant, so all 9 shards died at COLLECTION with "No
+      # suite must install the same extras. The measured failure it closes: when
+      # tests/train/test_train_execution.py landed, the `check` job's install
+      # gained `train` and the `mutation` job's did not -- and mutation runs the
+      # WHOLE suite once per mutant, so all 9 shards died at COLLECTION with "No
       # module named 'tokenizers'". The battery surfaced that as `assert 96 ==
-      # 5`: an UNMEASURED mutant wearing the costume of a wrong verdict, which
-      # is the failure this repository is least able to see.
+      # 5`: an UNMEASURED mutant wearing the costume of a wrong verdict.
       #
-      # The gate reads this file, so this job is the natural home for it -- but
-      # note what that means: the gate is measuring the workflow that invokes
-      # it. That is not circular, because its denominator is the OTHER jobs
-      # (`check` and `mutation`, the two that run the suite); `controls` itself
-      # installs .[checkpoint,dev] and runs no pytest, so it sits outside the
-      # denominator by the gate's own rule rather than by an exception written
-      # for it. A MUST_PASS control pins exactly that: a job that installs
-      # pytest-cov and mentions pytest but never invokes it must not redden.
+      # The gate reads this file, so this job is the natural home for it -- the
+      # gate is measuring the workflow that invokes it, which is not circular
+      # because its denominator is the OTHER jobs (`check` and `mutation`, the two
+      # that run the suite). `controls` itself installs .[checkpoint,dev] and runs
+      # no pytest, so it sits outside the denominator by the gate's own rule
+      # rather than by an exception written for it. A MUST_PASS control pins
+      # exactly that: a job that installs pytest-cov and mentions pytest but never
+      # invokes it must not redden.
       #
       # --self-test first, same reason as every gate above.
       - name: CI suite extras controls (MUST_FIRE/MUST_PASS)
@@ -492,70 +405,65 @@ jobs:
         run: python3 checks/ci_suite_extras.py
 
       # Countables drift (#220). The shipped documents state numbers ABOUT this
-      # tree -- LOC, file counts -- and until now nothing kept them true; #220
-      # found 9 drifted sites, 2 of which UNDERSTATED the repository.
+      # tree (LOC, file counts) and nothing so far kept them true.
       #
       # Three steps, in this order, for three different reasons:
       #
-      #  1. --self-test first, same rule as the packaging gate above. The first
-      #     version of this gate passed its own self-test while returning 865
-      #     FALSE drifts on the real repository, because it inferred from
-      #     proximity which countable each bare number claimed and no control
-      #     exercised that association axis (#233). An uncontrolled axis is an
-      #     unmeasured axis wearing a verdict, so the controls are the licence.
+      #  1. --self-test first. A first version of this gate passed its own
+      #     self-test while returning 865 FALSE drifts on the real repository,
+      #     because it inferred from proximity which countable each bare number
+      #     claimed and no control exercised that association axis. An
+      #     uncontrolled axis is an unmeasured axis wearing a verdict, so the
+      #     controls are the licence. Note the corollary the other steps enforce:
+      #     the verified number is never to be inferred from proximity (bare
+      #     `:NNN` subjects count separately, see the citation-lines step).
       #  2. The census is MEASURED here, never committed. A checked-in oracle
       #     would go stale the first time anyone touched the tree, and the gate
       #     would then enforce yesterday's numbers with full confidence -- it
       #     would not merely stop working, it would start lying.
       #  3. --no-coverage: the anchored patterns need LOC and file counts, none
-      #     of which require a test run. The census CAN derive coverage keys,
-      #     and the `check` job's pytest step is where those get measured;
-      #     paying for a second suite run here would buy nothing this gate reads.
-      #     The gate prints which census keys it can and cannot see, so the
-      #     narrower census is visible in the output rather than assumed.
+      #     of which require a test run. Coverage keys are derived in the
+      #     `check` job's pytest step; a second suite run here would buy nothing
+      #     this gate reads. The gate prints which census keys it can and cannot
+      #     see, so the narrower census is visible rather than assumed.
       - name: Countables drift controls (MUST_FIRE/MUST_PASS)
         run: python3 checks/countables_drift.py --self-test
-      #  3b. #244: the CENSUS needs its own controls, not just the gate's. Its
+      #  3b. The CENSUS needs its own controls, not just the gate's. Its
       #     repo-wide keys were a filesystem walk minus a blocklist, so they
-      #     stated a property of the machine: one developer's leftover build/
-      #     tree added a second copy of the whole package, and this job is where
-      #     it surfaced -- a fresh checkout disagreed by exactly src_loc. The
-      #     denominator is now the git index, and these four controls plant the
-      #     residue shapes that have actually appeared (build/, dist/, htmlcov/,
-      #     .venv/, .codegraph/) and require the number not to move -- plus one
-      #     positive control requiring that a TRACKED file does move it, since a
-      #     walker that measures nothing would satisfy the other three.
+      #     stated a property of the machine: a leftover build/ tree with a
+      #     second copy of the whole package made a fresh checkout disagree by
+      #     exactly src_loc. The denominator is now the git index, and these four
+      #     controls plant the residue shapes that have actually appeared
+      #     (build/, dist/, htmlcov/, .venv/, .codegraph/) and require the number
+      #     not to move -- plus one positive control requiring that a TRACKED
+      #     file does move it, since a walker that measures nothing would satisfy
+      #     the other three.
       - name: Countables census controls (a stray build/ tree must not count)
         run: python3 tools/countables_census.py --self-test
       - name: Measure the countables census (the oracle, never committed)
         run: python3 tools/countables_census.py --no-coverage --out "$RUNNER_TEMP/census.json"
-      #  4. Makefile and this workflow are in the scan set as of #241. A
-      #     directory argument is walked for *.md; a file named outright is
-      #     scanned whatever its suffix. Before that, every countable stated in
-      #     the build configuration sat in no denominator -- including the
-      #     "3 of 3 files under checks/" that this very file carried, in the
-      #     commit that added the fourth. The gate that decides what CI
-      #     measures should not be the one corpus CI never measures.
+      #  4. Makefile and this workflow are in the scan set. A directory argument
+      #     is walked for *.md; a file named outright is scanned whatever its
+      #     suffix. Every countable stated in the build configuration must sit in
+      #     some denominator -- the gate that decides what CI measures should not
+      #     be the one corpus CI never measures.
       - name: Countables drift (shipped numbers vs the measured tree)
         run: |
           python3 checks/countables_drift.py --census "$RUNNER_TEMP/census.json" \
             docs README.md Makefile .github/workflows/ci.yml
-      # #281, and it rides in this job because it is the same class the countables
-      # gate guards: a shipped document making a claim the tree does not support.
-      # There the claim is a number, here it is the existence of a file. The README
-      # is a contents page and 17 of its chapters were absent, with nothing red,
-      # because a pointer is a DECLARATION and gate_stage_orphans -- the only gate
-      # over declarations -- reads build stages, not prose.
+      # #281. This rides in this job because it is the countables class again:
+      # a shipped document making a claim the tree does not support. There the
+      # claim is a number, here it is the existence of a file -- the README is a
+      # contents page and chapters pointed to absent files with nothing red,
+      # because a pointer is a DECLARATION and gate_stage_orphans reads build
+      # stages, not prose.
       #
-      # Self-test first, and this gate earned that ordering the hard way: its own
-      # first version anchored the arrow notation on a closing bracket, so two of
-      # the README's own pointers (the ones carrying a prose tail) sat in no
-      # denominator. That is #186 verbatim, inside the gate written to close #281.
-      # It now prints a sub-count per notation, so an extractor that goes inert
-      # reports a zero rather than a green.
+      # Self-test first and as its own step. The extractor must print a
+      # sub-count per notation so that one that goes inert reports a zero rather
+      # than a green.
       #
-      # Note also what it deliberately does NOT read: fenced blocks and inline
-      # code. A path in code formatting is being SHOWN, not followed -- and the
+      # Note what it deliberately does NOT read: fenced blocks and inline code.
+      # A path in code formatting is being SHOWN, not followed -- and the
       # masked-span count is printed, so that narrowing is measured, not silent.
       - name: Doc-pointer controls (MUST_FIRE/MUST_PASS/MUST_BE_UNMEASURED)
         run: python3 checks/doc_pointers.py --self-test
@@ -569,8 +477,7 @@ jobs:
       # silently every time the file it named was edited.
       #
       # It is in the SAME commit as the `citation-lines` Makefile target it
-      # mirrors. #286 (no Makefile<->CI mirror gate) is still open, so that
-      # pairing is held by hand, exactly as the standing-gates step below says.
+      # mirrors (#286 is open, so that pairing is held by hand).
       #
       # What it does NOT claim, and the report says so on every run: the line
       # EXISTS is the whole finding. A citation aimed at the wrong line of the
@@ -585,51 +492,47 @@ jobs:
 
       # #317, and it is the same class one level up: not "does this pointer name a
       # thing that exists" but "does every thing that exists sit in some declared
-      # set". tools/mutate.py's MODULE_PATHS named 9 files; `git ls-files
+      # set". tools/mutate.py's MODULE_PATHS named 9 files while `git ls-files
       # src/foundationscale tools` returns 47; the other 38 were in no set, and no
       # gate could say so. tests/tooling/test_mutation_anchor_freshness.py pins
       # MODULE_PATHS at 9, which stops the map SHRINKING and asserts nothing about
       # the tree -- a pinned number is not a denominator.
       #
-      # #316 is the proof, not the motivation: 444 lines of new adjudication logic
-      # landed in the largest unmapped library file and every gate stayed green.
-      #
       # PENDING_ENROLMENT is deliberately an UNMEASURED population being COUNTED,
-      # never a green one being hidden: its size prints on every CLEAR line, so the
-      # gap between "lines execute under tests" (coverage-floor) and "rules are
-      # checked against mutants" (the battery) cannot widen quietly. Those are
+      # never a green one being hidden: its size prints on every CLEAR line, so
+      # the gap between "lines execute under tests" (coverage-floor) and "rules
+      # are checked against mutants" (the battery) cannot widen quietly. Those are
       # different claims and the first is not evidence for the second.
       #
-      # It is in the SAME commit as the `mutation-scope` Makefile target it mirrors,
-      # for the reason the citation-lines step above gives: #286 is still open, so
-      # the Makefile<->CI pairing is held by hand.
+      # It is in the SAME commit as the `mutation-scope` Makefile target it
+      # mirrors (the Makefile<->CI pairing is held by hand, #286 open).
       - name: Mutation-scope controls (MUST_FIRE per rule + the live tree as a control)
         run: python3 checks/mutation_scope.py --self-test
       - name: Mutation scope (every tracked file sits in exactly one declared set)
         run: python3 checks/mutation_scope.py
 
-      # #360. The RL plane makes 20 claims of the shape "this concrete binding IS a
-      # `Foo`", and every instrument measuring them was a RUNTIME isinstance() against
-      # a @runtime_checkable Protocol. That check asks whether the named attributes
-      # EXIST; it cannot see a signature. A `step` taking the wrong argument types, or
-      # returning the wrong thing, satisfies all of them -- which is #397's finding
-      # from the other direction (three docstrings claimed a setup-time refusal that
+      # #360. The RL plane makes claims of the shape "this concrete binding IS a
+      # `Foo`", and every instrument measuring them was a RUNTIME isinstance()
+      # against a @runtime_checkable Protocol. That check asks whether the named
+      # attributes EXIST; it cannot see a signature, so a `step` taking the wrong
+      # argument types or returning the wrong thing satisfies all of them (the
+      # #397 finding: some docstrings claimed a setup-time refusal
       # runtime_checkable cannot deliver).
       #
       # The gate discovers the claims with `ast` and then DELEGATES the verdict to
-      # mypy: it writes a probe module asserting each pair and reports what mypy says.
-      # Its own opinion is never the answer. Discovery walks the whole tree rather
-      # than registry.py's top level, because every binding is imported INSIDE
-      # _install_default_algorithms() to break an import cycle -- a top-level-only
-      # read returns an empty map, and an empty map is indistinguishable from "this
-      # module imports nothing", which is what would make the miss silent.
+      # mypy: it writes a probe module asserting each pair and reports what mypy
+      # says. Its own opinion is never the answer. Discovery walks the whole tree
+      # rather than registry.py's top level, because every binding is imported
+      # INSIDE _install_default_algorithms() to break an import cycle -- a
+      # top-level-only read returns an empty map, and an empty map is
+      # indistinguishable from "this module imports nothing", which is what would
+      # make the miss silent.
       #
-      # The committed baseline covers the axis a subtype checker structurally cannot:
-      # a binding that DISAPPEARS makes the surviving claims more true, not less. So
-      # a shrunken discovery set is RED, and only the baseline can say so.
-      #
-      # mypy absent is 95 (UNMEASURED), never a silent green. Same hand-held
-      # Makefile<->CI pairing as the two steps above: #286 is still open.
+      # The committed baseline covers the axis a subtype checker structurally
+      # cannot: a binding that DISAPPEARS makes the surviving claims more true,
+      # not less. So a shrunken discovery set is RED, and only the baseline can
+      # say so. mypy absent is 95 (UNMEASURED), never a silent green. Same
+      # hand-held Makefile<->CI pairing as the two steps above (#286 open).
       - name: RL-static-subtype controls (MUST_FIRE + a control on the harness)
         run: python3 checks/rl_static_subtypes.py --self-test
       - name: RL static subtypes (mypy, not isinstance, adjudicates every binding claim)
@@ -640,20 +543,16 @@ jobs:
       # hand-edited, so they drift in either direction; worse, a row can rot in
       # place when its control_arm slides to a placeholder while every presence
       # check stays green. A row with no arm that must come out DIFFERENT cannot
-      # fail, and that is the defect this campaign has filed four times already
-      # (#291, #294, #372, #203) -- the ledger tracking it is the last place it
-      # should be allowed to recur, so C2 tests for the placeholder shape that C1
-      # by construction cannot see.
+      # fail, and that is the defect filed four times already (#291, #294, #372,
+      # #203) -- the ledger tracking it is the last place it should recur, so C2
+      # tests for the placeholder shape that C1 by construction cannot see.
       #
-      # It earned its keep on first run: C5 found 31 drifts (the doc's claim cells
-      # carried topic prefixes the ledger did not), C4 found the honest-count
-      # paragraph mis-shaped, and the gate's own precedence was INVERTED -- it
-      # returned 95 while C5 was RED. SC8 exists because that precedence was a
-      # claim no scenario measured.
+      # C5 catches doc/ledger cell drift, C4 the honest-count paragraph shape,
+      # and SC8 exists because the gate's own precedence (95 over red) was a claim
+      # no scenario measured.
       #
       # It is in the SAME commit as the `verification-matrix` Makefile target it
-      # mirrors, for the reason the two steps above give: #286 is still open, so
-      # the Makefile<->CI pairing is held by hand.
+      # mirrors (the Makefile<->CI pairing is held by hand, #286 open).
       - name: Verification-matrix controls (5 MUST_FIRE + negative, abstention, precedence)
         run: python3 checks/verification_matrix.py --self-test
       - name: Verification matrix (every row can fail, and the doc equals the ledger)
@@ -661,20 +560,20 @@ jobs:
 
       # Finding #381. The shipped trainer's entry points -- loop.train and
       # cli.main -- sat in NO exit-contract denominator: the only gate on that
-      # axis scopes a GENERATED H100 artifact. #380 found 65 statements
-      # standing outside train()'s guards, each one an exit 1 waiting to
-      # happen, and #381 found the same hole on the other side of the handoff,
-      # in everything main() does before `return train(cfg)`.
+      # axis scopes a GENERATED H100 artifact. #380 found statements standing
+      # outside train()'s guards, each an exit 1 waiting to happen, and #381
+      # found the same hole on the other side of the handoff, in everything main()
+      # does before `return train(cfg)`.
       #
       # tests/train/test_train_boundary_is_total.py pins the boundary
-      # behaviourally and runs in the suite jobs; this is the static half, and
-      # the two are not redundant -- a test covers the sites it was written
-      # for, while the defect class is "a statement was added and nobody
-      # wrapped it". The three axes report separate denominators so an axis
-      # that goes inert cannot hide inside one collapsed number.
+      # behaviourally and runs in the suite jobs; this is the static half, and the
+      # two are not redundant -- a test covers the sites it was written for, while
+      # the defect class is "a statement was added and nobody wrapped it". The
+      # three axes report separate denominators so an axis that goes inert cannot
+      # hide inside one collapsed number.
       #
-      # Same commit as the `exit-contract-scope` Makefile target it mirrors,
-      # for the reason the steps above give.
+      # Same commit as the `exit-contract-scope` Makefile target it mirrors (the
+      # pairing is held by hand).
       - name: Exit-contract scope controls (11 MUST_FIRE + 2 MUST_PASS + 2 UNMEASURED)
         run: python3 checks/exit_contract_scope.py --self-test
       - name: Exit-contract scope (shipped entry points stay inside 0/5/95/96)
@@ -682,45 +581,35 @@ jobs:
 
       # Standing gates (#293). The H100 campaign's nine gate_*.py scripts were
       # invoked ONLY by build_h100_plane.sh, which no make target and no CI step
-      # runs -- so the whole tail of that gate plane was reachable by nobody.
-      # That is #278 at nine times the scale, and it is the reason this step is
-      # in the SAME commit as the Makefile target it mirrors: no Makefile<->CI
-      # mirror gate exists yet (#286), so the pairing is held by hand here.
+      # runs -- so the whole tail of that gate plane was reachable by nobody
+      # (#278 at nine times the scale). This step is in the SAME commit as the
+      # Makefile target it mirrors (held by hand).
       #
       # The runner executes each gate directly, read-only, in seconds. It does
-      # NOT run the build, and the REASON changed when #294 closed. It used to
-      # be that the build deleted eight tracked artifacts whenever a stage
-      # refused -- the ordinary case on a public checkout, where the first
-      # stage's private upstream is absent -- so a CI step that ran it would
-      # have mutated the tree it was certifying, which is the mistake this
-      # campaign keeps finding. The build now snapshots those eight paths
-      # before its `rm` and, at exit, restores only the ones no stage
-      # regenerated; the control step below is what licenses that sentence.
-      #
-      # What remains is the plainer reason, and it was always the stronger one:
-      # on a public checkout the build REFUSES (96) at its first stage, so its
-      # verdict would say nothing about these nine gates while still writing
-      # into h100/gen for the duration. The gates are what CI can actually
+      # NOT run the build: on a public checkout the build REFUSES (96) at its
+      # first stage (its private upstreams are absent), so its verdict would say
+      # nothing about these nine gates while still writing into h100/gen for the
+      # duration. The build no longer deletes the eight tracked artifacts on a
+      # stage refusal (it snapshots and restores them; the control step below is
+      # what licenses that sentence) -- but the gates are what CI can actually
       # measure here, so the gates are what CI runs.
       #
-      # --self-test first and as its own step, the same rule every gate above
-      # follows: seven controls are the licence to believe the verdict, and a
-      # runner whose controls are broken can certify nothing.
+      # --self-test first and as its own step: seven controls are the licence to
+      # believe the verdict.
       #
       # The two environment decisions on the real run are both load-bearing:
       #
       #   FS_ESTATE_IDENT_PAT=NONE -- one gate needs a deployment-specific
-      #   identifier pattern that must never exist in a public checkout. NONE
-      #   is a real, matchable pattern that matches nothing here, which lets
-      #   that gate MEASURE rather than abstain; without it CI reaches 7 of 9
-      #   instead of 8 of 9.
+      #   identifier pattern that must never exist in a public checkout. NONE is
+      #   a real, matchable pattern that matches nothing here, which lets that
+      #   gate MEASURE rather than abstain; without it CI reaches 7 of 9 instead
+      #   of 8 of 9.
       #
       #   --allow-refused NAMES the one gate that genuinely cannot measure
       #   without a private input. A bare `|| true`, or simply accepting the
       #   runner's honest exit 95, would swallow that refusal AND any refusal
       #   that appears tomorrow because a gate broke. A named set still reds
-      #   when anything else goes quiet -- the #199/#233 lesson that a count of
-      #   one is satisfied by the wrong one. It is a ceiling, not an equality:
+      #   when anything else goes quiet. It is a ceiling, not an equality:
       #   measuring MORE than promised is never a failure, so a developer whose
       #   estate environment is present still gets 9 of 9 and exit 0.
       - name: Standing-gate runner controls (fourteen instrument controls)
@@ -733,20 +622,19 @@ jobs:
             --allow-refused gate_launch_doc.py
 
       # Finding #352, and the mirror of the `campaign-self-tests` Makefile target
-      # in the SAME commit (#286: this pairing is held by hand, so it is stated
-      # in both places on purpose).
+      # in the SAME commit (#286: this pairing is held by hand, so it is stated in
+      # both places on purpose).
       #
       # pyproject.toml sets testpaths = ["tests"], so pytest collects NOTHING
-      # under validation_campaigns/. When #352 was found, six campaign modules
-      # shipped a --self-test flag whose controls return 0 only if every one
-      # passes, and five of the six were invoked by nobody. That is #278/#293 on
-      # a third population: a gate that runs nowhere states no coverage, however
-      # good its controls are. Seven modules carry the literal now, six of them
-      # runnable here -- the population is measured, so it moves on its own.
+      # under validation_campaigns/. Six campaign modules shipped a --self-test
+      # flag and five of the six were invoked by nobody -- a gate that runs
+      # nowhere states no coverage, however good its controls are. Seven modules
+      # carry the literal now, six of them runnable here; the population is
+      # measured, so it moves on its own.
       #
-      # Controls first, and their rc gates the real run -- the `&&` is load-
-      # bearing, exactly as in the standing-gate pair above. An instrument whose
-      # own controls are broken produces a verdict nobody should read.
+      # Controls first, and their rc gates the real run -- the `&&` is
+      # load-bearing, exactly as in the standing-gate pair above: an instrument
+      # whose own controls are broken produces a verdict nobody should read.
       #
       # The scope is MEASURED (an ast '--self-test' literal in a tracked file),
       # not a hand-kept list. The usual objection to that -- delete the self-test
@@ -764,32 +652,26 @@ jobs:
       # Finding #463, and the mirror of the `boundary-control` Makefile target in
       # the SAME commit (#286 pairing, held by hand, stated in both places).
       #
-      # The step above runs control_boundary_classification's --self-test, which
-      # exercises the #417 boundary rule against SYNTHETIC subjects it builds in a
-      # temp dir. The entry that runs it against the REAL rows is --expect postfix,
-      # and until #463 nothing invoked it -- so the rule was certified in the
-      # abstract while five of the nine shipped rows violated it: t1_2 and t1_4
-      # adjudicated an environment fault RED (a refutation of a claim whose arms
-      # never ran), t1_6 and t1_21 let the exception escape main() and exited 1
-      # (outside their declared {0,5,95,96}), and t1_23 collapsed environment and
-      # harness faults into one 96. The control could not see them because its
-      # ROWS denominator named exactly the four rows #417 had already fixed.
+      # The step above runs control_boundary_classification's --self-test against
+      # SYNTHETIC subjects; this is the entry that runs it against the REAL rows
+      # (--expect postfix). Until #463 nothing invoked it, so the rule was
+      # certified in the abstract while five of nine shipped rows violated it:
+      # t1_2 and t1_4 adjudicated an environment fault RED (a refutation of a
+      # claim whose arms never ran), t1_6 and t1_21 let the exception escape main()
+      # and exited 1 (outside their declared {0,5,95,96}), and t1_23 collapsed
+      # environment and harness faults into one 96. The control could not see them
+      # because its ROWS denominator named only the rows already fixed.
       #
       # Controls first and their rc gates the real run, as in every pair above.
       # No hardware: each leg patches the measurement delegate out before calling
-      # main(), so 36 legs finish in seconds on a runner with no GPU.
+      # main(), so the legs finish in seconds on a runner with no GPU.
       #
-      # #466: this job installs [checkpoint,dev], so transformers is ABSENT and
-      # t1_2 returns 95 before the injection is reached -- its four legs abstain
-      # here and the step prints "32 passed + 0 failed + 4 abstained". Measured,
-      # by blocking the import locally and re-running: 32/0/4 with the import
-      # blocked, 36/0/0 with it present. The `check` job above installs
-      # [checkpoint,train,dev] and measures all 36, so the row is not left
-      # unchecked -- it is checked where the dependency exists, and the
-      # abstention is named where it does not. Before #466 this same runner
-      # reported t1_2/ENV as a PASS (its precondition 95 happened to equal the
-      # wanted 95) and the other three as FAILs, which is what turned main red:
-      # a finding manufactured by staging, not by the subject.
+      # #466: with this job's [checkpoint,dev] install, transformers is ABSENT
+      # and t1_2 returns 95 before the injection is reached -- its four legs
+      # abstain and the step prints "32 passed + 0 failed + 4 abstained". That is
+      # measured and named, not passed: the `check` job installs
+      # [checkpoint,train,dev] and measures all 36. Do not turn an abstention
+      # into a PASS or a FAIL by staging.
       - name: Boundary control self-test (MUST_FIRE before any row reading counts)
         run: |
           cd validation_campaigns/verification_matrix
@@ -814,13 +696,12 @@ jobs:
       # arm B must end with 0/8. Both arms must independently be shown to have
       # REACHED the rm site, because a run that refused earlier for an unrelated
       # reason also leaves 8/8 intact and would read as a pass. If arm B also
-      # survives, the restore is not what saved arm A and the green means
-      # nothing -- that leg is what makes this control non-vacuous.
+      # survives, the restore is not what saved arm A and the green means nothing
+      # -- that leg is what makes this control non-vacuous.
       #
-      # Cost: 6s wall, measured. Both arms refuse at stage one here, because the
-      # private upstreams the build needs are absent from a public checkout by
-      # design; the deletion happens before that refusal, which is the whole
-      # point of the finding.
+      # ~6s wall. Both arms refuse at stage one on a public checkout (the private
+      # upstreams are absent by design), but the deletion happens before that
+      # refusal, which is the whole point of the finding.
       - name: Scratch-restore control (#294 two-arm; arm B must lose 8/8)
         run: python3 validation_campaigns/h100_validation/control_scratch_restore.py
 
@@ -839,10 +720,10 @@ jobs:
         # The count is load-bearing twice: it is printed (a claim needs a
         # denominator) and zero matches fail the build, because a find that
         # matches nothing is UNMEASURED, never "all files are clean". The
-        # refusal comes BEFORE any verdict line: "0 of 0 parse clean" must not
-        # be emitted even on a path that fails a moment later, and a red run's
-        # tally carries its rejection count inline so no line ever reads green
-        # over red evidence.
+        # refusal comes BEFORE any verdict line: "0 of 0 parse clean" must not be
+        # emitted even on a path that fails a moment later, and a red run's tally
+        # carries its rejection count inline so no line ever reads green over red
+        # evidence.
         # Counters accumulate in the main shell via heredoc, never in a
         # `find | while` pipeline: on bash 3.2 (the macOS harness) the piped loop
         # is a subshell and both counters die with it — the gate would print 0/0,
@@ -893,17 +774,14 @@ jobs:
         # a missing entry point read as zero controls run.
         #
         # The exit code is checked AND disbelieved. `bash script` exiting 0 says
-        # the process ended, not that the floor's worth of controls ran — a suite killed before
-        # its summary, or one whose summary print rotted away, must not be
-        # creditable (a check over zero units proves nothing; ambiguous is
+        # the process ended, not that the floor's worth of controls ran — a suite
+        # killed before its summary, or one whose summary print rotted away, must
+        # not be creditable (a check over zero units proves nothing; ambiguous is
         # refused). So the captured output goes through verify_summary, which
         # requires the summary line, a zero failure count, and the control
-        # denominator FLOOR declares below. Exit-code-only
-        # wiring would look identical in the Actions log on the day the suite
-        # starts exiting 0 early; that undetectable green is the fake this step
-        # exists to refuse. Output is captured via $(...) rather than piped
-        # through tee: no pipe, no pipefail question, the suite's real status
-        # lands in rc untouched.
+        # denominator FLOOR declares below. Output is captured via $(...) rather
+        # than piped through tee: no pipe, no pipefail question, the suite's real
+        # status lands in rc untouched.
         run: |
           cd "$GITHUB_WORKSPACE"
           # Both halves of the #257 split are checked, and the shared prelude
@@ -1134,14 +1012,9 @@ jobs:
               echo "::error::summary reports $failed failed control(s): $line" >&2
               return 1
             fi
-            # Floor history: 134 (when this gate was written) -> 150 (#237, the
-            # day the locator was fixed) -> 154 (#238, once countables_drift.py
-            # and packaging_reachability.py were wired in as four real legs) ->
-            # 157 (#245, training_plane_probe.py wired in as three real legs) ->
-            # 161 (#247, makefile_tooling.py wired in as four real legs). A
-            # floor below the live count lets that many controls vanish in
-            # silence, which is the same quiet-shrink move the floor exists to
-            # refuse. The value itself is FLOOR, set once at the top of this
+            # Floor: a floor below the live count lets that many controls
+            # vanish in silence, which is the quiet-shrink move the floor exists
+            # to refuse. The value itself is FLOOR, set once at the top of this
             # step; see the comment there for why it is not written twice.
             if [ "$((10#$total))" -lt "$floor" ]; then
               echo "::error::summary covers $total controls; $floor were measured when this" >&2
@@ -1161,8 +1034,7 @@ jobs:
           # '1 failed' with the pass count at FLOOR so the failure count is the
           # only thing wrong with it; (3) the summary shrunk to '12/12, 0 failed'
           # — the silently-emptied suite that only the floor catches. Refusals go
-          # to /dev/null so the expected reds do not pollute the annotation
-          # stream.
+          # to /dev/null so the expected reds do not pollute the annotations.
           mustfire_1=$'launchers: 8/8 watchdog checks green\ncontracts: 126/126 green'
           mustfire_2="SUMMARY: $FLOOR/$FLOOR controls passed, 1 failed"
           mustfire_3='SUMMARY: 12/12 controls passed, 0 failed'
@@ -1185,23 +1057,19 @@ jobs:
           fi
           echo "verify_summary fired on all three doctored logs (MUST_FIRE legs 1-3) — proven able to refuse."
           # ------------------------------------------------------------------
-          # Legs 4-6 (#237): the axis legs 1-3 never touched — CAN THIS READER
-          # SEE ITS OWN PRODUCER? Legs 1-3 are all written as
-          # 'SUMMARY: <n>/<n> controls passed, <n> failed', a shape
-          # launchers/test_launcher_contracts.sh has never emitted. Three legs
-          # can be green over a format the real suite does not produce, and were
-          # for 5+ commits while the real path refused a 150/150 run. Proving a
-          # detector refuses garbage says nothing about whether it can read the
+          # Legs 4-6: the axis legs 1-3 never touched — CAN THIS READER SEE ITS
+          # OWN PRODUCER? Legs 1-3 are written as 'SUMMARY: <n>/<n> controls
+          # passed, <n> failed', a shape the suite has never emitted, so proving
+          # a detector refuses garbage says nothing about whether it can read the
           # one input it exists to read.
           #
           # So these carry the suite's ACTUAL final line shape verbatim —
           # `controls: <n> passed, 0 failed`, with <n> taken from FLOOR so the
           # fixture can never fall below the bar it is being measured against —
-          # and drive it through the SAME
-          # verify_summary the real log goes through. If the suite rewords its
-          # tally, leg 4 goes red HERE, naming the reader/producer split, rather
-          # than the job failing downstream with "no summary line" and being
-          # read as a suite failure.
+          # and drive it through the SAME verify_summary the real log goes
+          # through. If the suite rewords its tally, leg 4 goes red HERE, naming
+          # the reader/producer split, rather than the job failing downstream
+          # with "no summary line" and being read as a suite failure.
           #
           # 4 is MUST_PASS (the reader sees the producer). 5 and 6 are MUST_FIRE
           # in that same real shape, so the failure-count and floor checks are
@@ -1265,16 +1133,13 @@ jobs:
           # `set -e`-less prologue -- leaves wf_files EMPTY. The guard below
           # would then report "0 workflow files, UNMEASURED", which is true of
           # the array and false of the directory: an accurate-sounding verdict
-          # about the wrong subject. The runner has bash 5, so CI never saw it;
-          # the only machine that did was the developer laptop this step must be
-          # reproducible on, which is where the whole step was being replayed to
-          # debug #237. The read loop below is identical on bash 3.2 and 5.
+          # about the wrong subject. The read loop below is identical on bash
+          # 3.2 and 5.
           # The same rule is already written down in
-          # validation_campaigns/h100_validation/build_h100_plane.sh, at the comment beginning
-          # "NOT mapfile: this runs on bash 3.2" -- it was applied there and not here, which is
-          # how a convention becomes one file's habit. Anchored to the sentence, not to a line
-          # number: this pointer said ":580" and had drifted 192 lines by the time anyone read
-          # it, which is #303.
+          # validation_campaigns/h100_validation/build_h100_plane.sh, at the
+          # comment beginning "NOT mapfile: this runs on bash 3.2" -- anchored
+          # to the sentence, never to a line number, since this pointer once
+          # drifted 192 lines (#303).
           wf_files=()
           while IFS= read -r wf_f; do
             wf_files+=("$wf_f")
@@ -1297,12 +1162,11 @@ jobs:
             echo "::error::WF-YAML MUST_FIRE setup failed -- could not rebuild BLOCKER 1 on a copy; the control cannot prove itself (doctrine 3)."
             exit 1
           fi
-          # #464. The exact contract code, not "nonzero". This probe used to read
-          # `if <cmd>; then fail` with output discarded, so ANY nonzero satisfied it --
-          # and while this audit's vocabulary was 0/1, an uncaught exception exits 1 and
-          # passed the leg identically to a real refusal. Measured: a copy of the audit
-          # with `raise RuntimeError` on entry, which never opened the file, satisfied
-          # this leg and printed "proven able to refuse". Demanding 5 means only a
+          # #464. The exact contract code, not "nonzero". This probe used to
+          # read `if <cmd>; then fail` with output discarded, so ANY nonzero
+          # satisfied it -- and while this audit's vocabulary is 0/1, an uncaught
+          # exception exits 1 and passes the leg identically to a real refusal
+          # even though it never opened the file. Demanding 5 means only a
           # verdict passes; 96 (crash) and 95 (could not measure) now fail it.
           set +e
           python3 "$repo_root/checks/wf_yaml_audit.py" "$mustfire_wf_dir/ci-doctored.yml" >/dev/null 2>&1
@@ -1330,16 +1194,14 @@ jobs:
           # ------------------------------------------------------------------
           # Self-test FIRST, exactly like the `packaging` job's two steps: a
           # detector whose own controls misbehave has no licence to report a
-          # verdict, so the live sweep must not be reachable without it. This
-          # ordering is load-bearing here and not merely tidy -- #239 widened
-          # the sweep three times (eval-shaped source, %q-rendered
-          # substitution, declared splice), and every widening is a shape it
-          # will now decline to report. The 9 MUST_FIREs are what keep those
-          # exemptions narrow: eval-shaped is exempt and eval-shaped-plus-one-
-          # word is not, %q-rendered is exempt and plain printf is not, comment
-          # text is not a site and a `#` inside the quoted source still is. A
-          # declaration that stops matching the tree is RED, which is the only
-          # thing separating DECLARED_SPLICES from an allowlist.
+          # verdict. The ordering is load-bearing here: every widening of the
+          # sweep is a shape it will now decline to report, and the 9 MUST_FIREs
+          # are what keep those exemptions narrow -- eval-shaped is exempt and
+          # eval-shaped-plus-one-word is not, %q-rendered is exempt and plain
+          # printf is not, comment text is not a site and a `#` inside the quoted
+          # source still is. A declaration that stops matching the tree is RED,
+          # which is the only thing separating DECLARED_SPLICES from an
+          # allowlist.
           if ! python3 "$repo_root/checks/bash_lc_sweep.py" --self-test; then
             echo "::error::BASH-LC self-test RED -- the sweep's own controls misbehaved, so its verdict on the live tree states nothing (doctrine 3)."
             exit 1
@@ -1405,12 +1267,9 @@ jobs:
             fi
             # MUST_PASS leg, observed live: the real suite's summary accepted.
             # The summary line is reprinted as the claim, denominator included —
-            # "the guard works" is not a claim, "N of N carry it" is. THE
-            # LOCATOR HERE WAS #237's RESIDUE: it grepped for 'summary', a word
-            # the suite emits zero times, so this line printed an empty claim on
-            # every green run for the whole life of the gate. It now uses the
-            # same locator verify_summary uses, so the line reprinted is the
-            # line adjudicated rather than a second, weaker guess at it.
+            # "N of N carry it" is a claim, "the guard works" is not. Uses the
+            # same locator verify_summary uses, so the line reprinted is the line
+            # adjudicated rather than a second, weaker guess at it.
             printf '%s green, verified summary: ' "$suite"
             printf '%s\n' "$output" \
               | { grep -iE 'summary|[0-9]+[[:space:]]*(passed|green)[^0-9]+[0-9]+[[:space:]]*failed' || true; } \
@@ -1429,32 +1288,28 @@ jobs:
           echo "both suites green: $suite_total controls verified against per-suite floors ($FLOOR_LAUNCHER + $FLOOR_CHECKS)."
 
   # ---------------------------------------------------------------------------
-  # #242. The mutation battery ran as ONE job with timeout-minutes: 15 and
-  # produced NO VERDICT for 21 consecutive runs: every one of them was killed at
-  # 15.2-15.3 minutes and recorded as `cancelled`. The last real verdict was
-  # 36291cf0, which finished in 7.4 minutes; the corpus has grown since, and
-  # each scoreable row runs the entire pytest suite twice for attribution, so
-  # the job simply stopped fitting. Two separate defects, both fixed here:
+  # #242. The mutation battery ran as ONE job with timeout-minutes: 15 and every
+  # run was killed at the deadline and recorded `cancelled` before scoring the
+  # corpus -- UNMEASURED wearing the word for a deliberate act. Two separate
+  # defects, both fixed here:
   #
-  #  1. IT COULD NOT FINISH. Measured locally, `--module checkpoint_gates` (5
-  #     rows) takes 3m19s, i.e. ~40s a row; the corpus is 78 rows. The battery
-  #     is embarrassingly parallel across modules and `--module` already
-  #     existed, so this is now a matrix: one shard per module, each shard well
-  #     inside its own budget.
+  #  1. IT COULD NOT FINISH. Each scoreable row runs the full pytest suite once
+  #     and a second confirmation run whenever the first looks like a kill, so
+  #     cost is O(rows x full suite) and the corpus no longer fits one job's
+  #     budget. The battery is embarrassingly parallel across modules and
+  #     `--module` already existed, so this is now a matrix: one shard per
+  #     module, each shard well inside its own budget.
   #
   #  2. ITS FAILURE STATE READ AS NEUTRAL. GitHub marks a job that exceeds
-  #     timeout-minutes as `cancelled`, which is the same word it uses when a
-  #     human presses the button. So 21 runs of "this gate measured nothing"
-  #     looked like 21 runs of "somebody stopped it" -- UNMEASURED wearing the
-  #     costume of a deliberate act, which is precisely the state this
-  #     repository refuses to allow (doctrine 5). The battery is now run under
-  #     an INNER deadline, shorter than the job's, so the deadline is ours: it
-  #     exits 2, the tool's own "never measured" code, and says so.
+  #     timeout-minutes as `cancelled`, the same word it uses when a human
+  #     presses the button. The battery is now run under an INNER deadline,
+  #     shorter than the job's, so the deadline is ours: it exits 2, the tool's
+  #     own "never measured" code, and says so.
   #
-  # The shard list is DERIVED from the table rather than written here. A
-  # hand-maintained matrix that misses a tenth module would run nine shards,
-  # report nine greens, and leave the tenth unmeasured behind a wall of
-  # success -- the same shape as the defect being fixed.
+  # The shard list is DERIVED from the mutation table rather than written here.
+  # A hand-maintained matrix that misses a tenth module would run nine shards,
+  # report nine greens, and leave the tenth unmeasured behind a wall of success
+  # -- the same shape as the defect being fixed.
   mutation-shards:
     name: enumerate mutation shards (the matrix comes from the table)
     # ~87% of a run's compute. Branches get lint/typecheck/test/controls; the battery runs
@@ -1493,41 +1348,26 @@ jobs:
     # Generous relative to the inner deadline below ON PURPOSE. If this one
     # ever fires, the run is `cancelled` again and we are back to a neutral
     # word for an unmeasured gate; the inner deadline exists so that never
-    # happens, and this is only the backstop behind it.
+    # happens, and this is only the backstop behind it, kept ~1.25x the inner
+    # deadline.
     #
-    # Raised 25 -> 38 with the inner deadline 18m -> 30m (#356). A shard's cost
-    # is O(mutants x FULL suite): tools/mutate.py runs `pytest tests/` once per
+    # SHAARD COST MODEL, for the next raise of both walls: a shard is
+    # O(mutants x FULL suite) -- tools/mutate.py runs `pytest tests/` once per
     # mutant and a SECOND confirmation run whenever the first looks like a kill,
-    # so a module whose rows all die costs 2n+1 suite runs. The suite grew ~70
-    # tests in one cycle and `manifest` (11 rows, the largest shard) crossed 18m
-    # mid-mutant: 9 killed, then SIGKILL landed inside run 20 of 23. That is
-    # exit 2 over a module nobody measured. The walls move rather than the
-    # per-mutant scope, because the battery's claim is "does ANY test in this
-    # repo catch this mutation" and scoping the suite down would narrow the
-    # claim while leaving the number looking the same.
+    # so a module whose rows all die costs 2n+1 suite runs. The walls move rather
+    # than the per-mutant scope, because the battery's claim is "does ANY test in
+    # this repo catch this mutation" and scoping the suite down would narrow the
+    # claim while leaving the number looking the same. Nor is this a judgement
+    # that the largest shard's rows are too many: the corpus is supposed to grow,
+    # and a deadline that forces rows to be split across invented module keys
+    # would encode a CI budget into the corpus taxonomy.
     #
-    # Raised again 38 -> 75 with the inner deadline 30m -> 60m (#530), for the
-    # same reason one size up. #530 took `perf_telemetry` from 8 rows to 15,
-    # making it the largest shard (next is `manifest` at 11), and it crossed 30m
-    # having scored 10 of 15 -- every one of them killed, so the module was
-    # sound and only the wall was wrong. MEASURED from that run: baseline plus
-    # 10 all-killed rows = 21 suite runs in 30m, i.e. ~1.4 min per suite run, so
-    # 15 rows (2n+1 = 31 runs) needs ~44m. 60m is that plus room for the suite
-    # to keep growing, and 75m keeps the outer backstop the same ~1.25x behind
-    # the inner deadline that #356 chose. Nothing here is a judgement that 15
-    # rows is too many: the corpus is supposed to grow, and a deadline that
-    # forces rows to be split across invented module keys would encode a CI
-    # budget into the corpus taxonomy, which is the wrong place for it.
-    #
-    # Raised again 75 -> 113 with the inner deadline 60m -> 90m, for the same
-    # reason. MEASURED: on main the `perf_telemetry` shard took 51.2m of its 60m
-    # (2n+1 = 31 full-suite runs); the agentic RL plane added ~900 tests and the
-    # shard crossed 60m on the agentic-rl merge commit, again with every scored
-    # row killed. Those tests were first cut from ~60s to ~19s per suite run
-    # (fake HTTP servers polled at 0.5s on shutdown; timeout tests slept 1-2s),
-    # and the wall still moves: 51m plus ~31 runs x ~19s is ~61m, so 60m is no
-    # longer room for the suite to keep growing. 113m keeps the outer backstop
-    # the same ~1.25x behind the inner deadline.
+    # History (measured, not guessed): 25 -> 38 with inner 18m -> 30m (#356,
+    # `manifest` at 11 rows); 38 -> 75 with inner 30m -> 60m (#530, `perf_telemetry`
+    # at 15 rows needed ~44m at 2n+1 = 31 runs and ~1.4 min per suite run);
+    # 75 -> 113 with inner 60m -> 90m (the agentic-RL tests added ~900 tests to
+    # every suite run). If the suite gets faster rather than longer, prefer
+    # re-measuring the per-run cost over raising the walls again.
     timeout-minutes: 113
     strategy:
       # Every shard reports. fail-fast would cancel the siblings of the first
@@ -1550,13 +1390,12 @@ jobs:
       - name: Install
         # `train` is not optional here even though this job names no trainer.
         # tools/mutate.py runs the WHOLE pytest suite per mutant, so this job's
-        # dependency set is the suite's, not the battery's: when #228 added
-        # tests/train/test_train_execution.py the `check` job got `train` and this one
-        # did not, and all 9 shards died at COLLECTION with "No module named
-        # 'tokenizers'" -- 3 errors that the battery reported as `assert 96 == 5`,
-        # an unmeasured mutant reading as a wrong verdict rather than as a
-        # missing dependency. The extras of every job that executes the suite
-        # must track the suite; see checks/ci_suite_extras.py, which gates it.
+        # dependency set is the suite's, not the battery's: without `train`, all
+        # shards die at COLLECTION on tests/train/... ("No module named
+        # 'tokenizers'") and the battery reports `assert 96 == 5`, an unmeasured
+        # mutant reading as a wrong verdict rather than as a missing dependency.
+        # The extras of every job that executes the suite must track the suite;
+        # see checks/ci_suite_extras.py, which gates it.
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[checkpoint,train,dev]" "pytest-cov>=5" --extra-index-url https://download.pytorch.org/whl/cpu
@@ -1566,13 +1405,12 @@ jobs:
         # the signal and it fails this job directly. Every module carries its
         # own "must_survive" control row, so a shard is a whole detector — run
         # without one, mutate.py exits 2 rather than printing a caught= figure
-        # it cannot support, and before #242 that is what 5 of 9 shards would
-        # have done.
+        # it cannot support.
         #
         # `timeout` is GNU coreutils and is present on ubuntu-latest. It is
         # deliberately NOT in the Makefile mirror of this step: macOS has no
         # `timeout`, and a missing binary there fails as command-not-found,
-        # which is exactly the "looks like something else" failure being fixed.
+        # masquerading as some other failure.
         run: |
           set +e
           timeout --signal=INT --kill-after=60s 90m \

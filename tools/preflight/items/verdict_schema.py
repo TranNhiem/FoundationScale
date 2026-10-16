@@ -25,17 +25,15 @@ from .._fixtures import (
 def _check_verdict_schema(cfg, s, env, shared, registry=None) -> CheckResult:
     """Item 4: 'corrupt-artifact red-team dry run must flip gates before any launch.'
 
-    Not a data check: this re-runs EVERY peer check's MUST_FIRE lanes against
-    fresh synthesized corrupt worlds, right now, on this login node, inside
-    this clearance. A peer whose lane does not flip FAILS this check and the
-    launch. A peer that declares zero lanes FAILS this check by name — shipping
-    no positive control is disqualifying whether or not the check passes on
-    the happy path (--self-test enforces the MUST_PASS half offline; this
-    check enforces the MUST_FIRE half at every launch).
+    Re-runs every peer check's MUST_FIRE lanes against fresh corrupt worlds
+    in this process. A lane that does not flip FAILS this check and the
+    launch. A peer declaring zero lanes also FAILS by name (--self-test
+    covers the MUST_PASS half offline; this enforces MUST_FIRE at every
+    launch).
 
-    'Flipped' means verdict.blocking AND verdict is not ERROR: an ERROR says
-    the detector died on the corrupt input, which is a verifier exception,
-    not a demonstrated firing — doctrine 4 binds detectors too.
+    'Flipped' means verdict.blocking and not ERROR: an ERROR means the
+    detector died on the corrupt input — a verifier exception, not a
+    demonstrated firing (doctrine 4 binds detectors too).
     """
     peers = [
         c

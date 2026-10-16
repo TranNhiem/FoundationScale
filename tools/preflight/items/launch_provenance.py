@@ -60,10 +60,9 @@ def _check_launch_provenance(cfg, s, env, shared, registry=None) -> CheckResult:
             )
     evidence["checkpoints"] = ck_reports
 
-    # (b) resume guard, shown statically. Declared as what it is: a text
-    # sweep proving the resume path NAMES the hash AND has a raise/exit —
-    # existence proof of the guard, not of its every branch (human confirms;
-    # see 'does NOT close').
+    # (b) resume guard, shown statically: text sweep proving the resume path
+    # NAMES the hash AND has a raise/exit — existence proof only, not of every
+    # branch (human confirms; see 'does NOT close').
     guard_hits = {}
     guard_bad = []
     for path in s["resume_guard_files"]:

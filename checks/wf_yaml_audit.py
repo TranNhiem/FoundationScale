@@ -4,22 +4,19 @@
 Usage:
   wf_yaml_audit.py FILE [FILE ...]      audit every listed workflow file
   wf_yaml_audit.py --doctor-blocker1 F  rewrite F in place so it carries
-                                        BLOCKER 1's original two-line
-                                        column-zero form verbatim (MUST_FIRE
-                                        setup helper; fails closed if the
-                                        fixed needle is not present)
+                                        BLOCKER 1's original two-line column-zero
+                                        form verbatim (MUST_FIRE setup helper;
+                                        fails closed if the fixed needle is missing)
 
 Doctrine wiring:
-  (1) argv carrying 0 files is RED -- a check over zero units is UNMEASURED,
-      never a pass.
-  (2) the caller puts the examined count on the wire; this script prints the
-      N/N result and the parser mode actually used.
-  (3) the MUST_FIRE lives in .github/workflows/ci.yml: it calls
-      --doctor-blocker1 on a copy of ci.yml and demands this audit refuse it.
+  (1) 0 files in argv is RED -- a check over zero units is UNMEASURED, never a pass.
+  (2) prints the N/N result and the parser mode actually used.
+  (3) the MUST_FIRE lives in .github/workflows/ci.yml: it calls --doctor-blocker1 on a
+      copy of ci.yml and demands this audit refuse it.
   (4) unreadable is RED, not empty; missing is not zero.
   (5) PyYAML is used when importable; otherwise this degrades to a structural
-      indentation scan for BLOCKER 1's exact shape and SAYS SO plainly in
-      every message -- it never claims a full parse it did not perform.
+      indentation scan for BLOCKER 1's exact shape and SAYS SO in every message --
+      it never claims a full parse it did not perform.
 Output avoids the verify_summary-ingested tokens by design: no 'green',
 'passed', or 'SUMMARY' on any path, and no suite domain prefix at line start.
 """
@@ -32,10 +29,9 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
-# The four-state contract (#464). 1 is absent on purpose: CPython uses 1 for an
-# uncaught exception, so a gate that answers 1 gives a crash and a finding the
-# same answer -- and CI's MUST_FIRE probes for this gate read only "nonzero",
-# so a gate that merely raised would satisfy them.
+# Exit 1 is deliberately absent: CPython reserves 1 for an uncaught exception, so a
+# crash and a finding would answer the same -- and CI's MUST_FIRE probes read only
+# "nonzero", so a gate that merely raised would satisfy them (#464).
 EXIT_CLEAR = 0
 EXIT_RED = 5
 EXIT_UNMEASURED = 95
@@ -50,10 +46,9 @@ BLOCKER1_BROKEN = (
 
 
 def structural_check(text: str) -> str | None:
-    # NOT a YAML parse. Fallback scan for BLOCKER 1's shape only: content of a
-    # '|' or '>' block scalar that dedents BELOW the opener's base indent and
-    # is then followed by a line back at the block-content indentation -- e.g.
-    # a continuation line demoted to column zero.
+    # NOT a YAML parse. Fallback scan for BLOCKER 1's shape only: content of a '|'
+    # or '>' block scalar that dedents BELOW the opener's base indent, then a line
+    # back at the block-content indent -- a continuation demoted to column zero.
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -104,11 +99,11 @@ def audit(paths: Sequence[str]) -> int:
 
         have_yaml = True
     except ImportError:
-        # Deliberately NOT rebinding `yaml = None` on this arm. Nothing below
-        # touches the name unless have_yaml is True, and a None-bound module
-        # name would turn a future unguarded call into an AttributeError that
-        # `except Exception` would then report as RED-unparseable -- a missing
-        # parser laundered into a verdict about the FILE (doctrine 5).
+        # Deliberately NOT rebinding `yaml = None` on this arm. The name is only
+        # touched under have_yaml; a None-bound module name would turn a future
+        # unguarded call into an AttributeError that `except Exception` reports as
+        # RED-unparseable -- a missing parser laundered into a verdict about the
+        # FILE (doctrine 5).
         have_yaml = False
     if have_yaml:
         mode = "full YAML parse via PyYAML"
@@ -180,18 +175,13 @@ def doctor(path: str) -> int:
 
 
 def main(argv: Sequence[str]) -> int:
-    # Keyed on argv[0], not on `argv[:1] == [...]`. NOT a live defect: the sole
-    # caller passes sys.argv[1:], a list, so the slice form compared equal and
-    # CI's --doctor-blocker1 rig has always worked. It is the `Sequence[str]`
-    # annotation above that makes the old form wrong -- a tuple slice never
-    # equals a list literal, so any non-list caller this signature now invites
-    # would silently demote the flag to "audit a file by that name" and report
-    # a verdict about a nonexistent file instead of rebuilding BLOCKER 1.
-    # Widening the declared input without widening the parse is how that lands.
+    # Keyed on argv[0], not `argv[:1] == [...]`: the `Sequence[str]` annotation allows
+    # tuples, and a tuple slice never equals a list literal, so a non-list caller would
+    # silently demote the flag to "audit a file by that name" and report on a nonexistent
+    # file instead of rebuilding BLOCKER 1. Parse exactly what the signature declares.
     #
-    # #464. The boundary lives HERE, not only under `if __name__`, because main()
-    # is callable as a function and a guard one frame out would leave the contract
-    # unheld for any caller that does (the #463 lesson, same shape).
+    # #464. The boundary lives HERE, not only under `if __name__`, because main() is
+    # callable as a function and a guard one frame out would leave the contract unheld.
     try:
         if argv and argv[0] == "--doctor-blocker1":
             if len(argv) != 2:

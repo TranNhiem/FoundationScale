@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """Probe: the training plane has two axes, and a zero on one is not a zero on both.
 
-WHY THIS EXISTS (findings #245 and #223)
-    Four shipped review documents stated "src/foundationscale/ has no training
-    code", citing an ad-hoc six-marker AST probe that was never committed.
-    Those six markers read 0 across all git-tracked src/*.py -- and still do.
-    But the package DOES train: src/foundationscale/train/loop.py builds a
-    transformers.Trainer and calls trainer.train(), importing torch and
-    transformers at FUNCTION scope, so every module-scope marker stays at
-    zero.  The old probe was literally true and materially misleading: it
-    could not distinguish "does not train" from "DELEGATES training to a
-    third party".  Because it lived in no committed file, nothing went red
-    when train/ landed.  This probe is the committed, controlled replacement.
+WHY: a marker probe limited to module scope reads 0 across src/ even though
+src/foundationscale/train/loop.py builds a transformers.Trainer and calls
+trainer.train() with torch/transformers imported at FUNCTION scope.  It
+cannot distinguish "does not train" from "DELEGATES training to a third
+party".  This probe makes that distinction explicit and commits the analysis
+and its controls in one file.
 
 TWO AXES, REPORTED SEPARATELY, NEVER MERGED
     Axis A -- PRIMITIVES: does src/ IMPLEMENT training itself?
@@ -22,62 +17,52 @@ TWO AXES, REPORTED SEPARATELY, NEVER MERGED
         fit_or_train_or_save_call (any .train()/.save_model()/.fit()),
         automodel_from_pretrained (AutoModel*.from_pretrained),
         datacollator_construction (DataCollator*), and -- the marker that
-        makes the old zero legible -- function_scope_lazy_import of torch /
+        makes an axis-A zero legible -- function_scope_lazy_import of torch /
         transformers / accelerate / datasets / peft.
 
 VERDICT SEMANTICS (the design; do not soften it)
-    * Axis A nonzero            -> IMPLEMENTS-PRIMITIVES.  Reported, exit 0.
+    * Axis A nonzero             -> IMPLEMENTS-PRIMITIVES.  Reported, exit 0.
                                    Implementing primitives is not an error.
-    * Axis A zero, Axis B zero  -> NO-TRAINING-PLANE.  A plain finding, exit 0.
-    * Axis A zero, Axis B NONZERO -> the #223 condition.  Exit 5 (RED) IF AND
-                                   ONLY IF a git-tracked *.md still asserts
-                                   a retired bare-absence form (see DOC
-                                   ASSERTIONS below).  Otherwise exit 0 with the
-                                   two-axis summary.  The zero alone must never
-                                   again be publishable as an absence.
-    * Zero files scanned        -> 95 UNMEASURED.  Never 0: all([]) is True,
-                                   and that vacuity is the bug this repository
-                                   exists to prevent.
+    * Axis A zero, Axis B zero  -> NO-TRAINING-PLANE.  Plain finding, exit 0.
+    * Axis A zero, Axis B NONZERO -> exit 5 (RED) IF AND ONLY IF a git-tracked
+                                   *.md still asserts a retired bare-absence
+                                   form (see DOC ASSERTIONS).  Otherwise exit 0
+                                   with the two-axis summary.  The zero alone is
+                                   never publishable as an absence.
+    * Zero files scanned        -> 95 UNMEASURED.  Never 0: all([]) is True.
     * git unavailable / not a repo / index unreadable -> 96 REFUSE, with git's
-                                   own stderr.  There is no filesystem fallback.
+                                   own stderr.  No filesystem fallback.
 
 DENOMINATOR
     `git ls-files -z -- src`, filtered to *.py, decoded utf-8, run from the
     root resolved by `git rev-parse --show-toplevel`.  NEVER rglob: a
-    blocklist walk cannot define "the repository", and a stale build/ tree
-    already doubled this package's line count once (#244).  The file count
-    is printed inside every verdict line.
+    blocklist walk cannot define "the repository".  The file count is printed
+    inside every verdict line.
 
 DOC ASSERTIONS
     ALL git-tracked *.md are scanned (compiled case-insensitive regexes) --
     repo-wide, not just docs/, because README.md carries this claim too --
-    for the retired bare-absence forms.  Those phrasings are RETIRED as of
-    #245: the corrected form always names both axes.  Each hit is reported as
-    file:line.  The scanner is inside its own denominator -- this module's
-    source contains those patterns as string literals -- so its own file is
-    excluded by RESOLVED path, and no general allowlist is added.
+    for the retired bare-absence forms.  The corrected form always names both
+    axes.  Each hit is reported as file:line.  The scanner is inside its own
+    denominator (its source holds the patterns as string literals) and is
+    excluded by RESOLVED path; no general allowlist is added.
 
 CONTROLS (--self-test)
-    Seven, each built in a tempfile.TemporaryDirectory with real source,
-    each run through the REAL analysis functions (never a re-implementation),
-    each asserting exact expected axis counts:
-      MUST_FIRE  planted delegating trainer: imports only inside a function,
-                 Trainer(...) then .train().  Axis A stays 0, Axis B >= 1.
-                 This is the positive control #223 lacked.
-      MUST_FIRE  planted primitive trainer: all six axis-A markers >= 1.
+    Each is built in a tempfile.TemporaryDirectory with real source and run
+    through the REAL analysis functions (never a re-implementation), asserting
+    exact axis counts with explicit MUST_FIRE / MUST_PASS polarity:
+      MUST_FIRE  delegating trainer (imports only inside a function,
+                 Trainer(...) then .train()): axis A stays 0, axis B >= 1.
+      MUST_FIRE  primitive trainer: all six axis-A markers >= 1.
       MUST_PASS  pure-verification stdlib module: both axes 0.
-      MUST_PASS  retired phrasings in string literals and comments only:
-                 both axes 0 (use vs mention).
-      MUST_FIRE  a doc fixture stating a retired form: exactly 1 hit at the
-                 right line number.
-      MUST_PASS  a doc fixture stating the corrected two-axis form: 0 hits --
-                 the negative twin, without which control 5 validates a
-                 scanner that matches everything.
-      MUST_PASS  empty denominator: analysis reports UNMEASURED and the exit
-                 helper maps it to 95, not to a clean pass.
-    The harness exits 5 if any control misbehaves, and refuses to pass over
-    an empty control list -- a control harness over zero controls is the same
-    vacuous pass this whole gate exists to kill.
+      MUST_PASS  retired phrasings in strings/comments only: both axes 0
+                 (use vs mention).
+      MUST_FIRE  doc fixture stating a retired form: 1 hit at the right line.
+      MUST_PASS  doc fixture stating the corrected two-axis form: 0 hits.
+      MUST_PASS  empty denominator reported UNMEASURED and mapped to 95.
+    The harness exits 5 if any control misbehaves, and refuses to pass over an
+    empty control list -- a harness over zero controls is the same vacuous
+    pass this gate exists to kill.
 """
 
 from __future__ import annotations
@@ -138,15 +123,12 @@ _RETIRED_ASSERTIONS = tuple(
         r"zero\s+training\s+code",
         r"no\s+trainer\s+code",
         r"nothing\s+that\s+builds\s+a\s+model",
-        # Added by MEASUREMENT, not by imagination.  While #245's corrections
-        # were being applied, a freshly generated deliverable reproduced the
-        # defect verbatim as "zero training constructs" -- a phrasing none of
-        # the four patterns above matches, in a document written AFTER the
-        # corrections landed.  A pattern list assembled from the wordings one
-        # happens to remember is a denominator that grows only when someone
-        # notices; this entry is the one case where the corpus taught the
-        # detector.  Note the CORRECTED wording deliberately says "no training
-        # PRIMITIVES", which no pattern here matches and control 6 pins.
+        # Corpus-derived pattern: "zero training constructs" was matched by none
+        # of the four patterns above; when the corpus teaches the detector, add
+        # the entry here -- a list that grows only from memory is not a
+        # denominator.  Note the CORRECTED wording deliberately says "no
+        # training PRIMITIVES", which no pattern here matches (control 6 pins
+        # that distinction).
         r"zero\s+training\s+constructs",
     )
 )
@@ -154,11 +136,10 @@ _RETIRED_ASSERTIONS = tuple(
 
 class GateArgumentParser(argparse.ArgumentParser):
     def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
-        # argparse exits 2 on bad arguments; without this remap an operator
-        # typo would escape the four-code namespace this probe advertises.
-        # NoReturn, not None: the base method is Never, and an override that
-        # merely claims None would let a caller treat a remapped REFUSE as a
-        # fallthrough and carry on to publish a verdict this probe refused.
+        # argparse exits 2 on bad arguments: remap it into the four-code
+        # namespace this probe advertises.  NoReturn, not None: the base method
+        # is Never, and an override claiming None lets a caller treat the
+        # remapped REFUSE as a fallthrough and publish a verdict it refused.
         if message:
             sys.stderr.write(message)
         raise SystemExit(EXIT_CLEAR if status == 0 else EXIT_REFUSE)
@@ -194,9 +175,9 @@ class ProbeReport:
     @property
     def status(self) -> str:
         # Order matters.  An empty sweep is UNMEASURED, never a clean
-        # NO-TRAINING-PLANE: all([]) is True and that is the bug.  A
-        # delegation is its own verdict, because the axis-A zero that
-        # accompanies it was the misleading one.
+        # NO-TRAINING-PLANE: all([]) is True and that is the bug.  A delegation
+        # is its own verdict, because the axis-A zero that accompanies it is the
+        # misleading one.
         if self.files_scanned == 0:
             return STATUS_UNMEASURED
         if self.axis_a_total > 0:
@@ -219,9 +200,8 @@ def _terminal_name(func: ast.expr) -> str | None:
 class _TrainingPlaneVisitor(ast.NodeVisitor):
     """One pass over one file, filling both axes from the SAME parse.
 
-    A merged detector could never answer "is the zero an absence or a
-    delegation?"; keeping two independent counter dicts on one walk is what
-    makes the two-axis report cheap and impossible to conflate.
+    Two independent counter dicts on one walk make the two-axis report cheap
+    and keep "is this zero an absence or a delegation?" answerable.
     """
 
     def __init__(self) -> None:
@@ -331,10 +311,10 @@ def analyze_sources(paths: list[Path]) -> ProbeReport:
 def scanned_docs(paths: list[Path], exclude: Path) -> list[Path]:
     """The doc files this scanner actually reads -- its denominator.
 
-    Split out from ``scan_doc_assertions`` so the count on the wire and the
-    set that was read are the same object.  Without this, "no tracked doc
-    asserts the retired form" prints identically whether 23 docs were clean
-    or the glob matched zero files, and the second case is ``all([])``.
+    Split out from ``scan_doc_assertions`` so the reported count and the set
+    actually read are the same object.  Otherwise "no tracked doc asserts the
+    retired form" prints identically over clean docs and over zero docs (the
+    ``all([])`` case).
     """
     exclude_resolved = exclude.resolve()
     return [path for path in paths if path.resolve() != exclude_resolved]
@@ -344,11 +324,10 @@ def scan_doc_assertions(paths: list[Path], exclude: Path) -> list[DocHit]:
     exclude_resolved = exclude.resolve()
     hits: list[DocHit] = []
     for path in paths:
-        # This scanner is inside its own denominator: this module's source
-        # carries the retired patterns as string literals (the regexes above
-        # and the fixtures below).  It is excluded by RESOLVED path, exactly
-        # one file, and no general allowlist is added -- a named exclusion is
-        # an admission; a list would be a loophole.
+        # This module is inside its own denominator (it carries the patterns
+        # as string literals), so it is excluded by RESOLVED path -- exactly one
+        # file, and no general allowlist: a named exclusion is an admission; a
+        # list would be a loophole.
         if path.resolve() == exclude_resolved:
             continue
         try:
@@ -375,14 +354,13 @@ def exit_code_for(report: ProbeReport, doc_hits: int, docs_scanned: int = -1) ->
         # while some tracked document still publishes the retired bare form.
         return EXIT_RED
     if docs_scanned == 0:
-        # The doc axis has its OWN denominator, and zero docs is UNMEASURED,
-        # not clean (doctrine 1).  Without this branch a broken glob and a
-        # genuinely corrected corpus both print "no tracked doc asserts the
-        # retired form" and both exit 0 -- the source axis would carry a
-        # verdict the doc axis never earned.  ``docs_scanned=-1`` is the
-        # not-supplied default used by callers that measure only the source
-        # axis; it is deliberately not 0, so "not asked" cannot masquerade
-        # as "asked and empty".
+        # Zero docs is UNMEASURED (doctrine 1), not clean: without this branch
+        # a broken glob and a genuinely corrected corpus both print "no tracked
+        # doc asserts the retired form" and exit 0, with the source axis carrying
+        # a verdict the doc axis never earned.  ``docs_scanned=-1`` is the
+        # not-supplied default for callers measuring only the source axis; it is
+        # deliberately not 0, so "not asked" cannot masquerade as "asked and
+        # empty".
         return EXIT_UNMEASURED
     return EXIT_CLEAR
 
@@ -431,13 +409,9 @@ def _tracked_files(root: Path, subdir: str, suffix: str) -> list[Path]:
 def _tracked_markdown(root: Path) -> list[Path]:
     """Every git-tracked ``*.md``, not just the ones under ``docs/``.
 
-    Scoping this axis to ``docs/`` was the #205 shape: the instrument is
-    instance-scoped while the defect class is plane-wide.  8 of the repo's 23
-    tracked markdown files live outside ``docs/`` -- including ``README.md``,
-    which is the single most-read document here and the one deliverable 9 is
-    about to rewrite with exactly the claim these patterns retire.  A verdict
-    that says "no doc asserts the retired form" while structurally unable to
-    read ``README.md`` is a true sentence over the wrong denominator.
+    README.md lives outside ``docs/`` and often carries these claims.  A
+    docs/-scoped scan makes "no doc asserts the retired form" a true sentence
+    over the wrong denominator.
     """
     raw = _git(root, ["ls-files", "-z"])
     names = [name for name in raw.split("\0") if name]
@@ -447,10 +421,10 @@ def _tracked_markdown(root: Path) -> list[Path]:
 def _init_fixture_repo(root: Path) -> bool:
     """Stage a throwaway tree into a real git index for the scan-scope control.
 
-    ``ls-files`` reads the INDEX, so ``add`` is sufficient and no commit (and
-    therefore no user identity, no hooks, no signing key) is needed.  Returns
-    False rather than raising if git is unavailable: the caller turns that into
-    a declared UNMEASURED control, never a silent pass.
+    ``ls-files`` reads the INDEX, so ``add`` is sufficient -- no commit, no
+    user identity, no hooks, no signing key.  Returns False rather than
+    raising if git is unavailable: the caller turns that into a declared
+    UNMEASURED control, never a silent pass.
     """
     env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
     for args in (["init", "-q"], ["add", "-A"]):
@@ -606,14 +580,11 @@ def run_self_test() -> int:
         # MUST_FIRE 5 -- the doc scanner must catch the retired forms and pin
         # the exact line; a hit without a line number is not actionable.
         #
-        # The fixture carries ONE line per entry in _RETIRED_ASSERTIONS, and
-        # the assertion is that EVERY pattern fired.  An earlier draft planted
-        # a single sentence and checked "1 hit at line 3": that is a control
-        # over one pattern reported as a control over the table, so four of
-        # five patterns would have sat in no denominator and could have been
-        # broken silently.  A pattern that is never exercised is not a
-        # detector, it is a comment.  Adding a pattern above without adding
-        # its line here turns this leg RED, which is the intended coupling.
+        # ONE line per entry in _RETIRED_ASSERTIONS, and the assertion is that
+        # EVERY pattern fired.  A single-sentence fixture would exercise one
+        # pattern and leave the rest in no denominator.  Adding a pattern above
+        # without adding its line here turns this leg RED -- that coupling is
+        # intended.
         retired_lines = [
             "This package contains no training code.",
             "The package has zero training code of its own.",
@@ -671,14 +642,11 @@ def run_self_test() -> int:
             )
         )
 
-        # MUST_FIRE 8 -- the DOC axis has its own denominator, and zero docs
-        # must not inherit the source axes' clean reading.  This is control 7's
-        # argument applied one axis over: the first version of this probe
-        # printed "No tracked doc asserts the retired bare form" and exited 0
-        # whether it had read 23 docs or none, because only the source
-        # denominator was on the wire.  The fixture below is a healthy source
-        # tree (delegating, exactly the live repo's shape) paired with an EMPTY
-        # doc set, and the assertion is that the pair does NOT come out clean.
+        # MUST_FIRE 8 -- the DOC axis has its own denominator; zero docs must
+        # not inherit the source axes' clean reading.  Otherwise a broken glob
+        # and a corrected corpus both print the same sentence and exit 0.  The
+        # fixture pairs a healthy delegating source tree (the live repo's shape)
+        # with an EMPTY doc set and asserts the pair does NOT come out clean.
         delegating = root / "delegating_for_doc_axis.py"
         delegating.write_text(
             textwrap.dedent(
@@ -712,14 +680,10 @@ def run_self_test() -> int:
         )
 
         # MUST_FIRE 9 -- the doc denominator reaches the REPO ROOT, not just
-        # docs/.  Widening the scan without a control would only swap one
-        # unverified scope for another: the old `ls-files -- docs` and the new
-        # bare `ls-files` produce identical output on any tree whose markdown
-        # all lives under docs/, so a regression to the narrow form would go
-        # unnoticed here and be caught only by a false CLEAR on the live repo.
-        # This fixture plants the retired phrasing in a ROOT README.md -- the
-        # exact file deliverable 9 rewrites -- and fails unless the scan both
-        # enumerates it and hits it.
+        # docs/.  A regression to `ls-files -- docs` is invisible on a tree
+        # whose markdown all lives under docs/ and is caught only as a false
+        # CLEAR later.  This fixture plants the retired phrasing in a root
+        # README.md and fails unless the scan enumerates it AND hits it.
         scope = root / "scope_repo"
         (scope / "docs").mkdir(parents=True)
         (scope / "README.md").write_text(
@@ -771,10 +735,9 @@ def run_self_test() -> int:
         for failure in failures:
             print("CONTROL DEFECT: " + failure)
         return EXIT_RED
-    # DERIVED, never stated.  This sentence read "3x MUST_FIRE ... 4x MUST_PASS"
-    # as a literal, and adding an eighth control made the summary false while
-    # every control still passed -- a claim that drifts from its own evidence
-    # while reporting green is precisely the defect class this gate exists for.
+    # DERIVED, never stated: a literal like "3x MUST_FIRE ... 4x MUST_PASS"
+    # drifts from the evidence the moment a control is added, while still
+    # reporting green -- the exact defect class this gate exists for.
     fire = sum(1 for name, _, _ in results if name.startswith("MUST_FIRE"))
     keep = sum(1 for name, _, _ in results if name.startswith("MUST_PASS"))
     if fire + keep != total:
@@ -792,12 +755,11 @@ def run_self_test() -> int:
         f"{fire}x MUST_FIRE produced the reading only a real defect produces; "
         f"{keep}x MUST_PASS stayed clean over nonzero denominators",
     )
-    # Final line in the SAME wording checks/countables_drift.py prints, because
-    # the launcher suite parses it with one shared sed expression.  A gate that
-    # invented its own phrasing here would not go red in the harness -- it would
-    # fall through to the "unparseable" branch, which is fail-closed but reports
-    # the wrong reason, and the next maintainer would debug the parser instead
-    # of the gate.  Counts are derived above, never restated.
+    # Final line in the SAME wording checks/countables_drift.py prints: the
+    # launcher suite parses it with one shared sed expression.  Custom phrasing
+    # would land in the "unparseable" branch -- fail-closed but reporting the
+    # wrong reason, sending the next maintainer to the parser, not the gate.
+    # Counts are derived above, never restated.
     print(
         f"self-test denominator: {total} of {total} controls ({fire} MUST_FIRE, {keep} MUST_PASS)"
     )
@@ -899,10 +861,10 @@ def main(argv: list[str] | None = None) -> int:
     for marker in AXIS_B_MARKERS:
         report(f"AXIS B {marker}", denominator, probe_report.axis_b[marker])
 
-    # The doc scan is a SECOND axis with its OWN denominator, and it is printed
-    # whether or not it found anything.  "No tracked doc asserts the retired
-    # form" over zero docs and over 23 clean docs are different facts that were
-    # printing the same sentence.
+    # The doc scan is a SECOND axis with its OWN denominator and is printed
+    # whether or not it found anything: "no tracked doc asserts the retired
+    # form" over zero docs and over clean docs are different facts that must
+    # not print identically.
     report("AXIS C retired_doc_assertion", len(docs_read), len(doc_hits))
 
     for bad in probe_report.unparseable:

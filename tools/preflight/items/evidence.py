@@ -25,23 +25,21 @@ from .._core import (
 
 
 def _check_evidence_completeness(cfg, s, env, shared, registry=None) -> CheckResult:
-    """Item 8: the evidence the other checks consumed is complete and LIVE.
+    """Item 8: evidence the other checks consumed is complete and LIVE.
 
-    Contract: evidence.log_glob resolves to exactly world_size per-rank logs;
-    every log parses evidence.mem_regex (one capture group, MiB, float) ≥1
-    time; no log's mtime is older than evidence.max_log_age_s; if
-    evidence.slurm_job_id is set, `bash -lc 'sacct …'` (item 8's wrapping
-    discipline is satisfied BY CONSTRUCTION: the only Slurm query this file
-    ever makes is that literal argv) must corroborate the job; a null job id
-    requires the declared allow_no_slurm opt-out, recorded loudly.
+    Contract: evidence.log_glob → exactly world_size per-rank logs, each
+    parsing evidence.mem_regex (one capture group, MiB, float) ≥1 time, with
+    mtime within evidence.max_log_age_s; a set evidence.slurm_job_id must be
+    corroborated by `bash -lc 'sacct …'` (the file's only Slurm query, so item
+    8's wrapping rule holds BY CONSTRUCTION); a null job id requires the
+    declared allow_no_slurm opt-out, recorded loudly.
     """
     world_size = int(cfg["world_size"])
     evidence: dict[str, Any] = {"world_size": world_size}
-    # glob.glob, deliberately: log_glob is an operator-supplied PATTERN (an
-    # absolute pattern in the real config), while Path.glob roots a relative
-    # pattern at a base dir and refuses absolute ones — a rewrite would change
-    # which rank logs this check enumerates. The sorted() order is itself part
-    # of the denominator, so it stays exactly where it is.
+    # glob.glob, deliberately: log_glob is an operator-supplied absolute
+    # pattern; Path.glob roots relative patterns and refuses absolute ones, so
+    # a rewrite would change which rank logs are enumerated. The sorted()
+    # order is part of the denominator — do not move it.
     paths = sorted(glob.glob(s["log_glob"]))  # noqa: PTH207 — see comment above
     evidence["logs_found"] = len(paths)
     evidence["log_paths"] = paths

@@ -118,10 +118,9 @@ _mk(
     None,
     _check_verdict_schema,
     lanes=[
-        # check 4's own positive control: a registry that contains a peer with NO
-        # fire lane must fail it by name. Exercised by the self-test harness with
-        # a doctored registry; declared here as a lane so the runtime red team
-        # covers meta-failure too.
+        # check 4's positive control: a peer with a NO fire lane must fail it by
+        # name. Exercised via a doctored registry so the runtime red team also
+        # covers meta-failure.
         _Lane(
             "peer-ships-no-fire-lane",
             "a peer check declares zero MUST_FIRE lanes",
