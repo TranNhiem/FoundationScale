@@ -81,7 +81,8 @@ def omni_decode(args: argparse.Namespace) -> None:
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing or unexpected:
         raise SystemExit(
-            f"REFUSE (96): code2wav weights mismatch missing={missing[:5]} unexpected={unexpected[:5]}"
+            f"REFUSE (96): code2wav weights mismatch "
+            f"missing={missing[:5]} unexpected={unexpected[:5]}"
         )
     model.to("cuda", torch.float32).eval()
     (args.out / "omnidec").mkdir(parents=True, exist_ok=True)

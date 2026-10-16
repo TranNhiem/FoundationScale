@@ -89,3 +89,25 @@ talker's pronunciation. The judge's floor on real FLEURS-vi recordings is 7.49 (
 better than our judge), Vietnamese speech *output* has a large measured one. O2 becomes
 "Vietnamese speech output for the omni model", with the cascade Omni thinker -> VoxCPM2 vi LoRA as
 the baseline to beat (6.80 here) and talker adaptation as the research arm.
+
+## SP-6 gate: no public encoder for the Omni talker's codec (2026-10-16)
+
+Training Qwen3-Omni's talker on new Vietnamese speech needs that speech as talker codec targets,
+and Qwen3-Omni ships only the decoder (Code2Wav). The public Qwen3-TTS-Tokenizer-12Hz has the same
+quantizer layout (16 x 2048 codes, 12.5 Hz at 24 kHz; Code2Wav's decoder transformer is larger).
+`codec_roundtrip.py` encodes 100 real FLEURS-vi recordings with that tokenizer and decodes the same
+codes with its own decoder and with Omni's Code2Wav (loaded alone, 230/230 weights, strict), judged
+by Qwen3-ASR (`cluster/run_codec_roundtrip.sh`).
+
+| 100 FLEURS-vi recordings | WER |
+|---|---|
+| real recording | 8.36 |
+| tokenizer codes -> tokenizer decoder | 9.77 |
+| tokenizer codes -> Omni Code2Wav | **252.9** (paired vs tokenizer decode: [+137, +374]) |
+
+Code ranges and layout were checked (every quantizer < 2048; codes passed as `[1, 16, frames]`),
+so this is not a plumbing error: the codebooks differ. Hypotheses read as filler ("lên lên",
+"em đi em đi"). Consequences: (1) the community talker-training repo that uses Kyutai Mimi tokens as
+targets with Code2Wav frozen cannot produce intelligible speech for the same reason; (2) direct talker
+adaptation first needs an encoder trained into Code2Wav's code space, a research project of its own;
+(3) the measured route to SP-6's bar today is the cascade (Omni thinker -> VoxCPM2 vi LoRA, 6.80).
