@@ -159,6 +159,10 @@ docs/deliverables/B1_architecture.md]
 
 ### FoundationSkills — the agent layer on top
 
+<p align="center">
+  <img src="assets/skills_lifecycle.png" alt="FoundationSkills lifecycle: goal, probe, plan, data, emit, human confirmation, FoundationScale, evaluation, auto_research" width="100%">
+</p>
+
 `FoundationSkills/` is a separate package (`pip install -e FoundationSkills`, CLI `fskills`). With it, an
 agent such as Claude Code turns a goal into a full experiment, never launching without the user's confirmed hash:
 
@@ -189,12 +193,17 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   enroot container backends (`FS_BACKEND=auto|slurm|enroot` in
   `launchers/fs_container_backend.sh`), one H100 tray. It is a concrete, hardened example,
   not a portable launcher.
-* Local machines, DGX Cloud / Lepton and Kubernetes appear on the poster as design
-  targets from the audit's scaling work (docs/deliverables/B2_scaling.md). In this
-  repository they are **unmeasured**: nothing here has run on them, and what would measure
-  them is the roadmap's structured-harness phases, not a claim in a README.
+* The poster's hardware row lists only estates with recorded runs: 2×A100
+  (examples/A100_2GPU.md), 2×H200 (validation_campaigns/vlm_2xh200) and GB200 trays, local
+  or under Slurm. DGX Cloud / Lepton and Kubernetes, which an earlier poster showed as design
+  targets from the audit's scaling work (docs/deliverables/B2_scaling.md), are
+  **unmeasured** here and no longer appear on it.
 
 ## 7. Supported training workflows
+
+<p align="center">
+  <img src="assets/training_stages.png" alt="Training stages: SFT, preference, RL and agentic RL with their algorithms, and the agentic RL rollout loop" width="100%">
+</p>
 
 * **Via the package**: any workflow `transformers.Trainer` supports, run under the gate
   plane — the loop validates topology and profile first, and save gates fire on the
@@ -252,12 +261,17 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
 * **Via the launchers as reference material**: one full fine-tune and one LoRA workflow
   (`launchers/launch_g4e4b_fullft_1tray.sh`, `launchers/launch_g4e4b_lora_1tray.sh`),
   estate-parameterized through environment variables rather than hard-coded paths.
-* **Not yet**: RL/post-training alignment pipelines, pre-training recipes and the unified
-  data contract remain roadmap items with falsification conditions in
-  docs/deliverables/. Nothing in the tree implements them. The RL plane carries
-  advantage estimators, losses and protocols but **zero** bound algorithms; the seams
-  every algorithm family must plug into are a design record, not a measurement.
-  [-> docs/RL_ALGORITHMS.md]
+* **Preference, RL and agentic RL**: the RL plane registers 20 algorithm names
+  (`src/foundationscale/rl/registry.py`). Measured with images on 2×H200: DPO, IPO, SimPO,
+  CPO and ORPO, and GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++ and RLOO
+  [-> validation_campaigns/vlm_2xh200/EVIDENCE.md]. Agentic RL (multi-turn tool use with
+  vLLM rollout) runs end to end on one GB200 tray
+  [-> validation_campaigns/agentic_rl_harness/EVIDENCE.md, docs/AGENTIC_RL.md]. For VLA,
+  GR00T N1.7 and openpi pi0.5 LIBERO results and verl-vla FPO RL reproduce their published
+  numbers within tolerance [-> docs/research/vla.md]. The remaining names are tested on
+  fixtures, not benchmarked. [-> docs/RL_ALGORITHMS.md]
+* **Not yet**: pre-training recipes and the unified data contract remain roadmap items
+  with falsification conditions in docs/deliverables/.
 
 [-> docs/WORKFLOWS.md]
 ## 8. Installation
@@ -422,7 +436,7 @@ model family. The seams that exist:
   (paths, model root, node identity) enters via environment, not source.
 
 What is *not* present: a curated recipe library or a parallelism-aware model wrapper. The
-catalogue on the poster is the audit's design output, not code in this tree.
+recipe catalogue an earlier poster showed is the audit's design output, not code in this tree.
 [-> docs/MODEL_INTEGRATION.md]
 
 ## 13. Dataset integration
@@ -441,7 +455,7 @@ rather than at NCCL init. Actual multi-process orchestration lives in the launch
 `launchers/fs_container_backend.sh` routes every in-container step — preflight probes and
 the training run alike — through one backend function, with `FS_USE_TORCHRUN` selecting
 torchrun on the enroot arm. A library-level distributed runtime (the DP/TP/PP/EP
-strategies on the poster) is design-stage; do not read this section as an API.
+strategies an earlier poster showed) is design-stage; do not read this section as an API.
 [-> docs/DISTRIBUTED.md]
 
 ## 15. Multi-node training

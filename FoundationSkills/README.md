@@ -1,5 +1,9 @@
 # FoundationSkills
 
+<p align="center">
+  <img src="../assets/skills_lifecycle.png" alt="FoundationSkills lifecycle with the human confirmation gate" width="100%">
+</p>
+
 FoundationSkills is the agent layer on top of FoundationScale. An engineer states a goal ("a manufacturing-domain reasoning model from a 7B base, on our H100 cluster, keep general ability"). An agent then uses the skills in this package to do the following:
 
 1. prepare the data;

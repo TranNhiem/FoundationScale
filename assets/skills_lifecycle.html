@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FoundationSkills — agentic model development lifecycle</title>
+<style>
+  :root{
+    --bg:#070b12; --panel:#0e1420; --panel2:#121a28; --line:#1f2a3c; --line2:#2a3850;
+    --text:#e8eef7; --dim:#93a1b8; --mute:#5f6d84;
+    --lime:#86d01f; --lime2:#b6f05a; --blue:#4c8dff; --pink:#ec4f9a; --amber:#f4a623; --violet:#9b6bff; --cyan:#2fd0d6;
+    --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:Inter,"SF Pro Display","Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);font-family:var(--sans);color:var(--text)}
+  #poster{width:2000px;padding:56px 64px 40px;
+    background:radial-gradient(1100px 520px at 90% -10%, rgba(47,208,214,.10), transparent 60%),
+               radial-gradient(900px 600px at -10% 70%, rgba(134,208,31,.06), transparent 60%), var(--bg)}
+  .eyebrow{font-family:var(--mono);font-size:20px;color:var(--cyan);letter-spacing:2px}
+  h1{font-size:64px;font-weight:900;letter-spacing:-1.5px;margin-top:10px}
+  h1 .s{color:var(--lime)}
+  .lead{font-size:25px;color:var(--dim);margin-top:14px;max-width:1500px;line-height:1.45}
+  .lead b{color:var(--text)}
+  .wrap{display:grid;grid-template-columns:1fr 470px;gap:26px;margin-top:40px}
+  .stage{position:relative;background:linear-gradient(180deg,var(--panel),#0b111b);border:1px solid var(--line);border-radius:22px;height:900px}
+  .stage svg.flow{position:absolute;inset:0}
+  .node{position:absolute;width:300px;background:var(--panel2);border:1px solid var(--line2);border-radius:16px;padding:18px 20px}
+  .node .step{font-family:var(--mono);font-size:15px;color:var(--mute)}
+  .node .nm{font-family:var(--mono);font-size:22px;font-weight:800;margin-top:4px}
+  .node .ds{font-size:16.5px;color:var(--dim);margin-top:8px;line-height:1.42}
+  .node.goal{border-color:rgba(76,141,255,.55)} .node.goal .nm{color:#9cc0ff}
+  .node.sk .nm{color:var(--cyan)} .node.sk{border-color:rgba(47,208,214,.45)}
+  .node.fs{border-color:rgba(134,208,31,.6);background:linear-gradient(135deg,rgba(134,208,31,.14),rgba(134,208,31,.04))} .node.fs .nm{color:var(--lime2)}
+  .node.ar{border-color:rgba(155,107,255,.55)} .node.ar .nm{color:#c3a6ff}
+  .human{position:absolute;width:330px;border-radius:18px;padding:20px 22px;border:2px solid var(--amber);
+    background:linear-gradient(135deg,rgba(244,166,35,.18),rgba(244,166,35,.05));box-shadow:0 0 40px rgba(244,166,35,.18)}
+  .human .step{font-family:var(--mono);font-size:15px;color:#d9a650}
+  .human .nm{font-size:25px;font-weight:900;color:#ffd28a;margin-top:4px;display:flex;align-items:center;gap:10px}
+  .human .ds{font-size:16.5px;color:#e9d3ad;margin-top:8px;line-height:1.42}
+  .hash{font-family:var(--mono);font-size:20px;margin-top:12px;padding:8px 12px;border-radius:8px;background:#0a0f17;border:1px dashed rgba(244,166,35,.6);color:#ffd28a;letter-spacing:1px;text-align:center}
+  .art{position:absolute;font-family:var(--mono);font-size:15px;color:#c9d4e6;background:#0a101a;border:1px solid var(--line2);border-radius:6px;padding:3px 9px;white-space:nowrap}
+  .side{display:flex;flex-direction:column;gap:20px}
+  .card{background:linear-gradient(180deg,var(--panel),#0b111b);border:1px solid var(--line);border-radius:22px;padding:24px 26px}
+  .card h3{font-size:24px;font-weight:800;margin-bottom:16px}
+  .card h3 span{font-family:var(--mono);font-size:15px;color:var(--mute);font-weight:500;margin-left:8px}
+  .gr{display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--line)}
+  .gr:first-of-type{border-top:none;padding-top:0}
+  .gr .gn{font-family:var(--mono);font-size:17px;font-weight:700;color:var(--cyan);min-width:0}
+  .gr .gd{font-size:16px;color:var(--dim);margin-top:4px;line-height:1.4}
+  .vds{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .vd{border-radius:12px;padding:12px 14px;border:1px solid;display:flex;align-items:center;gap:12px}
+  .vd .c{font-family:var(--mono);font-size:24px;font-weight:800;min-width:40px}
+  .vd .n{font-size:16px;font-weight:800;letter-spacing:.4px}
+  .pass{border-color:rgba(134,208,31,.6);background:rgba(134,208,31,.08);color:var(--lime2)}
+  .red{border-color:rgba(255,91,91,.6);background:rgba(255,91,91,.08);color:#ff8b8b}
+  .unm{border-color:rgba(244,166,35,.6);background:rgba(244,166,35,.08);color:#ffc766}
+  .ref{border-color:rgba(155,107,255,.6);background:rgba(155,107,255,.08);color:#c3a6ff}
+  .note{font-size:16px;color:var(--dim);margin-top:14px;line-height:1.45}
+  footer{display:flex;justify-content:space-between;margin-top:30px;font-size:18px;color:var(--mute)}
+  footer .gh{font-family:var(--mono);color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="poster">
+  <div class="eyebrow">FOUNDATIONSCALE · DECISION PLANE</div>
+  <h1>Foundation<span class="s">Skills</span> — agentic model development, with a human in the loop</h1>
+  <div class="lead">Agent skills <b>decide what to train</b>, prepare the data and write the launch spec; FoundationScale <b>executes and verifies</b>. Nothing reaches a GPU until a person confirms the exact plan.</div>
+
+  <div class="wrap">
+    <div class="stage">
+      <svg class="flow" width="1376" height="900" viewBox="0 0 1376 900">
+        <defs>
+          <marker id="ah" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11Z" fill="#5f6d84"/></marker>
+          <marker id="aa" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11Z" fill="#f4a623"/></marker>
+          <marker id="al" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11Z" fill="#86d01f"/></marker>
+          <marker id="av" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto"><path d="M1 1 L10 6 L1 11Z" fill="#9b6bff"/></marker>
+        </defs>
+        <g stroke="#5f6d84" stroke-width="2.5" fill="none">
+          <path d="M336 145 H360" marker-end="url(#ah)"/>
+          <path d="M670 145 H694" marker-end="url(#ah)"/>
+          <path d="M1004 145 H1028" marker-end="url(#ah)"/>
+          <path d="M1188 190 V378" marker-end="url(#ah)"/>
+          <path d="M1038 470 H990" marker-end="url(#ah)"/>
+        </g>
+        <path d="M650 470 H610" stroke="#f4a623" stroke-width="3" fill="none" marker-end="url(#aa)"/>
+        <path d="M450 590 V668" stroke="#86d01f" stroke-width="2.5" fill="none" marker-end="url(#al)"/>
+        <path d="M600 760 H694" stroke="#5f6d84" stroke-width="2.5" fill="none" marker-end="url(#ah)"/>
+        <path d="M1004 760 H1010 V336 H880 V214" stroke="#9b6bff" stroke-width="2.5" stroke-dasharray="9 7" stroke-linejoin="round" fill="none" marker-end="url(#av)"/>
+        <text x="1018" y="660" fill="#c3a6ff" font-family="JetBrains Mono, Menlo, monospace" font-size="15">next trial</text>
+      </svg>
+
+      <div class="node goal" style="left:36px;top:40px"><div class="step">START</div><div class="nm">goal_spec</div><div class="ds">Base model, data, target capability, hardware &amp; budget. Missing facts become questions, never guesses.</div></div>
+      <div class="node sk" style="left:370px;top:40px"><div class="step">01 · probe-first</div><div class="nm">probe --deep</div><div class="ds">Measures what the installed FoundationScale can really run.</div></div>
+      <div class="node sk" style="left:704px;top:40px"><div class="step">02</div><div class="nm">training.planner</div><div class="ds">Plan with a reason for every decision, cost estimates and a feasibility verdict.</div></div>
+      <div class="node sk" style="left:1038px;top:40px"><div class="step">03</div><div class="nm">data_engine</div><div class="ds">Clean · dedupe · format · shard. Readiness must be PASS.</div></div>
+
+      <div class="node sk" style="left:1038px;top:390px"><div class="step">04</div><div class="nm">training.emit</div><div class="ds">One launch spec + sbatch per stage. A gap is named, never worked around.</div></div>
+
+      <div class="human" style="left:650px;top:368px"><div class="step">05 · confirm-before-launch</div><div class="nm">
+        <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="8" r="5" fill="#ffd28a"/><path d="M3 25 C3 17 23 17 23 25Z" fill="#ffd28a"/></svg>Human confirms</div>
+        <div class="ds">The user reads back the plan hash. It is never shown, never auto-filled.</div>
+        <div class="hash">--confirm 3f9a…c21e</div></div>
+
+      <div class="node fs" style="left:300px;top:390px"><div class="step">06 · execution plane</div><div class="nm">FoundationScale</div><div class="ds">Launch on GPUs / Slurm. Gates return PASS · RED · UNMEASURED · REFUSED.</div></div>
+
+      <div class="node sk" style="left:300px;top:680px"><div class="step">07</div><div class="nm">evaluation</div><div class="ds">Pinned, offline benchmarks; base vs candidate regression check.</div></div>
+      <div class="node ar" style="left:704px;top:680px"><div class="step">08 · optional loop</div><div class="nm">auto_research</div><div class="ds">Budgeted trials, every launch token traced to one approval; hash-chained ledger.</div></div>
+
+      <span class="art" style="left:1200px;top:270px">readiness_report</span>
+      <span class="art" style="left:1060px;top:586px">fs_launch_spec ←</span>
+      <span class="art" style="left:466px;top:614px">run_manifest</span>
+      <span class="art" style="left:720px;top:236px;border-color:rgba(76,141,255,.45);color:#9cc0ff">training_plan</span>
+      <span class="art" style="left:704px;top:852px;border-color:rgba(155,107,255,.45);color:#c3a6ff">auto_research_report</span>
+      <span class="art" style="left:300px;top:852px">eval_report</span>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h3>Guardrails in code <span>not just prose</span></h3>
+        <div class="gr"><div><div class="gn">probe-first</div><div class="gd">Plan only against what was measured to run.</div></div></div>
+        <div class="gr"><div><div class="gn">confirm-before-launch</div><div class="gd">No job without the user's plan-hash read-back.</div></div></div>
+        <div class="gr"><div><div class="gn">measured-or-unmeasured</div><div class="gd">A check that did not run is never reported as a pass.</div></div></div>
+        <div class="gr"><div><div class="gn">refusal-surface</div><div class="gd">Refusals name exactly what is missing.</div></div></div>
+      </div>
+      <div class="card">
+        <h3>Four verdicts <span>exit codes</span></h3>
+        <div class="vds">
+          <div class="vd pass"><span class="c">0</span><span class="n">PASS</span></div>
+          <div class="vd red"><span class="c">5</span><span class="n">RED</span></div>
+          <div class="vd unm"><span class="c">95</span><span class="n">UNMEASURED</span></div>
+          <div class="vd ref"><span class="c">96</span><span class="n">REFUSED</span></div>
+        </div>
+        <div class="note">Combined results take the worst verdict; an empty set is UNMEASURED, never a vacuous pass.</div>
+      </div>
+      <div class="card">
+        <h3>Every rule is tested</h3>
+        <div class="note" style="margin-top:0">Each rule ships a fixture that must make it fire, and each skill ships routing &amp; behaviour evals that measure whether an agent picks and follows it.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer><span class="gh">github.com/TranNhiem/FoundationScale · FoundationSkills/</span><span>MIT License · open source</span></footer>
+</div>
+</body>
+</html>
