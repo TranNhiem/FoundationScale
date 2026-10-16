@@ -96,6 +96,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
         "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."
     ),
+    "src/foundationscale/vla/driving/metrics.py": (
+        "driving trajectory metrics (ADE, minADE with full-horizon selection, Alpamayo semantics): "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/longwam/libero.py": (
         "Long-WAM LIBERO client (per-step act, NumPy-version-safe array transport, refusals): "
         "line-covered by tests/vla, no mutation row yet."
