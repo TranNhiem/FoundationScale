@@ -779,6 +779,14 @@ PENDING_ENROLMENT: dict[str, str] = {
 }
 
 OUT_OF_SCOPE: dict[str, str] = {
+    "src/foundationscale/capability_manifest.py": (
+        "A5.2 declaration-only list (the video.decode_backends entry) with no logic to mutate; "
+        "its verify callable is the measurement, run by tests/test_capability_manifests.py"
+    ),
+    "src/foundationscale/agentic_rl/capability_manifest.py": (
+        "A5.2 declaration-only list (the agentic_rl.env_backends entry) with no logic to mutate; "
+        "the probe measures available_env_backends rather than trusting it"
+    ),
     "src/foundationscale/gates/fixtures.py": (
         "builds deterministic synthetic expert populations consumed by gate controls, so "
         "mutating it only perturbs the controls themselves"

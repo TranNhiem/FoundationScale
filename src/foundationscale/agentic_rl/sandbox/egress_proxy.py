@@ -9,9 +9,13 @@ The policy file is re-read on every connection, so a Harbor phase switch is one 
 
 Fails closed: an unreadable or unknown policy denies; IP literals are allowed only
 when listed exactly;
-``*.example.org`` matches subdomains, not the apex. Every decision is logged as one line on stderr.
+``*.example.org`` matches subdomains, not the apex. Every decision is logged as one line on stderr,
+and also appended to ``--log`` when given (the sandbox runner discards helper stderr, so a failed
+upstream connect left no record of its cause: B2.2 incident 5). A failed upstream connect is retried
+before it becomes a 502.
 
 Run: python -m foundationscale.agentic_rl.sandbox.egress_proxy --socket PATH --policy FILE
+     [--log FILE]
 Prints "ready" once listening.
 """
 
@@ -24,8 +28,12 @@ import ipaddress
 import json
 import sys
 from pathlib import Path
+from typing import TextIO
 
 _BUF = 65536
+_CONNECT_ATTEMPTS = 3
+_CONNECT_TIMEOUT_S = 15.0
+_log_file: TextIO | None = None
 
 
 def host_allowed(host: str, policy: dict) -> bool:
@@ -84,8 +92,36 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
             writer.close()
 
 
-def _log(verdict: str, method: str, host: str, port: int) -> None:
-    print(f"egress {verdict} {method} {host}:{port}", file=sys.stderr, flush=True)
+def _log(verdict: str, method: str, host: str, port: int, detail: str = "") -> None:
+    line = f"egress {verdict} {method} {host}:{port}" + (f" {detail}" if detail else "")
+    print(line, file=sys.stderr, flush=True)
+    if _log_file is not None:
+        print(line, file=_log_file, flush=True)
+
+
+async def _connect_upstream(
+    host: str, port: int, method: str
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Open the upstream connection, retrying transient failures (DNS, refused, timeout)."""
+    for attempt in range(1, _CONNECT_ATTEMPTS):
+        try:
+            return await asyncio.wait_for(asyncio.open_connection(host, port), _CONNECT_TIMEOUT_S)
+        except (OSError, asyncio.TimeoutError) as exc:
+            _log(
+                "RETRY", method, host, port, f"attempt={attempt} error={type(exc).__name__}: {exc}"
+            )
+            await asyncio.sleep(0.5 * 2 ** (attempt - 1))
+    try:
+        return await asyncio.wait_for(asyncio.open_connection(host, port), _CONNECT_TIMEOUT_S)
+    except (OSError, asyncio.TimeoutError) as exc:
+        _log(
+            "FAIL",
+            method,
+            host,
+            port,
+            f"attempt={_CONNECT_ATTEMPTS} error={type(exc).__name__}: {exc}",
+        )
+        raise
 
 
 async def _handle(
@@ -126,11 +162,8 @@ async def _handle(
         writer.close()
         return
     try:
-        up_reader, up_writer = await asyncio.wait_for(
-            asyncio.open_connection(host.strip("[]"), port), 30
-        )
+        up_reader, up_writer = await _connect_upstream(host.strip("[]"), port, method)
     except (OSError, asyncio.TimeoutError):
-        _log("FAIL", method, host, port)
         writer.write(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
         writer.close()
         return
@@ -165,7 +198,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument("--log", type=Path, default=None)
     args = parser.parse_args()
+    if args.log is not None:
+        global _log_file
+        args.log.parent.mkdir(parents=True, exist_ok=True)
+        _log_file = args.log.open("a", encoding="utf-8")  # noqa: SIM115 - lives as long as the proxy
     asyncio.run(serve(args.socket, args.policy))
 
 

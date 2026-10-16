@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import os
-import pkgutil
 import subprocess
 import sys
 import tempfile
@@ -52,6 +51,13 @@ class FSCapabilities:
     # full model, fp32 masters + optimizer state on the HOST).
     rl_adapter_support: bool | None = None
     pref_adapter_support: bool | None = None
+    # A5.1 explicit keys for the former blind spots: name -> {status, value, reason}, status
+    # measured|unmeasured. A value is only what this probe measured here; anything it could not
+    # measure is unmeasured with the reason, never inferred from a module or package name.
+    probe_keys: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # A5.2 rows of FS's self-declared capability manifests, each verified by its own measurement
+    # (interfaces.fs.manifest): status verified | contradicted | unmeasured.
+    manifest: list[dict[str, Any]] = field(default_factory=list)
     notes: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -63,6 +69,12 @@ class FSCapabilities:
         for key in ("train_objectives", "sharding_strategies", "executed_axes", "refused_axes", "rl_algorithms",
                     "rl_reward_kinds", "backends", "notes", "errors"):
             data[key] = list(getattr(self, key))
+        if not self.probe_keys:
+            # probe() always fills every A5.1 key; only a hand-built report (fixtures, pre-A5.1
+            # reports) has none, and it serializes as before: evidence hash-bound to it stays valid
+            del data["probe_keys"]
+        if not self.manifest:  # same rule as probe_keys: hand-built reports serialize as before
+            del data["manifest"]
         return data
 
     def check(
@@ -197,7 +209,7 @@ def _probe_sharding(errors: list[str]) -> tuple[str, ...]:
         return ()
 
 
-def _probe_backends(sharding: tuple[str, ...], fs_module: Any) -> tuple[str, ...]:
+def _probe_backends(sharding: tuple[str, ...], megatron_key: dict[str, Any]) -> tuple[str, ...]:
     mapping = {"ddp": "ddp", "fsdp": "fsdp"}
     backends: list[str] = []
     seen: set[str] = set()
@@ -205,16 +217,128 @@ def _probe_backends(sharding: tuple[str, ...], fs_module: Any) -> tuple[str, ...
         backend = mapping.get(strategy.lower())
         if backend:
             _add(backends, seen, backend)
-    try:
-        fs_path = getattr(fs_module, "__path__", None)
-        if fs_path is not None:
-            for info in pkgutil.walk_packages(fs_path, prefix="foundationscale.", onerror=lambda name: None):
-                if "megatron" in info.name:
-                    _add(backends, seen, "megatron")
-                    break
-    except Exception:
-        pass
+    # "megatron" needs the FS lane module AND megatron.core importable here (A5.1); a module
+    # whose name merely contains "megatron" was the only evidence before, and said nothing
+    # about whether the lane could run
+    value = megatron_key.get("value") or {}
+    measured = megatron_key.get("status") == _MEASURED
+    if measured and value.get("fs_lane") and value.get("megatron_core"):
+        _add(backends, seen, "megatron")
     return tuple(backends)
+
+
+_MEASURED, _UNMEASURED = "measured", "unmeasured"
+PROBE_KEYS = (
+    "agentic_rl", "speech", "video_frame_budget", "sft_assistant_label_mask", "megatron_bridge",
+)
+
+
+def _key(status: str, value: Any = None, reason: str = "") -> dict[str, Any]:
+    return {"status": status, "value": value, "reason": reason}
+
+
+def _has_module(name: str) -> bool:
+    """find_spec without importing the module itself; a broken parent package counts as absent."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _failed(what: str, exc: BaseException) -> dict[str, Any]:
+    return _key(_UNMEASURED, None, f"{what} failed: {type(exc).__name__}: {exc}")
+
+
+def _probe_agentic_rl_key() -> dict[str, Any]:
+    try:
+        import foundationscale.agentic_rl  # type: ignore  # noqa: F401, PLC0415
+    except Exception as exc:
+        return _failed("import foundationscale.agentic_rl", exc)
+    return _key(_MEASURED, {"importable": True},
+                "module importable here; engines, env backends and reward kinds are measured "
+                "inside the declared runtime by interfaces.fs.agentic_probe, not by this "
+                "host probe")
+
+
+def _probe_speech_key() -> dict[str, Any]:
+    try:
+        from foundationscale.train import speech_kinds  # type: ignore  # noqa: F401, PLC0415
+    except Exception as exc:
+        return _failed("import foundationscale.train.speech_kinds", exc)
+    decode = _has_module("soundfile")
+    return _key(_MEASURED, {"module": True, "audio_decode": decode},
+                "" if decode else "soundfile is not importable here: audio rows cannot be decoded")
+
+
+def _probe_video_key() -> dict[str, Any]:
+    try:
+        from foundationscale import video  # type: ignore  # noqa: PLC0415
+
+        decode = sorted(str(b) for b in video.available_backends())
+    except Exception as exc:
+        return _failed("video probe (foundationscale.video.available_backends)", exc)
+    value = {"samplings": list(video.SAMPLINGS), "decode_backends": decode,
+             "declaration_env": video.VIDEO_FRAMES_ENV, "frame_envelope": None}
+    return _key(_MEASURED, value,
+                "the frame count N is caller-declared; no measured frame envelope exists, so a "
+                "frame count beyond a measured run is UNMEASURED, never PASS")
+
+
+def _probe_label_mask_key() -> dict[str, Any]:
+    """Run FS's assistant_label_mask on a synthetic batch with a known answer (behavioural, CPU)."""
+    try:
+        import torch  # noqa: PLC0415
+
+        from foundationscale.train.conversation import (  # type: ignore  # noqa: PLC0415
+            TurnMarkers,
+            assistant_label_mask,
+        )
+
+        h1, h2, end, pad, x = 101, 102, 103, 0, -100
+        ids = torch.tensor([[9, h1, h2, 5, 6, end, pad, pad, pad],
+                            [h1, h2, 7, end, 4, h1, h2, 8, end]])
+        attention = torch.tensor([[1, 1, 1, 1, 1, 1, 0, 0, 0], [1] * 9])
+        markers = TurnMarkers(header_ids=(h1, h2), end_ids=(end,))
+        got = assistant_label_mask(ids, attention, markers).tolist()
+    except (Exception, SystemExit) as exc:
+        return _failed("assistant_label_mask behavioural check", exc)
+    want = [[x, x, x, 5, 6, end, x, x, x], [x, x, 7, end, x, x, x, 8, end]]
+    ok = got == want
+    reason = "" if ok else f"labels differ from the assistant-only answer: got {got}, want {want}"
+    return _key(_MEASURED, {"assistant_only": ok}, reason)
+
+
+def _probe_megatron_key() -> dict[str, Any]:
+    value = {"fs_lane": _has_module("foundationscale.rl.megatron"),
+             "megatron_core": _has_module("megatron.core"),
+             "megatron_bridge": _has_module("megatron.bridge")}
+    missing = [name for name, present in value.items() if not present]
+    return _key(_MEASURED, value, f"not importable here: {', '.join(missing)}" if missing else "")
+
+
+def _probe_manifest(errors: list[str]) -> list[dict[str, Any]]:
+    try:
+        from foundationskills.interfaces.fs import manifest  # noqa: PLC0415
+
+        return manifest.read()
+    except Exception as exc:  # read() never raises by contract; recorded if it ever does
+        errors.append(f"manifest probe failed: {type(exc).__name__}: {exc}")
+        return []
+
+
+def _probe_keys(errors: list[str]) -> dict[str, dict[str, Any]]:
+    probes = {"agentic_rl": _probe_agentic_rl_key, "speech": _probe_speech_key,
+              "video_frame_budget": _probe_video_key,
+              "sft_assistant_label_mask": _probe_label_mask_key,
+              "megatron_bridge": _probe_megatron_key}
+    keys: dict[str, dict[str, Any]] = {}
+    for name, fn in probes.items():
+        try:
+            keys[name] = fn()
+        except Exception as exc:
+            keys[name] = _failed(f"{name} probe", exc)
+            errors.append(f"{name} probe failed: {type(exc).__name__}: {exc}")
+    return keys
 
 
 _KNOWN_STAGES = ("pretrain", "cpt", "sft", "preference", "rl")
@@ -295,7 +419,10 @@ def _probe_preference(names: tuple[str, ...], errors: list[str]) -> tuple[dict[s
     try:
         import inspect
 
-        from foundationscale.rl.preference_trainer import PreferenceTrainConfig, PreferenceTrainer  # type: ignore
+        from foundationscale.rl.preference_trainer import (  # type: ignore
+            PreferenceTrainConfig,
+            PreferenceTrainer,
+        )
         from foundationscale.rl.trainer import TrainerRefusal  # type: ignore
     except Exception:  # noqa: BLE001 - an older FS without the preference plane
         return {}, None
@@ -458,11 +585,15 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
     try:
         import foundationscale as fs_module  # type: ignore
     except Exception as exc:
-        return FSCapabilities(available=False, fs_version=None, errors=(f"import foundationscale failed: {type(exc).__name__}: {exc}",),)
+        reason = f"import foundationscale failed: {type(exc).__name__}: {exc}"
+        keys = {name: _key(_UNMEASURED, None, reason) for name in PROBE_KEYS}
+        return FSCapabilities(available=False, fs_version=None, errors=(reason,), probe_keys=keys)
 
     flags, objectives = _probe_cli(notes, errors)
     sharding = _probe_sharding(errors)
-    backends = _probe_backends(sharding, fs_module)
+    probe_keys = _probe_keys(errors)
+    manifest_rows = _probe_manifest(errors)
+    backends = _probe_backends(sharding, probe_keys["megatron_bridge"])
     executed_axes, refused_axes, axes_measured = _probe_axes(deep, python, notes)
 
     rl_algorithms: tuple[str, ...] = ()
@@ -518,6 +649,8 @@ def probe(deep: bool = False, python: str | None = None) -> FSCapabilities:
         pref_saves_checkpoint=pref_saves_checkpoint,
         rl_adapter_support=rl_adapter_support,
         pref_adapter_support=pref_adapter_support,
+        probe_keys=probe_keys,
+        manifest=manifest_rows,
         notes=tuple(notes),
         errors=tuple(errors),
     )

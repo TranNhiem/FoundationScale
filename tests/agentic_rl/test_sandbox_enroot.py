@@ -1006,3 +1006,26 @@ def test_isolated_sandbox_writes_proxy_config_for_sudo_and_apt(tmp_path: Path) -
     assert (keep.stat().st_mode & 0o777) == 0o440
     apt = (Path(sbx.rootfs()) / "etc" / "apt" / "apt.conf.d" / "95fs-egress-proxy").read_text()
     assert 'Acquire::http::Proxy "http://127.0.0.1:3128";' in apt
+
+
+def test_run_returns_when_process_exits_despite_backgrounded_pipe_holder() -> None:
+    # B2.2 incident 6: a backgrounded process (server, VM) inherits stdout; waiting for EOF
+    # blocked the exec
+    import time
+
+    t0 = time.monotonic()
+    result = SubprocessRunner().run(["sh", "-c", "setsid sleep 6 & echo started"], timeout_s=30)
+    assert time.monotonic() - t0 < 5
+    assert (result.returncode, result.stdout.strip(), result.timed_out) == (0, "started", False)
+
+
+def test_run_timeout_is_bounded_despite_backgrounded_pipe_holder() -> None:
+    import time
+
+    t0 = time.monotonic()
+    result = SubprocessRunner().run(
+        ["sh", "-c", "setsid sleep 6 & echo started; sleep 30"], timeout_s=1
+    )
+    assert time.monotonic() - t0 < 5
+    assert (result.returncode, result.timed_out) == (124, True)
+    assert result.stdout.strip() == "started"
