@@ -237,4 +237,142 @@ VLA_MODELS: tuple[ModelEntry, ...] = (
         ),
         status=SupportStatus.SUPPORTED,
     ),
+    ModelEntry(
+        id="longwam-libero-idm-spatial",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-IDM",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), IDM mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_spatial",
+            metric="success_rate_pct",
+            upstream_value=99.5,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, IDM spatial, 10 tasks x 50 eps",
+            # binomial_tolerance(0.995, 500, 500) = 0.87 -> 0.9
+            tolerance=0.9,
+            measured=99.4,
+            measured_note="497/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 495/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="longwam-libero-idm-goal",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-IDM",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), IDM mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_goal",
+            metric="success_rate_pct",
+            upstream_value=98.0,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, IDM goal, 10 tasks x 50 eps",
+            # binomial_tolerance(0.980, 500, 500) = 1.74 -> 1.8
+            tolerance=1.8,
+            measured=98.0,
+            measured_note="490/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 491/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="longwam-libero-cod-spatial",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-COD",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), COD mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_spatial",
+            metric="success_rate_pct",
+            upstream_value=98.6,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, COD spatial, 10 tasks x 50 eps",
+            # binomial_tolerance(0.986, 500, 500) = 1.46 -> 1.5
+            tolerance=1.5,
+            measured=98.4,
+            measured_note="492/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 491/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="longwam-libero-cod-object",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-COD",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), COD mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_object",
+            metric="success_rate_pct",
+            upstream_value=99.8,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, COD object, 10 tasks x 50 eps",
+            # binomial_tolerance(0.998, 500, 500) = 0.55 -> 0.6
+            tolerance=0.6,
+            measured=100.0,
+            measured_note="500/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 500/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="longwam-libero-cod-goal",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-COD",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), COD mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_goal",
+            metric="success_rate_pct",
+            upstream_value=96.8,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, COD goal, 10 tasks x 50 eps",
+            # binomial_tolerance(0.968, 500, 500) = 2.18 -> 2.2
+            tolerance=2.2,
+            measured=97.4,
+            measured_note="487/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 489/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
+    ModelEntry(
+        id="longwam-libero-cod-10",
+        backend=Backend.LONGWAM,
+        upstream_ref="Efficient-Large-Model/Long-WAM-LIBERO-COD",
+        kind=ModelKind.VLA,
+        license_weights="other",
+        attribution="NVlabs Long-WAM (LongLive), COD mode on a Wan2.2-5B video backbone; "
+        "checkpoint card carries no terms -- internal evaluation only",
+        requires=(),
+        reference=ReferenceResult(
+            task="libero_10",
+            metric="success_rate_pct",
+            upstream_value=95.8,
+            source="Long-WAM paper (arXiv 2610.10528) Table 1, COD libero_10, 10 tasks x 50 eps",
+            # binomial_tolerance(0.958, 500, 500) = 2.49 -> 2.5
+            tolerance=2.5,
+            measured=98.0,
+            measured_note="490/500 on GB200 aarch64 through the FS harness "
+            "(python -m foundationscale.vla.eval --backend longwam: suite init states, seed 1, "
+            "cadence 32/10/10), 0 episode errors; Long-WAM's own harness 489/500, 2026-10-16",
+        ),
+        status=SupportStatus.SUPPORTED,
+    ),
 )

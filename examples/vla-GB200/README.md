@@ -33,7 +33,7 @@ One environment per backend. The LIBERO eval env is the FS harness client and pa
 
 **verl-vla env:** python 3.10, `torch 2.7.1`, `verl 0.7.1`, Ray; `libero 0.1.1` installed with `--no-deps`; `numpy 1.26.4`, `ml_dtypes 0.5.1`, `onnx_ir`, `einops`.
 
-**Long-WAM env:** LongLive at `c6a27e7` `Long-WAM/`, `torch 2.7.1+cu128`, `lerobot 0.4.1` then the `numpy 1.26.4` / `scipy 1.13.1` / `pyarrow 18.1.0` pins, `boto3`; `hardware=reference` (no native kernels); LIBERO at `8f1084e`.
+**Long-WAM env:** LongLive at `c6a27e7` `Long-WAM/`, `torch 2.7.1+cu128`, `lerobot 0.4.1` with `numpy 2.5.4` (measured in the env every reported run used) and the `scipy 1.13.1` / `pyarrow 18.1.0` pins, `boto3`; `hardware=reference` (no native kernels); LIBERO at `8f1084e`.
 
 ### Check it worked
 
@@ -72,9 +72,12 @@ Measured (FS harness unless noted) vs published:
 |---|---|---|---|---|
 | GR00T N1.7 | 588/606 = 97.0% (GR00T client) vs 97.5 | 596/600 = 99.3% vs 98.5 | 582/600 = 97.0% vs 97.5 | 548/600 = 91.3% vs 94.5 |
 | openpi pi0.5 | 492/500 = 98.4% vs 98.8 | 496/500 = 99.2% vs 98.2 | 486/500 = 97.2% vs 98.0 | 462/500 = 92.4% vs 92.4 |
-| Long-WAM IDM (Long-WAM's own harness) | 495/500 = 99.0% vs 99.5 | 499/500 = 99.8% vs 100.0 | 491/500 = 98.2% vs 98.0 | running |
+| Long-WAM IDM (Long-WAM's own harness) | 495/500 = 99.0% vs 99.5 | 499/500 = 99.8% vs 100.0 | 491/500 = 98.2% vs 98.0 | 493/500 = 98.6% vs 99.5 |
+| Long-WAM IDM (FS harness) | 497/500 = 99.4% | 498/500 = 99.6% | 490/500 = 98.0% | 491/500 = 98.2% |
+| Long-WAM COD (Long-WAM's own harness) | 491/500 = 98.2% vs 98.6 | 500/500 = 100.0% vs 99.8 | 489/500 = 97.8% vs 96.8 | 489/500 = 97.8% vs 95.8 |
+| Long-WAM COD (FS harness) | 492/500 = 98.4% | 500/500 = 100.0% | 487/500 = 97.4% | 490/500 = 98.0% |
 
-FS harness vs upstream harness on the same checkpoint: openpi 493/500 vs 492/500; GR00T 190/200 vs 192/201. They agree.
+FS harness vs upstream harness on the same checkpoint: openpi 493/500 vs 492/500; GR00T 190/200 vs 192/201; Long-WAM within 0.4 pt on all 8 suite x mode cells. They agree.
 
 ---
 
@@ -173,8 +176,9 @@ pass the assigned GPU as `gpu_id` when running Long-WAM's own evaluation: its wo
 
 ### Check it worked
 
-Rates match the paper's IDM numbers within a point on `libero_spatial`, `object` and `goal` (Step 2
-table); a 20-episode FS-harness smoke run was 20/20.
+Seven of the eight paper cells reproduce within the binomial tolerance (Step 2 table). IDM `libero_10` does not:
+98.2% (FS) and 98.6% (Long-WAM's own harness) against the paper's 99.5%, outside the 0.9-pt margin, so it stays out of
+the registry; IDM `object` is published at 100.0%, a rate the binomial rule cannot bound, so it is not a registry row either.
 
 ---
 
@@ -187,7 +191,8 @@ All runs above, side by side. Every cell is `success rate` on GB200.
 | Eval released | GR00T N1.7 (spatial) | 97.0% (GR00T client) | 97.5 |
 | Eval released | GR00T N1.7 (object / goal / 10) | 99.3 / 97.0 / 91.3 | 98.5 / 97.5 / 94.5 |
 | Eval released | openpi pi0.5 (all 4) | 98.4 / 99.2 / 97.2 / 92.4 | 98.8 / 98.2 / 98.0 / 92.4 |
-| Eval released | Long-WAM IDM (3 + 10) | 99.0 / 99.8 / 98.2 / running | 99.5 / 100.0 / 98.0 / — |
+| Eval released | Long-WAM IDM, FS harness (all 4) | 99.4 / 99.6 / 98.0 / 98.2 | 99.5 / 100.0 / 98.0 / 99.5 |
+| Eval released | Long-WAM COD, FS harness (all 4) | 98.4 / 100.0 / 97.4 / 98.0 | 98.6 / 99.8 / 96.8 / 95.8 |
 | Fine-tune | GR00T spatial (4 GPU, 8 h 58, 1.61 s/step) | 96.2 + 98.5 | 97.5 |
 | Fine-tune | GR00T goal / object / 10 | 97.0 / 99.2 / 90.7 | 97.5 / 98.5 / 94.5 |
 | Fine-tune | openpi pi05_libero (4 GPU, ~19 h) | 98.6 / 98.1 / 97.0 / 94.1 | 98.8 / 98.2 / 98.0 / 92.4 |

@@ -53,6 +53,7 @@ _DEFAULT_PROFILES = {
     Backend.NEMO: "nemo-26.08",
     Backend.GR00T: "gr00t-n17",
     Backend.OPENPI: "openpi-215abfb",
+    Backend.LONGWAM: "longwam-c6a27e7",
 }
 
 _HF_DECODE_ARGS = ("--model", "{model}", "--manifest", "{manifest}", "--out", "{out}")
@@ -94,7 +95,11 @@ def _entry_point(entry: ModelEntry) -> tuple[str, tuple[str, ...]]:
                 "{out}",
             ),
         )
-    if entry.kind is ModelKind.VLA and entry.backend in (Backend.GR00T, Backend.OPENPI):
+    if entry.kind is ModelKind.VLA and entry.backend in (
+        Backend.GR00T,
+        Backend.OPENPI,
+        Backend.LONGWAM,
+    ):
         # The FS-owned LIBERO harness drives the backend's own policy server; it rolls out the
         # upstream's published protocol for this backend and reports the success rate in points.
         return (

@@ -76,6 +76,7 @@ class Backend(str, Enum):
     NEMO = "nemo"  # NeMo: restore_from on a .nemo checkpoint
     GR00T = "gr00t"  # Isaac GR00T: its own policy server in its own environment (VLA)
     OPENPI = "openpi"  # Physical Intelligence openpi: its own policy server (VLA)
+    LONGWAM = "longwam"  # NVlabs Long-WAM world-action model: FS policy server in its env (VLA)
 
 
 class ModelKind(str, Enum):

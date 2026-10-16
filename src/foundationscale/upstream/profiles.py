@@ -168,6 +168,25 @@ PROFILES: tuple[UpstreamProfile, ...] = (
         },
         captured="2026-10-10",
     ),
+    UpstreamProfile(
+        name="longwam-c6a27e7",
+        backend="longwam",
+        container="venv LongLive c6a27e7 (Long-WAM; aarch64, hardware=reference)",
+        python="3.12.2",
+        packages={
+            "torch": "2.7.1+cu128",
+            "transformers": "4.49.0",
+            "peft": None,
+            "accelerate": "1.12.0",
+            "nemo_toolkit": None,
+            "lhotse": None,
+            "lightning": None,
+            "omegaconf": "2.3.0",
+            "soundfile": None,
+            "numpy": "2.5.4",
+        },
+        captured="2026-10-17",
+    ),
 )
 
 

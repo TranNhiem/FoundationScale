@@ -25,7 +25,7 @@ def test_vla_registry_passes_registry_problems() -> None:
 def test_vla_entries_are_kept_out_of_the_speech_table() -> None:
     assert not {e.id for e in VLA_MODELS} & {e.id for e in MODELS}
     assert all(e.kind is ModelKind.VLA for e in VLA_MODELS)
-    assert {e.backend for e in VLA_MODELS} == {Backend.GR00T, Backend.OPENPI}
+    assert {e.backend for e in VLA_MODELS} == {Backend.GR00T, Backend.OPENPI, Backend.LONGWAM}
 
 
 @pytest.mark.parametrize(
@@ -39,6 +39,12 @@ def test_vla_entries_are_kept_out_of_the_speech_table() -> None:
         ("openpi-pi05-libero-goal", 500, 500),
         ("openpi-pi05-libero-object", 500, 500),
         ("openpi-pi05-libero-10", 500, 500),
+        ("longwam-libero-idm-spatial", 500, 500),
+        ("longwam-libero-idm-goal", 500, 500),
+        ("longwam-libero-cod-spatial", 500, 500),
+        ("longwam-libero-cod-object", 500, 500),
+        ("longwam-libero-cod-goal", 500, 500),
+        ("longwam-libero-cod-10", 500, 500),
     ],
 )
 def test_tolerance_comes_from_the_published_rate_and_trial_counts(
