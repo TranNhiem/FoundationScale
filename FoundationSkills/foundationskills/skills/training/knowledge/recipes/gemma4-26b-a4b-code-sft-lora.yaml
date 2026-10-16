@@ -74,4 +74,4 @@ provenance:
     hardware: gb200-189gb
     run_id: moe-sft-531c2296
     date: "2026-09-26"
-    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_validation/train_moe/moe-sft/run_manifest.json
+    run_manifest: runs/fskills_validation/train_moe/moe-sft/run_manifest.json

@@ -705,7 +705,7 @@ class EnrootSandbox:
         enroot pivots the root inside a private mount namespace, so /proc/<pid>/root reads
         "/" from the host; the reliable identity is that namespace's root mount: mount point
         "/" whose filesystem-relative root is a suffix of the rootfs host path (e.g.
-        "/hhri-ai/hh28144/.enroot-sbx/<name>" on a /home export)."""
+        "<group>/<user>/.enroot-sbx/<name>" on a /home export)."""
         rootfs = str(self.rootfs())
         uid = os.getuid()
         pids = []

@@ -30,8 +30,8 @@ class TestNodeMemoryAndPartition:
         assert not any("--mem" in line for line in _render(1, hardware_id="h100"))
 
     def test_explicit_memory_and_partition_are_rendered(self):
-        lines = _render(2, mem_per_gpu="100G", partition="hhri-ai")
-        assert "#SBATCH --mem-per-gpu=100G" in lines and "#SBATCH --partition=hhri-ai" in lines
+        lines = _render(2, mem_per_gpu="100G", partition="gpu-partition")
+        assert "#SBATCH --mem-per-gpu=100G" in lines and "#SBATCH --partition=gpu-partition" in lines
         assert not any(line.startswith("#SBATCH --partition") for line in _render(2))
 
     @pytest.mark.parametrize("bad", [{"partition": "a;b"}, {"partition": "x y"}, {"mem_per_gpu": "lots"}])
@@ -40,7 +40,7 @@ class TestNodeMemoryAndPartition:
             _render(1, **bad)
 
 
-def _trial(kind="eval_only", partition="hhri-ai"):
+def _trial(kind="eval_only", partition="gpu-partition"):
     trial = {"trial": "t", "role": "baseline", "kind": kind, "nodes": 1, "gpus_per_node": 1,
              "eval_request": {"benchmarks": ["arc_easy"], "python": "/env/bin/python"},
              "train_request": {"run_name": "r"}}
@@ -66,7 +66,7 @@ class TestTrialRenderGates:
                           emit_train_fn=lambda **kw: {"executable": True, "sbatch": None, "argv": argv, "env": {}})
         lines = fact["fs_launch_spec"]["sbatch"].splitlines()
         assert fact["executable"] is True
-        assert "#SBATCH --partition=hhri-ai" in lines and "#SBATCH --gres=gpu:4" in lines
+        assert "#SBATCH --partition=gpu-partition" in lines and "#SBATCH --gres=gpu:4" in lines
         assert "#SBATCH --time=10-00:00:00" in lines and not any("--mem" in line for line in lines)
         assert any(line.startswith("srun torchrun") for line in lines)
 
@@ -85,15 +85,15 @@ class TestTrialRenderGates:
 
         def fake(req, **kw):
             seen.update(kw)
-            return {"executable": True, "sbatch": SBATCH + "#SBATCH --partition=hhri-ai\n"}
+            return {"executable": True, "sbatch": SBATCH + "#SBATCH --partition=gpu-partition\n"}
 
         fact = emit_trial({"trial_spec": _trial()}, emit_eval_fn=fake)
-        assert seen["partition"] == "hhri-ai" and fact["executable"] is True
+        assert seen["partition"] == "gpu-partition" and fact["executable"] is True
 
     def test_render_that_drops_the_partition_is_refused(self):
         fact = emit_trial({"trial_spec": _trial(kind="train")},
                           emit_train_fn=lambda **kw: {"executable": True, "sbatch": SBATCH})
-        assert fact["missing"] == ["partition_not_rendered:hhri-ai"]
+        assert fact["missing"] == ["partition_not_rendered:gpu-partition"]
 
 
 def test_repeated_close_seals_the_ledger_once(tmp_path):

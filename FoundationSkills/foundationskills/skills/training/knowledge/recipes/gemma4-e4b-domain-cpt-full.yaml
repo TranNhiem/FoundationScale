@@ -66,4 +66,4 @@ provenance:
     hardware: gb200-189gb
     run_id: fskills-cpt-7f82fbc5
     date: "2026-09-27"
-    run_manifest: /home/hhri-ai/hh28144/Project-Developments/FoundationScale/runs/fskills_r3/train_cpt/fskills-cpt/run_manifest.json
+    run_manifest: runs/fskills_r3/train_cpt/fskills-cpt/run_manifest.json

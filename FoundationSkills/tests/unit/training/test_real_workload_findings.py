@@ -12,7 +12,7 @@ from foundationskills.skills.training.feasibility import check_feasibility
 from foundationskills.skills.training.knowledge import find_variant, load_hardware
 from foundationskills.skills.training.planner import _resolve_hardware, plan
 
-E4B = "/home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B-it"
+E4B = "/models/Google/Gemma4/gemma-4-E4B-it"
 
 
 def _caps() -> FSCapabilities:

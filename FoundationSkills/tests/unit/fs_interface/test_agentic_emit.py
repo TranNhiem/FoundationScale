@@ -66,7 +66,7 @@ def _enroot_runtime() -> Runtime:
         {
             "kind": "enroot",
             "container": "vllmsrv3",
-            "mounts": {"/home/hhri-ai": "/home/hhri-ai"},
+            "mounts": {"/data/shared": "/data/shared"},
             "env": {"PATH": "/usr/local/bin:/usr/bin:/bin"},
             "enroot_data_path": "/var/lib/enroot",
             "rw": True,
@@ -180,7 +180,7 @@ def test_runtime_argv_enroot_layers_flags_in_the_measured_order() -> None:
         "start",
         "--rw",
         "--mount",
-        "/home/hhri-ai:/home/hhri-ai",
+        "/data/shared:/data/shared",
         "--env",
         "PATH=/usr/local/bin:/usr/bin:/bin",
         "--env",
@@ -230,7 +230,7 @@ def test_runtime_from_dict_enroot_round_trips_through_to_dict() -> None:
     rt = _enroot_runtime()
     again = runtime_from_dict(rt.to_dict())
     assert again == rt
-    assert again.mounts == (("/home/hhri-ai", "/home/hhri-ai"),)
+    assert again.mounts == (("/data/shared", "/data/shared"),)
     assert again.env == (("PATH", "/usr/local/bin:/usr/bin:/bin"),)
     assert runtime_from_dict({"kind": "enroot", "mounts": [["/a", "/b"]]}).mounts == (("/a", "/b"),)
 
@@ -370,7 +370,7 @@ def test_emit_agentic_wraps_the_fs_module_in_the_declared_enroot_runtime(
         "start",
         "--rw",
         "--mount",
-        "/home/hhri-ai:/home/hhri-ai",
+        "/data/shared:/data/shared",
         "--env",
         "PATH=/usr/local/bin:/usr/bin:/bin",
         "--env",

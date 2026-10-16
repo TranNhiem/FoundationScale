@@ -179,7 +179,7 @@ def _derive_max_steps(stage: dict[str, Any], hparams: dict[str, Any], dp: int,
 def _pinned_launcher(launcher: str, notes: list[str]) -> str:
     """Pin a bare ``python``/``torchrun`` to the interpreter that probed FS (and its sibling torchrun).
 
-    MEASURED (2026-10-07, r04dgx03): the bare launcher resolved through the node's PATH, where
+    MEASURED (2026-10-07, GB200): the bare launcher resolved through the node's PATH, where
     ``~/.local/bin/torchrun`` (user-site python3.12, no pandas) shadowed the env's own, and FS
     refused every rank (rc=96). The basename stays ``python``/``torchrun`` so the sbatch launcher
     check still matches; when no such sibling exists the bare name is kept and the note says so."""
@@ -195,7 +195,7 @@ def _pinned_launcher(launcher: str, notes: list[str]) -> str:
 def _code_path_env(notes: list[str]) -> dict[str, str]:
     """PYTHONPATH for packages this process imports from a source tree rather than site-packages.
 
-    MEASURED (2026-10-07, r04dgx03): the rendered sbatch ran ``python -m ...rl_driver`` and died
+    MEASURED (2026-10-07, GB200): the rendered sbatch ran ``python -m ...rl_driver`` and died
     with ``No module named 'foundationskills'`` -- neither package is installed in the env, and the
     script only worked when the submitting shell happened to export PYTHONPATH. The job now
     carries the roots of the very code that emitted it; installed packages add nothing."""

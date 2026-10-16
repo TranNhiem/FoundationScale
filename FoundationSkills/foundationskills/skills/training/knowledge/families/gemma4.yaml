@@ -16,7 +16,7 @@ modalities: [text, image, audio]
 variants:
   - id: gemma-4-E4B
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B
+    local_path: null
     size_b: 8.0      # 16.0 GB safetensors / 2 (bf16); PLE inflates the total -- see quirks; ~4B effective compute
     active_b: 4.0
     arch: dense
@@ -32,10 +32,10 @@ variants:
     tied_embeddings: true
     instruct: false
     fs_grad_ckpt: false
-    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (r04dgx18, 4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
+    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
   - id: gemma-4-E4B-it
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-E4B-it
+    local_path: null
     size_b: 8.0
     active_b: 4.0
     arch: dense
@@ -51,10 +51,10 @@ variants:
     tied_embeddings: true
     instruct: true
     fs_grad_ckpt: false
-    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (r04dgx18, 4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
+    fs_grad_ckpt_evidence: "measured 2026-10-07 on GB200 (4 GPUs, LoRA) via fskills launch: FS refused (96) gradient_checkpointing=True because num_kv_shared_layers=18 of 42 -- checkpointing disables the KV cache these layers read from (foundationscale/train/loop.py _kv_shared_layer_count)"
   - id: gemma-4-12B
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-12B
+    local_path: null
     size_b: 11.95    # 23.9 GB safetensors / 2 (name says 12B); top-level model_type is gemma4_unified
     active_b: null
     arch: dense
@@ -71,7 +71,7 @@ variants:
     instruct: false
   - id: gemma-4-12B-it
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-12B-it
+    local_path: null
     size_b: 11.95
     active_b: null
     arch: dense
@@ -90,7 +90,7 @@ variants:
     fs_fsdp: false
     fs_fsdp_evidence: "measured 2026-09-26 on GB200 via fskills launch: FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-26b-it (MoE); DDP is used instead"
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26B-A4B
+    local_path: null
     size_b: 25.8     # 51.6 GB safetensors / 2 (bf16)
     active_b: 4.0    # from the A4B suffix
     arch: moe
@@ -109,7 +109,7 @@ variants:
     fs_fsdp: false
     fs_fsdp_evidence: "measured 2026-09-26 on GB200 via fskills launch: FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-26b-it (MoE); DDP is used instead"
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-26b-it
+    local_path: null
     size_b: 25.8
     active_b: 4.0
     arch: moe
@@ -126,9 +126,9 @@ variants:
     instruct: true
   - id: gemma-4-31B
     fs_fsdp: false
-    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (r04dgx03, 3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
+    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31B
+    local_path: null
     size_b: 31.25    # 62.5 GB safetensors / 2 (bf16; name says 31B)
     active_b: null
     arch: dense
@@ -145,9 +145,9 @@ variants:
     instruct: false
   - id: gemma-4-31b-it
     fs_fsdp: false
-    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (r04dgx03, 3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
+    fs_fsdp_evidence: "measured 2026-09-27 on GB200 via fskills launch (3 GPUs, LoRA): FS FSDP raised Trainer.train() Exception('Could not find the transformer layer class to wrap in the model.') for gemma-4-31b-it (dense); DDP is used instead"
     hf_id: null
-    local_path: /home/hhri-ai/hh28144/pretraining_weights/Vision-Language-Models/Google/Gemma4/gemma-4-31b-it
+    local_path: null
     size_b: 31.25
     active_b: null
     arch: dense
