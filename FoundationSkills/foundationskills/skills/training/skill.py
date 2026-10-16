@@ -338,6 +338,7 @@ def _agentic_fs_src() -> Any:
 class TrainingPlannerSkill(BaseSkill):
     """Plan an executable-or-explicitly-refused multi-stage training run."""
 
+    requires_fs = True  # A1.5: plans and specs are measured against the installed FS
     name = "training.planner"
     version = "0.1.0"
     description = (

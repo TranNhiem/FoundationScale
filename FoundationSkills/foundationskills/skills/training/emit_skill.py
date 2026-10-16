@@ -117,6 +117,7 @@ def _dry_run_record(spec: Mapping[str, Any]) -> Mapping[str, Any]:
 class TrainingEmitSkill(BaseSkill):
     """Emit one fs_launch_spec artifact per training-plan stage."""
 
+    requires_fs = True  # A1.5: plans and specs are measured against the installed FS
     name = "training.emit"
     version = "0.1.0"
     description = (
