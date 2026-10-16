@@ -46,15 +46,15 @@ provenance:
 
 ## How a recipe is chosen
 
-1. The planner first decides the **method** from goal, data and hardware rules. For example, CPT on a corpus uses full fine-tuning, a small SFT set uses LoRA, and single-GPU RL that doesn't fit uses LoRA.
-2. `select_recipe` filters on the hard keys: stage, architecture and method. It then scores the soft keys: family +3, size range +2, goal +2, domain +1.5 (or +0.5 for `any`), hardware +1.
+1. The planner first decides the **method** from goal, data and hardware rules: CPT on a corpus uses full fine-tuning, a small SFT set uses LoRA, and single-GPU RL that doesn't fit uses LoRA.
+2. `select_recipe` filters on the hard keys (stage, architecture, method), then scores the soft keys: family +3, size range +2, goal +2, domain +1.5 (or +0.5 for `any`), hardware +1.
 3. Unless family, size and goal all match, the match is `derived: true`, and the plan's `provenance_notes` say what to re-check.
-4. The recipe's `hparams` **and** its `fs.args` are folded into the stage's hparams. The planner writes every value it estimated with (sequence length, batch, gradient checkpointing, sharding) into the stage. The emitted command is therefore exactly the configuration that was estimated.
+4. The recipe's `hparams` **and** its `fs.args` are folded into the stage's hparams. The planner writes every estimated value (sequence length, batch, gradient checkpointing, sharding) into the stage, so the emitted command is exactly the configuration that was estimated.
 
 ## Rules enforced by tests
 
 - The id equals the file stem and is unique. The family exists. Every stage algorithm has an algorithm card, and every rl/preference card names an algorithm FoundationScale registers.
-- Every `fs.args` key is a real `foundationscale-train` flag. Every value is legal for the installed stack: the parser's `choices`, plus transformers' optimizer and scheduler names. A recipe that said `optimizer: adamw` was refused by transformers 5.13 on a real GB200 run, after the GPUs were allocated.
+- Every `fs.args` key is a real `foundationscale-train` flag. Every value is legal for the installed stack: the parser's `choices`, plus transformers' optimizer and scheduler names, which are validated against the installed transformers. `adamw` is refused by transformers 5.13.
 - `status: validated` requires `validated_on: {fs_commit, hardware, run_id, date}`, pointing at a real FoundationScale run.
 
 ## Provenance levels

@@ -1,25 +1,10 @@
 # The RL plane: design record and binding seams
 
-FoundationScale has an RL plane at `src/foundationscale/rl/`. This record was written on 2026-09-09 **before any algorithm was bound to it**, to fix the shape of the seams first: five independent design reviews were run against the interfaces as they then stood, and all five concluded those interfaces did not fit: not in a way that any single signature change repairs, but in the shape of the seams themselves. NeMo-RL and comparable frameworks show which algorithm families exist; this record states what the seams must be so every one of those families plugs in without the core branching on algorithm identity.
+FoundationScale has an RL plane at `src/foundationscale/rl/`. This record fixes the shape of the seams first — five sites and six decisions about interface shape — so every algorithm family plugs in without the core branching on algorithm identity. NeMo-RL and comparable frameworks show which algorithm families exist; this record states what the seams must be.
 
-WHAT IS CLAIMED:
-- A design. Six decisions about interface shape, each anchored to a verified site in the current source, each argued from the failure it prevents.
-- That the seams as described are sufficient for the algorithm families in the table below, at the level of interface coverage.
+**Scope.** This is a design: six decisions about interface shape, each anchored to a verified site in the source, each argued from the failure it prevents. No benchmark, convergence claim, or performance result exists for this plane.
 
-WHAT IS NOT CLAIMED:
-- A measurement. The reviews rated interfaces, not running code, and they rated them as they stood on the day above — no review here was re-run against a bound family.
-- Any benchmark, convergence claim, or performance result. None exists for this plane.
-- Completeness. The open questions at the end were live when written; five families have since bound and only the one noted there as CLOSED has been retested.
-
-**STATUS — corrected after the fact, measured at this commit.** The lead paragraph and the
-open questions below originally stated, in the present tense, that nothing had bound. That
-was true for one day. Five families have since bound — GRPO, RLOO, REINFORCE-with-baseline,
-Reinforce++ and PPO — over a plane that now carries four advantage estimators, eight
-protocols and ten loss classes. The design argument is left exactly as it was argued; only
-the sentences that read as claims about the tree's present state are corrected, and they are
-corrected in place rather than deleted, so the record still shows what was believed when the
-seams were chosen. Counts here are measured from the source, not maintained by hand: re-take
-them with `make countables` and the class census.
+Since this record was written, five families bind over the plane — GRPO, RLOO, REINFORCE-with-baseline, Reinforce++ and PPO — which now carries four advantage estimators, eight protocols and ten loss classes. Those counts are measured from the source, not maintained by hand: re-take them with `make countables` and the class census.
 
 ## The five seams
 
@@ -60,7 +45,7 @@ requires: Mapping[str, bool]
 supplied: Mapping[str, Any]
 ```
 
-The checked denominator is the **union** of both key sets. This matters concretely: were the denominator `requires` alone, a newly supplied role — a critic, a reward model, a reference policy — would sit in no denominator and the wiring check would print CLEAR over it. That is this repository's signature defect class (an instrument reporting CLEAR over a set that does not contain the thing the claim is about) and it must not be reintroduced here. **Why not extend the tuple when a new role is needed:** every new role becomes a core edit, and the edit is exactly where the denominator silently stays stale. With data, adding a critic role requires no core edit.
+The checked denominator is the **union** of both key sets. This matters concretely: were the denominator `requires` alone, a newly supplied role — a critic, a reward model, a reference policy — would sit in no denominator and the wiring check would print CLEAR over it. An instrument must not report CLEAR over a set that does not contain the thing the claim is about. **Why not extend the tuple when a new role is needed:** every new role becomes a core edit, and the edit is exactly where the denominator silently stays stale. With data, adding a critic role requires no core edit.
 
 ### D3. Do not widen `AdvantageFn.compute`
 
@@ -107,6 +92,12 @@ The existing `reward_stats.count == rows` cross-check must be restated against t
 
 Sequence-level ratio is objective geometry and belongs to the loss declaration. It cannot live in the advantage function — the advantage never sees logprobs — and it cannot be implicit in the loss, because `SFTLoss` owns a fixed token-level denominator. So D1's `ratio_scope: token | sequence` sits on the loss, the batch must carry the matching denominator, and a disagreement is refused at wiring time naming the field and both sides' stated scopes. **Why not test for the mismatch instead:** a test detects one instance of the GSPO token/sequence-denominator bug; a typed declaration with a refused mismatch makes the bug unrepresentable. Refusals age; tests rot.
 
+`ratio_scope` is a closed union at two members. GSPO's ratio is `exp(mean_t log_ratio_t)` — the length normalisation sits *inside* the exponent, so it is a property of how the sequence ratio is formed, not a separate scope. It is also not optional: the unnormalised alternative, `exp(sum_t log_ratio_t)`, leaves any usable floating-point range over a response of a few hundred tokens for any non-trivial policy shift. This is an argument from the arithmetic, not a measurement — nothing has trained.
+
+What is independent between the families is the denominator, and it is the axis that actually separates them: GSPO averages one scalar surrogate per response, Dr.GRPO divides by a configured constant length, and DAPO divides by the batch's total supervised-token count. That is a genuine three-way distinction with nowhere to live under `ratio_scope`, so it carries its own `reduction` declaration (`sequence_mean | constant | token_mean`) beside the scope. **Why not widen `ratio_scope` to carry both:** a scope that also encoded its denominator would make `("sequence", token_mean)` unrepresentable at the type level while leaving `("token", sequence_mean)` spellable, which is precisely inverted — two independent axes collapsed into one union refuse the wrong combinations. D6's refusal therefore stays an instrument rather than becoming an obstacle.
+
+A fourth denominator joined with FoundationScale Agentic RL: `prompt_mean` (`agentic_grpo`) averages, over the prompt groups that carry at least one supervised token, each group's own token-mean, so a long multi-turn trajectory cannot outvote a short one through sheer token count. Its per-group denominator needs group ids the kernel does not have, so the trainer computes one `(rows,)` weight vector per optimizer step from the torch-free `prompt_mean_row_weights` (the oracle's own function) and hands it to the kernel as `reduction_row_weights`; the active-group count is summed across ranks and the weights carry `world_size * P_local / P_global` so data-parallel averaging lands on the global mean. The Megatron lane refuses it by name until it has the same plumbing. See [AGENTIC_RL.md](AGENTIC_RL.md).
+
 ## How to add an algorithm
 
 1. Write the algorithm's `AlgorithmRequirements`: role booleans, `declared_components`, `declared_metrics`. Do not reclassify presence booleans as semantics.
@@ -130,13 +121,10 @@ Sequence-level ratio is objective geometry and belongs to the loss declaration. 
 
 ● the family cannot bind without the seam; ○ the seam is exercised but the current shape survives. No row is all ○: every family needs at least D1.
 
+The bound families hold the seams apart from one shape they did not anticipate: a second learned model inside a single step. PPO needs a value estimate that two consumers — the value regression and the temporal estimator — must agree about, which the seams as designed had no place for; it became the `ValueHead` protocol rather than a field on the composite.
+
 ## Open questions
 
 - **Critic plumbing.** D2 makes the critic role free to declare but says nothing about value-target shapes flowing into `AdvantageInputs.values` (D3); the GAE migration path is unwritten.
 - **`sync` cadence as data.** The `algorithm.py:573` precedent (a cadence-bound absence is not a refusal) suggests `supplied` may need a per-role cadence field; no shape has been chosen.
-- **~~Is `ratio_scope` a closed union?~~ CLOSED by B5 at two members — and the second of the two guesses above was the right one.** The question offered a length-normalised sequence ratio as either a third member or "a sequence ratio plus a declared denominator", and the second is what the geometry turns out to be. GSPO's ratio is `exp(mean_t log_ratio_t)` — the length normalisation sits *inside* the exponent, so it is a property of how the sequence ratio is formed, not a separate scope. It is also not optional: the unnormalised alternative, `exp(sum_t log_ratio_t)`, leaves any usable floating-point range over a response of a few hundred tokens for any non-trivial policy shift, so a sequence ratio that is not length-normalised is not a geometry anything binds. Normalisation is what makes a sequence ratio exist, not a variant of one. **This is an argument from the arithmetic, not a measurement** — nothing has trained.
-  What *is* independent between the families is the denominator, and it is the axis that actually separates them: GSPO averages one scalar surrogate per response, Dr.GRPO divides by a configured constant length, and DAPO divides by the batch's total supervised-token count. That is a genuine three-way distinction with nowhere to live under `ratio_scope`, so B5 carries it on a separate `reduction` declaration (`sequence_mean | constant | token_mean`) beside the scope. **Why not widen `ratio_scope` to carry both:** a scope that also encoded its denominator would make `("sequence", token_mean)` unrepresentable at the type level while leaving `("token", sequence_mean)` spellable, which is precisely inverted — two independent axes collapsed into one union refuse the wrong combinations. D6's refusal therefore stayed an instrument rather than becoming an obstacle, which is what the question was watching for.
-
-  A fourth denominator joined later with FoundationScale Agentic RL: `prompt_mean` (`agentic_grpo`) averages, over the prompt groups that carry at least one supervised token, each group's own token-mean, so a long multi-turn trajectory cannot outvote a short one through sheer token count. Its per-group denominator needs group ids the kernel does not have, so the trainer computes one `(rows,)` weight vector per optimizer step from the torch-free `prompt_mean_row_weights` (the oracle's own function) and hands it to the kernel as `reduction_row_weights`; the active-group count is summed across ranks and the weights carry `world_size * P_local / P_global` so data-parallel averaging lands on the global mean. The Megatron lane refuses it by name until it has the same plumbing. See [AGENTIC_RL.md](AGENTIC_RL.md).
 - **Whether semantics comparison should be structural or advisory.** `check_algorithm_wiring` refusing on any `None`-vs-value semantics mismatch may over-block algorithms that genuinely do not fix a KL estimator; the refusal policy per field is open.
-- **~~No second family has bound.~~ CLOSED by the bindings above.** This was written expecting that the first binding to force a revision would be a feature of the process rather than a failure of it, and that is what happened: the seams held for all five families, and the one shape they did not anticipate was a SECOND learned model inside a single step. PPO needs a value estimate that two consumers — the value regression and the temporal estimator — must agree about, which the seams as designed had no place for; it became the `ValueHead` protocol rather than a field on the composite. The remaining open questions below have not been retested.

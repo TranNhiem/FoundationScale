@@ -1,10 +1,10 @@
 # 02 — Data preparation: image-text, video-text and text-only, and mixing them
 
-In this chapter you will get three sample datasets onto the VM, convert every one of them into the single JSONL format FoundationScale trains on, split each into a train/held-out pair, mix the three with weighted sampling, and read the resulting statistics. Along the way you will set the few environment variables that control video frame sampling and the handling of over-long conversations.
+This chapter converts three datasets into the single JSONL format FoundationScale trains on, splits each into a train/held-out pair, mixes them with weighted sampling, and shows the resulting statistics. It also sets the environment variables that control video frame sampling and over-long conversations.
 
-**Time needed:** about 30–45 min for the image and text datasets combined (measured by a fresh user: the convert, split, mix and stats commands themselves take **< 1 min** on the samples — the time is spent downloading and unpacking); the video set is ~116 GB and takes hours to download.
+**Time needed:** about 30–45 min for the image and text datasets, mostly downloading and unpacking — the convert, split, mix and stats commands take **< 1 min**. The video set is ~116 GB and takes hours to download.
 
-All commands run from the repository root (`FoundationScale/`). All commands assume the chapter 01 environment is active (`conda activate fs-vlm` or `source venv/bin/activate`). Everything the converter does is pure Python stdlib; there is nothing to `pip install` here.
+All commands run from the repository root (`FoundationScale/`) with the chapter 01 environment active (`conda activate fs-vlm` or `source venv/bin/activate`). Everything here is pure Python stdlib; there is nothing to `pip install`.
 
 ---
 
@@ -20,8 +20,6 @@ FoundationScale trains on **one JSON object per line**. A row looks like this (l
 {"id": "50969", "source": "video", "conversations": [{"from": "human", "value": "<video>\nDescribe what is happening in the video clip from 03:55.13 to 04:01.53."}, {"from": "gpt", "value": "🥵The user wants me to describe the video segment from 03:55.13 to 04:01.53.\n\n1.  **Identify the timeframe:** …"}]}
 ```
 
-Field by field:
-
 | Field | Required | Meaning |
 |---|---|---|
 | `id` | yes | Row identifier. |
@@ -31,12 +29,12 @@ Field by field:
 | `video` | optional | Path to a video file. Human turns carry **one `<video>` marker**. |
 | `start`, `end` | optional | Clip segment in seconds inside the full video. Video rows must carry **both**. |
 
-Things that are worth internalising now, because they affect what your data must look like:
+Rules that shape what your data must look like:
 
-- **Reasoning is written inline** as `🥵…🥵/…answer`. You do **not** hand-convert it: FoundationScale translates it into the target model's native format. **Gemma 4 uses its own thought channel and does *not* understand a literal `🥵` tag** — `Qwen3.6` uses `🥵`. Never tape one family's tags onto the other by hand.
-- **Reasoning is kept only on the *final* assistant turn.** Both model families' chat templates drop reasoning from earlier turns. So in the 10-turn Vietnamese document rows and the 6-turn video rows (turn counts are typical, not guaranteed — see below), only the last answer's reasoning is actually trained.
+- **Reasoning is written inline** as `🥵…🥵/…answer`. Do not hand-convert it: FoundationScale translates it into the target model's native format. `Gemma 4` uses its own thought channel and does *not* understand a literal `🥵` tag; `Qwen3.6` uses `🥵`. Never write one family's tags into the other by hand.
+- **Reasoning is kept only on the *final* assistant turn**, because both model families' chat templates drop reasoning from earlier turns.
 - **Loss is computed on assistant turns only.** System and human turns are context, not targets.
-- The converter **does not require you to write `<image>` yourself**: the image-text sample has no markers, and the converter inserts them. If you build custom data, write markers explicitly and expect them to be kept as-is.
+- The converter **inserts `<image>` markers for you** when they are missing (the image-text sample has none). For custom data, write markers explicitly and they are kept as-is.
 
 ---
 
@@ -66,7 +64,7 @@ options:
   -h, --help            show this help message and exit
 ```
 
-Each of `image`, `video`, `text` takes `--max-rows N` (stop after N *valid* rows) and `--no-check-files` (skip media existence checks). `split` has its own flags. Full help per subcommand is in the details blocks below if you want to look up flags later.
+Each of `image`, `video`, `text` takes `--max-rows N` (stop after N *valid* rows) and `--no-check-files` (skip media existence checks). `split` has its own flags. Full help per subcommand is in the details blocks below.
 
 <details>
 <summary><code>image</code> / <code>video</code> / <code>text</code> flag reference</summary>
@@ -167,7 +165,7 @@ options:
 
 **What it is:** `trannhiem/TranNhiem-Vietnamese-DocumentImage-Reasoning` on the Hub — 64,516 records of Vietnamese document images with 10-turn conversations. The repository contains a `data/vdoc.jsonl` metadata file plus **6 image tar shards under `shards/`**, named `shards/images-00000.tar` … `shards/images-00005.tar`. The `gpt` turns are `{"reasoning","answer"}` dicts, which the converter unfolds into the `🥵…🥵/…answer` form for you.
 
-Note: 64,516 is the metadata count. The measured baseline below uses **only shard 0**, which is why you get 11,000 rows and 53,516 skips.
+64,516 is the metadata count. The counts below were measured with **only shard 0** extracted — hence 11,000 rows and 53,516 skips.
 
 ### Download
 
@@ -216,7 +214,7 @@ missing_media: 53516
 
 The converter always prints one `rows written: N` line and one `rows skipped: M` line, and *then* one line per skip reason (like `missing_media: …`) whenever that reason's count is greater than zero.
 
-If you later extract the remaining shards and re-run, `rows written` goes up and `missing_media` goes down. TODO(verify) the exact counts with all 6 shards extracted.
+If you later extract the remaining shards and re-run, `rows written` goes up and `missing_media` goes down (counts with all 6 shards extracted are not measured).
 
 ---
 
@@ -231,7 +229,7 @@ data/action100m_split1_longvideo.jsonl    long-video subset
 videos/<youtube_id>.mp4                   908 source videos
 ```
 
-**Publishing in progress:** if the dataset is not on the Hub yet, ask the organisers for the files and place them in that layout.
+If the dataset is not on the Hub, place the files in that layout.
 
 **Read the licence first:** the dataset is under **FAIR Noncommercial Research** terms and the videos are third-party YouTube content. Noncommercial research use only.
 
@@ -277,7 +275,7 @@ python examples/vlm-2xH200/data/prepare_data.py video \
   --output data/prepared/video.jsonl
 ```
 
-If your copy has the manifest directly under `data/raw/video/` (e.g. files supplied by the organisers), point `--input` at that file instead.
+If your copy has the manifest directly under `data/raw/video/` (for example a locally assembled copy), point `--input` at that file instead.
 
 Check it worked (full download: every record resolves):
 
@@ -292,7 +290,7 @@ Each converted row carries `start`/`end` in seconds, so the trainer knows which 
 
 ## 4. Text-only: ShareGPT-style QA
 
-**What it is:** any ShareGPT jsonl works. The competition sample is a small Vietnamese persona reasoning file: 209 rows, 2-turn conversations (typical, not guaranteed), `🥵…🥵/` reasoning. It is supplied by the organisers and is **not** on the Hub.
+**What it is:** any ShareGPT jsonl works. The bundled sample dataset is a small Vietnamese persona reasoning file: 209 rows, 2-turn conversations (typical, not guaranteed), `🥵…🥵/` reasoning. It is not on the Hub.
 
 ```bash
 python examples/vlm-2xH200/data/prepare_data.py text \
@@ -358,17 +356,13 @@ Check it worked (measured):
 
 ### Reading the repeat warning
 
-When a source has fewer rows than its quota, the mix repeats rows and prints how many it had to repeat. The message names the file and quota you actually passed (e.g. `data/prepared/text.train.jsonl` after the split), so the numbers in your run describe your own files — for example, after the 5–10 % hold-out the text pool is only ~190–200 rows, so a 400-row quota repeats ~200 rows. The video pool can trigger the same warning.
+When a source has fewer rows than its quota, the mix repeats rows and prints how many it had to repeat. The message names the file and quota you actually passed (e.g. `data/prepared/text.train.jsonl` after the split) — after a 5–10 % hold-out the text pool is only ~190–200 rows, so a 400-row quota repeats ~200 rows. The video and image pools can trigger the same warning.
 
-Rows copied more than once add no information; that is not an error, but it deserves attention:
-
-- Repeated rows just weight those conversations harder. The model starts to memorise a small pool instead of seeing 400 different rows.
-- Every repeat is a signal that your `--weights` are asking for more of a pool than the pool holds. Prefer lowering that source's weight (or `--total`) over silently doubling rows.
-- Keep an eye on the same thing for the other pools — the video pool can trigger the warning too, and so can the image pool once you mix full shards.
+Repeated rows add no information and just weight those conversations harder — the model starts to memorise a small pool instead of seeing 400 different rows. Prefer lowering that source's weight (or `--total`) over silently doubling rows.
 
 ### Choosing weights
 
-Start from what is scarce and what you want the evaluated models to do well at. Image-text document reasoning and video understanding dominate this sample, so 40 % / 40 % is the given baseline; text is the anchor preventing the model from degenerating into pure VQA. Then rerun `stats` (next section) and adjust. There is no single correct split — just don't let the weights drift away from what the competition actually evaluates. TODO(verify) what the evaluation emphasises.
+Start from what is scarce and what you want the evaluated models to do well at. Image-text document reasoning and video understanding dominate this sample, so 40 % / 40 % is the given baseline; text is the anchor preventing the model from degenerating into pure VQA. Then rerun `stats` (next section) and adjust. There is no single correct split.
 
 ---
 
@@ -384,7 +378,7 @@ Check it worked (measured for the 2,000-row mix above):
 - rows with reasoning: `2000`
 - median characters per row: `8932`
 
-Two things to notice: the three sources contribute distinct conversation lengths (text = 2, video = 6, image = 10 turns — **typical, not guaranteed**: measured on 120 video rows, 113 have 6 turns and 7 have 2), and reasoning rows are guaranteed only on the **final** assistant turn of each conversation regardless of those lengths.
+Two things to notice: the three sources contribute distinct conversation lengths (text = 2, video = 6, image = 10 turns — **typical, not guaranteed**), and reasoning rows are guaranteed only on the **final** assistant turn of each conversation regardless of those lengths.
 
 ---
 
@@ -444,7 +438,7 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 ## Troubleshooting
 
-**My image conversion says `rows skipped: …` and `missing_media: …`.** Expected when you extracted fewer than all 6 shards. Each counted row points at an image file that is not on disk yet. Extract more shards (`shards/images-00001.tar` … `images-00005.tar`) and re-run — the skipped rows come back. Only use `--no-check-files` if you are sure the files exist at training time; otherwise the failure moves (lazily) into the training run.
+**My image conversion says `rows skipped: …` and `missing_media: …`.** Expected when you extracted fewer than all 6 shards. Extract more shards (`shards/images-00001.tar` … `images-00005.tar`) and re-run — the skipped rows come back. Only use `--no-check-files` if you are sure the files exist at training time; otherwise the failure moves (lazily) into the training run.
 
 **My video conversion writes far fewer than 2,985 rows.** Same mechanism: you downloaded `data/` but not all 908 videos. With 300 videos present you get 671 rows; download more videos and re-run.
 
@@ -454,9 +448,9 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 **Training exits 96 and names a row with a token count.** `FOUNDATIONSCALE_TRAIN_OVERLONG=refuse` found an over-long row in the pre-pass. Lower `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`, set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE`, or switch to `=drop`.
 
-**A training row is much longer than expected.** Frames count as tokens and the cost is model-dependent — 63 tokens/frame for `gemma-4-12B-it` versus 40 for `Qwen3.6-27B` at the default resolution. With Qwen in `transformers` 5.18 a high-resolution clip can cost far more than that (no `qwen-vl-utils` pixel cap); set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE=448`. Rows are not truncated; with `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` they silently disappear from the run (the count is in `run_manifest.json`).
+**A training row is much longer than expected.** Frames count as tokens and the cost is model-dependent — see the table in Section 7. With Qwen in `transformers` 5.18 a high-resolution clip can cost far more than that; set `FOUNDATIONSCALE_TRAIN_VIDEO_MAX_SIDE=448`. Rows are not truncated; with `FOUNDATIONSCALE_TRAIN_OVERLONG=drop` they silently disappear from the run (the count is in `run_manifest.json`).
 
-**The pre-pass is slow the first time and fast afterwards.** That is the frame decode cache (`FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR`, or `.fs_video_frames` next to the dataset). Measured: 197 s over 300 rows with a cold cache, ~30–60 s warm. The cache keys on the clip, the frame budget and the segment.
+**The pre-pass is slow the first time and fast afterwards.** That is the frame decode cache (`FOUNDATIONSCALE_TRAIN_VIDEO_CACHE_DIR`, or `.fs_video_frames` next to the dataset). The cache keys on the clip, the frame budget and the segment.
 
 **The video download is enormous.** It is ~116 GB across 908 source videos by design. If you only need an end-to-end smoke test, download `data/` plus a subset of videos with `--include` patterns, and use `--total 200` and `--max-rows` on each converter.
 
@@ -464,7 +458,7 @@ Use `refuse` for your first run so a bad setting shows up immediately; switch to
 
 **`gpt` values look like objects, not strings.** That is the raw image dataset layout (`{"reasoning","answer"}` dicts). The converter is what turns them into `🥵…🥵/` strings and then into the per-model native format; don't pre-transform them.
 
-**I pasted Qwen `🥵` tags into a Gemma prompt and it output tags as text.** Gemma 4 has its own thought channel and does not understand a literal `🥵`. Keep tags in the canonical file and let FoundationScale convert; never bake a model's tags into the JSONL.
+**I pasted Qwen `🥵` tags into a Gemma prompt and it output tags as text.** Gemma 4 has its own thought channel and does not understand a literal `🥵`. Keep tags in the canonical file and let FoundationScale convert.
 
 ---
 

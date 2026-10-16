@@ -2,15 +2,9 @@
 
 FoundationScale accepts contributions on two conditions: the change runs the same
 battery CI runs, and any claim it makes carries its own coverage. Both are tested,
-not requested. This document explains the workflow and the two standing review
-rules, and states plainly where the machinery does not reach.
-
-## Scope of this document
-
-This page is the contributor-facing companion to
-[docs/DEVELOPMENT.md](DEVELOPMENT.md), which documents each `make` target in
-detail. Here the emphasis is on what a contributor owes a PR, why the review
-rules exist, and how the drift gate polices numbers in shipped documents.
+not requested. This document explains the workflow, the two standing review
+rules, and where the machinery does not reach. Each `make` target is documented
+in detail in [docs/DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Before opening a PR
 
@@ -25,10 +19,8 @@ The aggregate runs every target CI runs: `lint`, `typecheck`, `typecheck-checks`
 `packaging`, `training-plane`, `makefile-tooling`, `countables`,
 `launcher-contracts`, `checks-gates`, and `mutation`. CI runs the same steps
 across its matrix. The Makefile is convenience only — CI mirrors it, it does not
-consume it — but `make check` is kept at parity on purpose. A gate reachable
-only by typing its name on a machine where the developer forgets it exists is an
-orphan; that is why the aggregate is required to stay complete rather than
-merely available.
+consume it — but `make check` is kept at parity on purpose: a gate reachable only
+by typing its name is an orphan.
 
 | Situation | What to run |
 |---|---|
@@ -60,9 +52,9 @@ make check PY=python3.11          # explicit interpreter wins
 PY=/usr/bin/python3 make lint     # environment wins
 ```
 
-Note that `$(PY) -m ruff` under an interpreter that lacks ruff fails with
-`No module named ruff` rather than `ruff: command not found`; both errors mean
-"wrong environment", and the fix is `make install`, not a PATH edit.
+`$(PY) -m ruff` failing with `No module named ruff` means the same thing as
+`ruff: command not found`: the wrong environment. The fix is `make install`, not
+a PATH edit.
 
 `make typecheck` must run in the environment `make install` creates, one with the
 `[checkpoint]` extra installed. mypy without torch checks a different program:
@@ -72,12 +64,12 @@ because the environment differed.
 
 ## Standing review rule 1: every count carries its denominator
 
-Founding rule of the project: `all([])` is True, and a check that examined zero
-units reports VACUOUS (or its stated non-zero exit), not PASS. Every count in a
-shipped document must state what it is a count of.
+Every count in a shipped document must state what it is a count of. The rule
+behind it (`all([])` is True, and a check that examined zero units reports
+VACUOUS (or its stated non-zero exit), not PASS) is told in
+[docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
-The drift gate `checks/countables_drift.py` enforces this on shipped numbers:
-state counts only in wordings it anchors. The workflow is:
+The drift gate `checks/countables_drift.py` enforces this on shipped numbers: state counts only in wordings it anchors. The workflow is:
 
 ```bash
 make countables
@@ -97,14 +89,14 @@ Practical consequences for contributors:
 * **The census is measured, never committed.** It lands as
   `.countables_census.json` in the working tree; `.gitignore` keeps it out of
   commits and `make clean` removes it. Do not add it to a PR.
-* **The scan set is** `docs README.md Makefile .github/workflows/ci.yml`. Note
-  that the README, the Makefile, and the CI workflow are inside the denominator:
-  the two files that decide what CI measures are counted like any prose
-  document. A directory argument is walked for `*.md`; a file named outright is
-  scanned whatever its suffix.
+* **The scan set is** `docs README.md Makefile .github/workflows/ci.yml`. The
+  README, the Makefile, and the CI workflow are inside the denominator: the two
+  files that decide what CI measures are counted like any prose document. A
+  directory argument is walked for `*.md`; a file named outright is scanned
+  whatever its suffix.
 * **The census counts its own producer.** `tools/countables_census.py` is inside
-  `tools_loc`. Editing the producer moves the number; that is intended, because
-  that drift is exactly what the gate exists to catch.
+  `tools_loc`. Editing the producer moves the number; that drift is exactly what
+  the gate exists to catch.
 * **One anchored number per line.** The gate reads a clause, not a paragraph: a
   number wrapped across a comment continuation is a number in no denominator.
   Keep each count on its own line beside the wording the census anchors.
@@ -140,31 +132,26 @@ at its sharpest: it generates a deliberately skipped test, asserts the armed
 (`test_skip_guard_probe`). A red that cannot name what fired is not a
 satisfying control either.
 
-Controls must be real. Two failure modes the repository has already shipped and
-fixed are worth internalising:
+Controls must be real. Two rules learned from defects the repository shipped:
 
-* A control whose premise was never checked. An early packaging-reachability
-  gate asked `shutil.which(ep.name)` and reported both console scripts
-  unreachable when the only fact it had measured was an unactivated venv. The
-  resolved shape: existence is checked against the interpreter's own script
-  directory and the install record; PATH is reported as operator convenience
-  and can never be red.
-* A control written off as "deliberate back-compat". An exclusion note called a
-  `Distribution.entry_points.get` fallback a silenced-by-design shape; mypy was
-  right and the note was wrong — `entry_points` has on every release been a
-  list (pre-3.10) or an `EntryPoints` (3.10+), never the mapping `.get()`
-  addresses. An excuse written into an exclusion is how a real defect keeps an
-  unfailing gate.
+* Check a control's premise before it can report red: a packaging-reachability
+  gate must test existence against the interpreter's own script directory and
+  the install record. PATH is operator convenience and can never be red — an
+  unactivated venv is not an unreachable console script.
+* Never write an excuse into an exclusion. `Distribution.entry_points.get`
+  mistaken for deliberate back-compat is a defect: `entry_points` has on every
+  release been a list (pre-3.10) or an `EntryPoints` (3.10+), never the mapping
+  `.get()` addresses.
 
 ## Landmarks and exclusions for new checks
 
 | Rule | Consequence |
 |---|---|
-| Exit-code namespace | Gates publish 0 / 5 / 95 / 96. A gate dying at import with exit 1 is outside the namespace it claims to publish — this actually happened on Python 3.9 when `checks/` files lacked `from __future__ import annotations`. |
+| Exit-code namespace | Gates publish 0 / 5 / 95 / 96. A gate dying at import with exit 1 is outside the namespace it claims to publish — `checks/` files need `from __future__ import annotations` to import on Python 3.9. |
 | Linting | ruff covers `src tests tools checks`; `checks/` was added precisely because its exclusion read as coverage. |
 | Typechecking | `make typecheck-checks` gates `checks/` and is in `check`, not prefixed with `-`. A recipe that cannot fail while printing 22 errors is a suppression, not a report. |
 | Call sites | The launcher suite's anti-orphan leg scans every `launchers/*.py` and `checks/*.py` for call sites and refuses a file that has none — a new gate committed without a call site is indicted by CI even with `make check` green on the authoring branch. |
-| CI extras parity | If your change adds tests importing a new extra (the `#253` case was `[train]` / `tokenizers`), every job executing pytest needs the same extras; `make ci-suite-extras` checks this. Jobs that merely mention pytest without executing it are MUST_PASS controls, deliberately. |
+| CI extras parity | A change adding tests that import a new extra (`[train]` / `tokenizers`, for example) needs the same extras in every job executing pytest; `make ci-suite-extras` checks this. Jobs that merely mention pytest without executing it are MUST_PASS controls, deliberately. |
 
 ## License
 

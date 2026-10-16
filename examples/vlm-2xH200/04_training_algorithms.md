@@ -61,7 +61,7 @@ The DPO script reads `data/pref/dpo_train.jsonl`; the GRPO script reads `data/rl
 
 ## Step 2 — DPO + LoRA on 2× H200 (text-only, verified)
 
-The two preference/RL trainers ship as ready-made scripts under `examples/vlm-2xH200/scripts/`. They are **real CLIs**: `--help` prints every flag, and each is launched with `torchrun`, with 127.0.0.1 for the rendezvous (IPv6 localhost is not usable on the competition VM image).
+The two preference/RL trainers ship as ready-made scripts under `examples/vlm-2xH200/scripts/`. They are **real CLIs**: `--help` prints every flag, and each is launched with `torchrun`, with 127.0.0.1 for the rendezvous (IPv6 localhost is not usable).
 
 1. `examples/vlm-2xH200/scripts/train_dpo.py` — Preference training (DPO, IPO, ORPO, SimPO, CPO) with LoRA over a JSONL of prompt/chosen/rejected triples.
 
@@ -98,13 +98,13 @@ RESULT_JSON {"ok": true, "model": "models/Qwen3.6-27B",
 - peak memory **72.7 GB/GPU** (identical 72.7 GB at `max_length 8192`)
 - exact history key names for preference accuracy / margin: `preference_accuracy` and `margin` (next to `loss`), as printed above
 
-Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-length`, `--learning-rate`, `--lora-rank`, `--lora-alpha`. Measured by a fresh user: a 5-step acceptance run is **92 s**; a full run at 30 steps is under 5 minutes.
+Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-length`, `--learning-rate`, `--lora-rank`, `--lora-alpha`. A 5-step acceptance run is **92 s**; a full run at 30 steps is under 5 minutes.
 
 ---
 
 ## Step 2b — Multimodal DPO (image + video + text, verified on gemma-4-12B-it and Qwen3.6-27B)
 
-The offline preference trainer now accepts image and/or video rows: declare
+The offline preference trainer accepts image and/or video rows: declare
 `image_column`/`video_column` (`--image-column`/`--video-column` on the CLI)
 and a record's declared media is rendered through the SAME processor path
 SFT uses (`<image>`/`<video>` markers in `prompt`, media loaded/decoded, the
@@ -171,15 +171,15 @@ torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 298
 | (3) `Qwen3.6-27B`, mixed image+video+text, DPO | 0 | 80.2 | 20.6 | `0.693147` (`ln 2`) | 0.5269 | 0.75 | 0.667 | saved |
 | (4) `Qwen3.6-27B`, mixed image+video+text, ORPO | 0 | 79.9 | 25.7 | 0.5740 (ORPO adds an NLL term, so not `ln 2`) | 0.9622 | 0.75 | 0.192 | saved |
 
-Three bugs blocked the Qwen3.6-27B rows until they were found and fixed (2026-10-11):
+Three bugs had to be fixed before the Qwen3.6-27B runs above could complete:
 
-**Bug A (found and fixed): a heterogeneous-batch modality-narrowing crash.** The first mixed-batch run crashed inside the model's own placeholder-count check (`Video features and video tokens do not match, tokens: 0, features: 2400`). ``image_grid_thw``/``video_grid_thw`` count MEDIA ITEMS, not training rows — a batch where only one row carries a video still gets a 1-row ``video_grid_thw``, never a zero-padded one row per training row — so `rl.trainer._narrow_modality_kwargs_by_row`'s own precondition ("one image per prompt," true for the online RL trainer that built it) does not hold for a HETEROGENEOUS image+video+text batch. Fixed by tracking per-row image/video counts (`_EncodedBatch.image_counts`/`video_counts`) and translating a training-row micro-batch range into the matching MEDIA-row range per modality before calling the reused helper — and by OMITTING a modality's keys entirely (never passing an empty tensor) for a micro-batch slice that carries none of it, which a second measured crash (`repeats must have the same size as input along dim`) showed the vision tower does not tolerate either. A THIRD measured crash (`RuntimeError: start (2) + length (1) exceeds dimension size (2)`) showed gemma's own convention (`image_position_ids`/`video_position_ids`, no `*_grid_thw` pair at all) defeated a name-based key classifier; the fix classifies by TENSOR SHAPE against the batch's measured row/image/video counts instead of a hardcoded name list, with a flattened-patch-pair reconciliation pass for Qwen's convention. All three failure modes are pinned as CPU regression tests in `tests/rl/test_preference_trainer_multimodal.py`.
+**Bug A: heterogeneous-batch modality crash.** A mixed image+video+text batch crashed in the model's placeholder-count check (`Video features and video tokens do not match, tokens: 0, features: 2400`) because `image_grid_thw`/`video_grid_thw` count media items, not training rows. The fix tracks per-row image/video counts (`_EncodedBatch.image_counts`/`video_counts`), translates a training-row micro-batch into the matching media-row range per modality before slicing, omits a modality's keys entirely (never passes empty tensors) for slices carrying none of it, and classifies keys by tensor shape against the batch's measured counts rather than a name list — so both Qwen's `*_grid_thw` and gemma's `*_position_ids` conventions work. Pinned as CPU regression tests in `tests/rl/test_preference_trainer_multimodal.py`.
 
-**Bug B (found and fixed): a genuine collective-count deadlock, not a slow step.** `Qwen3.6-27B` DPO/ORPO runs hung past increasingly generous NCCL collective timeouts (600s default, then 30 min, then 90 min configured via `FOUNDATIONSCALE_COLLECTIVE_TIMEOUT_MINUTES` on `init_process_group`). The first py-spy dump of both ranks was misread as a wall-clock imbalance (one rank's Python frame parked in a hot `transformers` RMSNorm call, the SAME frame on repeated samples) because py-spy only samples Python frames and RMSNorm is the hottest call site in any forward, computing or blocked underneath. The NCCL watchdog's OWN flight-recorder dump at the actual timeout told the true story: one rank's innermost frame was FSDP2's `all_gather_single` inside per-layer `unshard`, with `last enqueued` far ahead of `last completed` (prefetched all-gathers piling up unanswered), while the OTHER rank had already left the forward pass entirely and moved on to the next collective. That is a genuine deadlock: `preference_trainer.py`'s `_one_step` sized its logprob micro-batch COUNT (and whether to micro-batch at all) from each rank's own `row_count` with no cross-rank agreement, so an uneven prompt-level shard could give one rank more (or zero) micro-batch forward() calls than its peer for the same step — each forward() re-fires FSDP2's per-layer all-gathers, so a rank short one call leaves its peer's matching all-gather with no partner, forever. `rl/trainer.py` already carries the fix for the identical GRPO-side bug (`agree_max` plus a shared zero-weight pad slice, `_padding_backwards`); `preference_trainer.py` now mirrors it: every rank agrees on the micro-batch slice COUNT (`agree_max`) and on WHETHER to slice at all (`agree_all`), pads up to the busier peer's count with a cheap 1-row dummy forward/backward whose gradient is exactly zero, and only then narrows to its own real rows before concatenating. Two CPU regression tests in `tests/rl/test_preference_trainer_cov.py` pin this: one proves the padded run's optimizer step is bit-for-bit identical to a padding-free control (the padding leaks no gradient), the other proves a rank whose OWN row count would take the single-shot path still slices (and pads) when a peer needs to.
+**Bug B: collective-count deadlock.** Runs hung past the NCCL collective timeout because `preference_trainer.py`'s `_one_step` sized its logprob micro-batch count per rank from local `row_count`, so an uneven prompt-level shard left one rank's FSDP2 all-gathers unmatched. `preference_trainer.py` now mirrors the `rl/trainer.py` fix: every rank agrees on the micro-batch slice count (`agree_max`) and on whether to slice at all (`agree_all`), padding up to the busier peer with a cheap 1-row dummy forward/backward whose gradient is exactly zero (`_padding_backwards`). Pinned as two CPU regression tests in `tests/rl/test_preference_trainer_cov.py` (the padded run's optimizer step matches a padding-free control bit-for-bit; a rank whose own row count would take the single-shot path still slices when a peer needs to).
 
-**Bug C (found and fixed): FSDP2 wrapped the Qwen vision blocks separately.** After Bug B's fix, some 20-step runs still stalled for the full 90-minute collective timeout. This was first misread as a very slow row (an earlier version of this page blamed the unoptimized `causal_conv1d` fallback). A `py-spy dump --native` of both ranks during a stall showed the real cause: rank 0 was frozen inside `Qwen3_5VisionBlock.forward` while rank 1, whose row at the same index was text-only, waited at the trainer's own cross-rank barrier. transformers 5.18 lists `Qwen3_5VisionBlock` in Qwen3.6's `_no_split_modules`, so `wrap_fsdp2` gave every vision block its own FSDP2 unit even though tower sharding was off for this media run; an image row on one rank then issued all-gathers the other rank never matched. gemma-4 never hit this because its `_no_split_modules` names only the text decoder layer. `wrap_fsdp2` now folds tower-internal blocks into the root unit when `shard_towers=False` (`tests/rl/test_rl_fsdp_tower_wrap.py`). With it, the 20-step DPO run finished in under 7 minutes at 20.6 s/step (it measured ~90 s/step before), and ORPO ran 10 steps at 25.7 s/step. The rows are short: across all 280 rendered rows the longest is 8,239 tokens, so length was never the cause.
+**Bug C: FSDP2 wrapping of Qwen vision blocks.** Some runs stalled at a cross-rank barrier because transformers' `_no_split_modules` gave each `Qwen3_5VisionBlock` its own FSDP2 unit, so an image row on one rank issued all-gathers the other rank never matched (gemma-4 never hit this: its `_no_split_modules` names only the text decoder layer). `wrap_fsdp2` now folds tower-internal blocks into the root unit when `shard_towers=False`, pinned in `tests/rl/test_rl_fsdp_tower_wrap.py`. With it, the 20-step DPO run finished at 20.6 s/step (measured ~90 s/step before); across all 280 rendered rows the longest is 8,239 tokens, so row length was never the cause.
 
-**The control that proves pixels matter** (measured, `gemma-4-12B-it`, single GPU, LoRA r16, 2 DPO steps on the SAME 8 image pairs, same seed so LoRA's random init is identical): step-0 loss is `ln 2 = 0.693147...` in BOTH conditions (policy == reference by construction, independent of pixel content — expected, and itself a check that nothing else differs between the two runs). After one gradient step, real images give loss `0.3253`, solid-black images give loss `0.3145` — DIFFERENT. If they had matched, the vision tower's contribution would be zero and the run would be training on the prompt text alone under a multimodal label. Automated as `validation_campaigns/vlm_2xh200/test_preference_trainer_multimodal_dpo.py`.
+**Pixel control** (measured, `gemma-4-12B-it`, single GPU, LoRA r16, 2 DPO steps on the SAME 8 image pairs, same seed so LoRA's random init is identical): step-0 loss is `ln 2 = 0.693147...` in BOTH conditions — real images and solid-black images (policy == reference by construction). After one gradient step, real images give loss `0.3253`, solid-black images give `0.3145` — different, so the vision tower contributes; had they matched, the run would be training on prompt text alone under a multimodal label. Automated as `validation_campaigns/vlm_2xh200/test_preference_trainer_multimodal_dpo.py`.
 
 Flags added to `train_dpo.py` for this step: `--image-column`, `--video-column`, `--video-frames`, `--video-sampling`, `--video-max-side`.
 
@@ -225,22 +225,15 @@ A refused run (for example every GRPO step had identical rewards) **exits 96 wit
 - exit code 0; the saved LoRA adapter loads
 - `kl_contribution` at the first step must be exactly `0` — the reference-model sanity check (same model, adapter off, no second copy in VRAM)
 - abstained steps are **expected**: on hard questions all 4 samples kept reasoning and ran out of `max_new_tokens` before writing `"Answer: X"`; `MCQLetterReward` then drops the row and the step produces no reward
-- wall time and per-step reward stats land in `runs/grpo/result.json` (`reward_mean`, `reward_std`, `reward_min`, `reward_max`, `kl_contribution` per step); measured by a fresh user: a 5-step acceptance run is **198 s**
+- wall time and per-step reward stats land in `runs/grpo/result.json` (`reward_mean`, `reward_std`, `reward_min`, `reward_max`, `kl_contribution` per step); a 5-step acceptance run is **198 s**
 
 Flags: `--model`, `--data`, `--output-dir`, `--algorithm`, `--max-steps`, `--max-new-tokens`, `--group-size`, `--prompts-per-step`, `--learning-rate`, `--lora-rank`, `--lora-alpha`.
 
 ### GRPO with images on the Qwen models (status: runs without error after three fixes; no measurable reward yet)
 
-GRPO with images on `Qwen3.6-27B` and `Qwen3.6-35B-A3B` used to be broken by three vision-specific bugs. All three are **fixed on the current branch**:
+Three vision bugs are fixed for `Qwen3.6-27B` and `Qwen3.6-35B-A3B`: the RL trainer loaded the text-only class for these models (the vision path never reached the RL trainer); prompt-length `mm_token_type_ids` were forwarded together with the prompt+completion ids; Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching. After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, `sharding="ddp"` — hard-coded in `train_grpo.py` — bf16, activation checkpointing; `train_grpo.py` has no `--fused-loss` option). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
 
-1. the RL trainer loaded the **text-only class** for the Qwen models (the vision path never reached the RL trainer);
-2. **prompt-length `mm_token_type_ids`** were forwarded together with the prompt+completion ids;
-3. **Qwen's flattened patch tensor was sliced by row** in group expansion and micro-batching.
-
-After the fixes **both models run GRPO with images 10 steps without error**: peak **60.3 GB/GPU** (`Qwen3.6-27B`) and **82.2 GB/GPU** (`Qwen3.6-35B-A3B`), on the 2× H200 run recipe used throughout this chapter (LoRA r16/α32, `sharding="ddp"` — hard-coded in `train_grpo.py` — bf16, activation checkpointing; `train_grpo.py` has no `--fused-loss` option). The gemma models never had these problems: `gemma-4-26B-A4B-it` and `gemma-4-31B-it` each run 20 steps of GRPO with images, exit 0. See the algorithm × model matrix in Step 5 and the Troubleshooting entry if a Qwen run fails.
-
-
-**Measured caveat (2x GB200, 2026-10-15):** "runs without error" is not "learns". With this ScienceQA recipe, `Qwen3.6-27B` produced 0 measurable GRPO steps out of 20 at `--max-new-tokens 400` and again at 1,024: almost no completion ended in `Answer: X`, so the reward abstained and FoundationScale refused the run (exit 96). gemma-4-12B-it measures 8 of 20 steps on the same data. Making Qwen3.6 GRPO learn needs prompt and answer-format work for reasoning models; see [../vlm-2xGB200/](../vlm-2xGB200/).
+**Measured caveat (2× GB200):** "runs without error" is not "learns". With this ScienceQA recipe, `Qwen3.6-27B` produced 0 measurable GRPO steps out of 20 at `--max-new-tokens 400` and again at 1,024: almost no completion ended in `Answer: X`, so the reward abstained and FoundationScale refused the run (exit 96). gemma-4-12B-it measures 8 of 20 steps on the same data. Making Qwen3.6 GRPO learn needs prompt and answer-format work for reasoning models; see [../vlm-2xGB200/](../vlm-2xGB200/).
 
 ---
 
@@ -284,9 +277,9 @@ The 12 RL algorithms share the same `algorithm=` field (CLI: `--algorithm`); per
 - `sharding="ddp"` is the validated choice for preference training with LoRA as well — it fits, with the peaks measured above. Use `ddp` when in doubt.
 - Keep `logprob_micro_batch=1` for long preference rows: without it the peak was **125 GB** at `max_length 4096` (fp32 vocab logits of a long row); with it, 72.7 GB at 4096 and the same 72.7 GB at 8192.
 
-### Rollout generation is now safe with gradient checkpointing
+### Rollout generation is safe with gradient checkpointing
 
-Generation runs in eval mode with the KV cache even when `gradient_checkpointing=True`. An earlier bug corrupted rollouts after the first token; it is fixed and verified (identical 32-token greedy rollout with checkpointing on/off). Training and generation can therefore both use gradient checkpointing.
+Generation runs in eval mode with the KV cache even when `gradient_checkpointing=True`. A bug where rollouts were corrupted after the first token is fixed and verified (identical 32-token greedy rollout with checkpointing on/off); training and generation can both use gradient checkpointing.
 
 ### Algorithm × model results (measured sweep, 2 × H200)
 
@@ -306,7 +299,7 @@ Every cell below is a measured run of the **20-step acceptance sweep**: 2× H200
 | `reinforce_pp` (REINFORCE++), with images | 20 steps, exit 0 | — | — | — | — |
 | `rloo`, with images | 20 steps, exit 0 | — | — | — | — |
 
-† GRPO with images on the Qwen models runs only **after** the three vision fixes (see Step 3): text-only class loaded by the RL trainer; prompt-length `mm_token_type_ids` forwarded with prompt+completion ids; Qwen's flattened patch tensor sliced by row in group expansion and micro-batching. Before the fixes the run failed; after them both run 10 steps with images without error.
+† GRPO with images on the Qwen models runs only **after** the three vision fixes described in Step 3. Before the fixes the run failed; after them both run 10 steps with images without error.
 
 Not in this sweep: `kto`, `raft`, `best_of_n`, `online_dpo`, `iterative_dpo`, `ppo` (registered, but no measured numbers to report here). Modality rules: preference rows take text, image and/or video (declare `image_column`/`video_column`, Step 2b); `RLTrainer` still refuses video rows (images only).
 
@@ -388,12 +381,10 @@ the training reward alone; and sweep the learning rate between these two points 
 
 **Only some steps of 30 produce a reward (11/30 or 13/30 is the measured norm).** Expected on hard ScienceQA questions with `group_size 4`: all 4 samples keep reasoning and hit `max_new_tokens`. This is abstention, not a bug.
 
-**GRPO with images on a Qwen model fails (`mm_token_type_ids` mismatch, patch-tensor slicing, or a run that silently trains text only).** Three vision bugs, all fixed on the current branch: the text-only class was loaded by the RL trainer; prompt-length `mm_token_type_ids` were forwarded with the prompt+completion ids; Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching. After the fixes `Qwen3.6-27B` and `Qwen3.6-35B-A3B` run 10 steps of GRPO with images without error (peak 60.3 / 82.2 GB per GPU, 2× H200, LoRA r16/α32).
+**GRPO with images on a Qwen model fails (`mm_token_type_ids` mismatch, patch-tensor slicing, or a run that silently trains text only).** Three vision bugs, all fixed: the text-only class was loaded by the RL trainer; prompt-length `mm_token_type_ids` were forwarded with the prompt+completion ids; Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching. After the fixes `Qwen3.6-27B` and `Qwen3.6-35B-A3B` run 10 steps of GRPO with images without error (peak 60.3 / 82.2 GB per GPU, 2× H200, LoRA r16/α32).
 
 **Exit 96 with a `REFUSED` ("vacuous run") message, or almost every step is skipped.** Every group scored identical rewards (all 4 samples right, or none finished within `max_new_tokens`), so every advantage was zero and every step was skipped; the trainer refuses a run with no trainable step at all. Measured here: `gemma-4-12B-it` produced 3 of 20 trainable steps with `group_size 4` / 4 prompts per step. Remedies: `--group-size 8`, more `--prompts-per-step`, harder questions matched to the model, `--max-new-tokens 400+` for reasoning models (see "The GRPO signal" section above).
 
 **Edit the `algorithm` field name to `objective` by habit?** The shipped scripts take `algorithm="dpo"` / `algorithm="grpo"` on `PreferenceTrainConfig` / `RLTrainConfig` (`--algorithm dpo` / `--algorithm grpo` on the CLI); there is no separate `objective` field to set — `objective` is only a legacy spelling found in some older configs.
 
-Next: chapter 05 — [Evaluation](05_evaluation.md).
-
-**Next:** [05 — Evaluation](05_evaluation.md)
+Next: [05 — Evaluation](05_evaluation.md).

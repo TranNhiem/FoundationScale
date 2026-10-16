@@ -1,17 +1,9 @@
 # Examples
 
-README §22 calls this file "the catalogue that should exist". It is, mostly, a short
-catalogue, and it says so openly. The `examples/` directory at the repository root is
-deliberately thin: its first job is not to show breadth but to be the surface a new user
-runs first — and it shipped broken once, precisely because nothing measured it. This
-document is therefore half inventory, half explanation of how `examples/` got a
-denominator, and an explicit statement of what is **not** in it.
+The catalogue of `examples/` — the surface a new user runs first — with the hello-world
+gate and the exit-code contract shared by every training path.
 
 ## What `examples/` contains
-
-Per the README's own caveat, the contents of `examples/` were unmeasured by the evidence
-slice the README was written from — interactively, `ls examples/` is what measures them.
-What this documentation can state, because the source material names it, is:
 
 | path | what it is |
 |---|---|
@@ -25,12 +17,14 @@ What this documentation can state, because the source material names it, is:
 | `examples/llm-2xA100/` | text-only LLM LoRA SFT tutorial (Qwen2.5-7B-Instruct), measured on two A100s |
 | `examples/speech-2xA100/`, `examples/vlm-2xA100/` | the H200 speech and VLM tutorials re-measured on two A100s |
 | `examples/vlm-2xGB200/` | the H200 VLM tutorial on two GPUs of a shared GB200 tray (aarch64): launcher, configs, measured fit matrix and end-to-end run |
-| `examples/nvfp4-GB200/` | NVFP4 (4-bit) fine-tuning on Blackwell through Megatron-Bridge, with a bf16 control arm and a verifier that proves FP4 was active and reports its cost |
 
 The runnable gate example from README §10 is not a file under `examples/`; it lives in
 the README itself and in `foundationscale.gates.example`. The launchers and the harness
 evidence live under `validation_campaigns/`, not `examples/` (see "What is not in
 `examples/`" below).
+
+New files are covered the day they land: the glob-tested sweep in
+`tests/train/test_examples_runnable.py` keeps this catalogue current.
 
 ## The gate example — the honest hello-world
 
@@ -49,14 +43,11 @@ print(result.render())
 assert result.verdict is Verdict.VACUOUS and result.blocking
 ```
 
-Read the assertion, because it is the founding rule in miniature. The fixture declares
-**128** experts and provides zero of them; the gate examines zero units and reports
-`VACUOUS`, **blocking** — not `PASS`. `all([])` is `True`, so a framework that equated
-"ran and found nothing" with "passed" would report this as a success. FoundationScale
-does not. A claim must carry its own coverage.
-
-This matters for the training examples below, where the same shape reappears as SKIP
-verdicts over a dense model.
+The fixture declares **128** experts and provides zero of them; the gate examines zero
+units and reports `VACUOUS`, **blocking** — not `PASS`. This is the founding rule in
+miniature: a claim must carry its own coverage. It is told once, at length, in
+[docs/ARCHITECTURE.md](ARCHITECTURE.md). The training examples below show the same shape
+as SKIP verdicts over a dense model.
 
 ## `examples/train_tiny.py` — the one-screen training example
 
@@ -93,15 +84,14 @@ torchrun --nproc_per_node=4 examples/train_tiny.py
 ```
 
 `GPUS` is deliberately **not** derived from `WORLD_SIZE`. `train()` compares the
-topology you declared against the one torchrun actually built, and a declaration copied
-out of the runtime would be a comparator that can never disagree with itself. Mismatch
-is caught in the prologue, before a GPU is touched. This structure is pinned by a test —
-see `test_declared_gpu_count_has_exactly_one_source` below — because the drift is
-silent and only bites users not on a 1-GPU box.
+topology you declared against the one torchrun actually built; a declaration copied out
+of the runtime would be a comparator that can never disagree with itself. Mismatch is
+caught in the prologue, before a GPU is touched. The one-source rule is pinned by
+`test_declared_gpu_count_has_exactly_one_source` below.
 
 ### `node_pattern` is a regex
 
-The profile field that broke this example once:
+A regular expression, not a Slurm hostlist:
 
 ```python
 "node_pattern": r"compute-0[1-8]",   # a REGEX, not a Slurm hostlist
@@ -110,9 +100,7 @@ The profile field that broke this example once:
 The hostlist spelling of the same range — `"compute-[01-08]"` — contains a `1`-to-`0`
 range inside a character class, which `re.compile` refuses. `ClusterProfile` validates
 `node_pattern` in `__post_init__` and raises
-`ValueError: node_pattern is not a valid regex`. That failure was invisible to a ~1,100-
-test suite because the example's copy of the profile was not the copy under test — see
-the next section.
+`ValueError: node_pattern is not a valid regex`.
 
 ### Validate only, zero GPUs
 
@@ -123,9 +111,8 @@ python3 -m foundationscale.train.cli ... --dry-run
 ```
 
 `--dry-run` runs the full validation prologue — profile resolution, topology arithmetic,
-validation — without constructing a model. Put it in front of a scheduler
-submission, so an incoherent request is rejected without holding an allocation while it
-finds out.
+validation — without constructing a model. Put it in front of a scheduler submission, so
+an incoherent request is rejected without holding an allocation while it finds out.
 
 ## The offline variant
 
@@ -144,13 +131,10 @@ the Hub once, and afterwards the command is fully offline. The loop reads `FS_RU
 and `FS_ATTEMPT` from the environment. The full recipe — transcripts, the run manifest's
 fields, the save gates, the symptom→cause table — is [docs/TRAINING.md](TRAINING.md).
 
-## How `examples/` got a denominator
+## Keeping `examples/` runnable
 
-`tests/train/test_examples_runnable.py` exists because the example rotted: the suite was
-green while `python3 examples/train_tiny.py` — the one command a new user runs first —
-died on its own line 22 with the `node_pattern` error above. The two tests needing the
-same profile each carried their own correct copy of it, so the shipped copy was never
-the tested copy. The fix is not a fixture patch; it is a generic sweep:
+`tests/train/test_examples_runnable.py` exists so the shipped copy of an example is the
+copy under test — a profile or value that diverges from the tested one breaks the sweep.
 
 | test | what it guarantees |
 |---|---|
@@ -163,7 +147,7 @@ the tested copy. The fix is not a fixture patch; it is a generic sweep:
 Discovery is by filesystem glob (`*.py`, excluding names starting with `_`), so a new
 example is covered the day it lands, without anyone remembering to add a test. The
 imports are isolated — `sys.modules` is restored in `finally` — so a failed import
-cannot leave a half-built module behind for the next test to import successfully.
+cannot leave a half-built module behind.
 
 ## Exit codes across the examples
 
@@ -184,19 +168,13 @@ is reported as such — not "all clear".
 
 ## What is not in `examples/`
 
-- **The launchers.** The two complete, gated single-estate training jobs referenced in
-  README §22 are presented as worked examples of launch-time verification (§7, §15) but
-  they do not live under `examples/`; the trainable, fabric-tripwired production launch
-  plane is `validation_campaigns/h100_validation/` and the GB200 launchers.
-  `examples/train_tiny.py` is explicitly the *thin* path: `transformers.Trainer` DDP
-  with the validation prologue and save gates. `--tp/--pp/--ep/--cp` are accepted and
-  validated, but the thin loop executes DDP.
+- **The launchers.** The trainable, fabric-tripwired production launch plane is
+  `validation_campaigns/h100_validation/` and the GB200 launchers. `examples/train_tiny.py`
+  is explicitly the *thin* path: `transformers.Trainer` DDP with the validation prologue
+  and save gates. `--tp/--pp/--ep/--cp` are accepted and validated, but the thin loop
+  executes DDP.
 - **The harness evidence.** Gates firing against real launches are at
   `validation_campaigns/h100_validation/h100/EVIDENCE.md`.
-- **Anything else.** Beyond `train_tiny.py` and `data/toy_text.jsonl`, the source
-  material this catalogue was written from names no other files in `examples/`. It is a
-  glob test away from growing — new files are measured the day they land — but this
-  document catalogues only what the evidence names.
 
 ## Related
 

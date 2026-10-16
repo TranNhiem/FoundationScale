@@ -1,8 +1,8 @@
 # Train your own vision-language model on 2x H200 with FoundationScale
 
-A hands-on path from an empty VM to an evaluated, fine-tuned VLM. It is written for teams that
-each get **one machine with 2x NVIDIA H200 (141 GB each)**, and for anyone who wants a worked,
-measured example of LoRA training on image + video + text data.
+A hands-on path from an empty VM to an evaluated, fine-tuned VLM, written for a single machine
+with 2x NVIDIA H200 (141 GB each), and for anyone who wants a worked, measured example of LoRA
+training on image + video + text data.
 
 Everything below was run on that machine. The numbers are measured, not estimated; the raw
 evidence is in [`validation_campaigns/vlm_2xh200/EVIDENCE.md`](../../validation_campaigns/vlm_2xh200/EVIDENCE.md).
@@ -37,8 +37,7 @@ git clone https://github.com/TranNhiem/FoundationScale.git && cd FoundationScale
 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/gemma-4-12B-it_16k.env
 ```
 
-
-Measured by a fresh user on 2x H200: data prep < 1 min on the sample files, 20-step SFT of
+Reference durations on 2x H200: data prep < 1 min on the sample files, 20-step SFT of
 gemma-4-12B-it ~12 min (add `STEPS=20` for that smoke run), DPO 5 steps 92 s, GRPO 5 steps 198 s,
 evaluation ~20 min plus a 6 min vLLM install.
 
@@ -91,14 +90,11 @@ both GPUs.
 | GRPO, Dr-GRPO, DAPO, GSPO, REINFORCE++, RLOO | gemma-4-12B-it | images |
 | GRPO | gemma-4-26B-A4B-it, gemma-4-31B-it | images |
 
-GRPO with images on **Qwen3.6-27B / Qwen3.6-35B-A3B** needed three bug fixes (found on this
-branch):
-
-- the RL trainer loaded the text-only processor class instead of the multimodal one;
-- prompt-length `mm_token_type_ids` were forwarded together with the prompt+completion `input_ids`;
-- Qwen's flattened patch tensor was sliced by row in group expansion and micro-batching.
-
-After the fixes both models run 10 steps with images without error (peak **60.3 GB** per GPU for
+GRPO with images on **Qwen3.6-27B / Qwen3.6-35B-A3B** required three fixes in FoundationScale:
+the RL trainer must load the multimodal processor (not the text-only one); prompt-length
+`mm_token_type_ids` must not be forwarded with the prompt+completion `input_ids`; and Qwen's
+flattened patch tensor must not be sliced by row in group expansion and micro-batching. With
+these fixes both models run 10 steps with images without error (peak **60.3 GB** per GPU for
 Qwen3.6-27B, **82.2 GB** for Qwen3.6-35B-A3B).
 
 **GRPO signal: watch the advantage.** On ScienceQA many groups give all-identical rewards — the
@@ -128,8 +124,8 @@ Held-out loss (`eval_heldout_loss.py --data data/prepared/heldout.jsonl`, 0 rows
 `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` in training. Without it, video rows are refused with
 exit 96.
 
-Getting the benchmark (the file is public data; the opencompass host's TLS certificate was
-expired when tested, so `curl` may fail with "certificate has expired" / error 60):
+Getting the benchmark (the file is public data; `curl` may fail with "certificate has expired" /
+error 60 because of the opencompass host's certificate):
 
 ```bash
 curl -L -o data/eval/MMStar.tsv https://opencompass.openxlab.space/utils/VLMEval/MMStar.tsv
@@ -151,19 +147,12 @@ MMStar (1,498 questions, vLLM, `--max-tokens 512`):
 Specialising on Vietnamese documents and activity videos cost about **2 points** of general
 English perception.
 
-### Benchmark scoring lesson (also stated in chapter 05)
+Before trusting any benchmark number, see chapter 05 ([05_evaluation.md](05_evaluation.md) §4)
+for the parser lesson and how to handle unparsable answers. The eval script also accepts
+`--max-num-seqs` (how many sequences the vLLM batcher keeps in flight); lower it if evaluation
+hits out of memory.
 
-An earlier version of `eval_mcq_vllm.py` used `max_tokens=32` and took the **first** standalone
-capital letter as the answer. On MMStar that reported **47.00% for the same base model — 17
-points too low**: reasoning answers were cut off (26% unparsable), and an English article "A"
-could be read as option A. The script now defaults to `--max-tokens 512` and prefers an explicit
-answer (`Answer: C`, `the answer is (C)`, `**C**`), then a bare letter, then the last letter on
-the final line. **Always check the unparsable count and read a few raw outputs before trusting a
-benchmark number**; raise `--max-tokens` to 1024 for reasoning-heavy benchmarks. The eval script
-also accepts `--max-num-seqs` (how many sequences the vLLM batcher keeps in flight); lower it if
-evaluation hits out of memory.
-
-## Longer training: 300-step LoRA SFT on all five models (measured)
+## 300-step LoRA SFT on all five models (measured)
 
 16K context, unpadded, gradient accumulation 4, on a 2,400-row image + video + text train mix
 made with `prepare_data.py split` + `mix`. Held-out = 171 rows the models never saw (110 image,
@@ -220,7 +209,7 @@ Override any setting from the shell with environment variables (`STEPS`, `LR`, `
 `SAVE_EVERY`, `GRAD_ACCUM`, `VIDEO_FRAMES`):
 `STEPS=2000 LR=5e-5 bash examples/vlm-2xH200/scripts/train_sft.sh examples/vlm-2xH200/configs/...`.
 
-## Things that will bite you on this VM (all measured)
+## Common pitfalls (all measured)
 
 - `localhost` resolves only to IPv6 `::1` on the VM image, so `torchrun --standalone` hangs.
   Always pass `--master_addr 127.0.0.1`.
@@ -242,6 +231,5 @@ Override any setting from the shell with environment variables (`STEPS`, `LR`, `
   `_shortvideo` / `_longvideo`) and `videos/<id>.mp4`; download with
   `hf download trannhiem/TranNhiem-Action100M-Human-Activities --repo-type dataset --local-dir data/raw/video`
   and convert with `--input data/raw/video/data/action100m_split1.jsonl --video-root data/raw/video/videos`
-  (see chapter 02).
-  **Publishing in progress: if the dataset is not on the Hub yet, ask the organisers for the files and place them in that layout.**
-- Text-only: a 209-row Vietnamese reasoning file supplied by the organisers.
+  (see chapter 02). If the dataset is not on the Hub, place the files in the layout above.
+- Text-only: a 209-row Vietnamese reasoning file.

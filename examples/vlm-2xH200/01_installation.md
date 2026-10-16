@@ -1,14 +1,12 @@
 # 01 — Installation: conda environment or Docker image
 
+In this chapter you clone the repo, pick **one** environment (conda, uv/venv, or Docker), install the VLM training stack, and download the target models. By the end you have a working `foundationscale-train` and the weights on disk.
 
-In this chapter you'll clone the repo, pick **one** environment (conda, uv/venv, or Docker), install the VLM training stack, and download the target models. By the end you have a working `foundationscale-train` and the weights on disk.
+**Target machine:** a 2x H200 machine (Ubuntu 22.04) — 2x NVIDIA H200 (141 GB each), driver 580 / CUDA 13.0, 44 CPU cores, 472 GB RAM. Docker is not preinstalled (Option C shows the install) and there is no system CUDA toolkit (no `nvcc`) — this matters later.
 
-**Time needed:** **~7 min** for the environment + install (MEASURED on a fresh account: Miniforge 15 s, `conda env create` 3.3 min, `pip install -e` 1 min, `flash-linear-attention` 1.5 min). On top of that, the model downloads depend on network speed; the full model set is ~266 GB.
+**Time needed:** about 7 min for the environment + install (measured breakdown: Miniforge 15 s, `conda env create` 3.3 min, `pip install -e` 1 min, `flash-linear-attention` 1.5 min). Model downloads depend on network speed.
 
-**The VM you're on (same for every team):** Ubuntu 22.04, 2x NVIDIA H200 (141 GB each), driver 580 / CUDA 13.0, 44 CPU cores, 472 GB RAM. No Docker is preinstalled (Option C shows the install) and there is no system CUDA toolkit (no `nvcc`) — this matters later.
-
-All commands below were run on the 2x H200 competition VM, including the Docker path (Option C).
-...
+All commands below were run on a 2x H200 machine, including the Docker path (Option C).
 
 ---
 
@@ -38,7 +36,7 @@ From here on, every command runs from the repository root `FoundationScale/` unl
 
 ## Check the GPUs first
 
-**VM quirk (read this before any run):** GPUs may already be in use by other processes on the shared image. Check and free them first:
+**Before any run:** GPUs may already be in use by other processes on a shared machine. Check and free them first:
 
 ```bash
 nvidia-smi
@@ -48,7 +46,7 @@ Now pick **one** of the three options below.
 
 ---
 
-## Option A — conda environment (VERIFIED on this VM)
+## Option A — conda environment
 
 ### Step A1 — Install Miniforge
 
@@ -84,7 +82,7 @@ Expected output (exact):
 which foundationscale-train
 ```
 
-Expected output (MEASURED): `<your-env>/bin/foundationscale-train`
+Expected output (measured): `<your-env>/bin/foundationscale-train`
 
 GPU sanity check:
 
@@ -138,7 +136,7 @@ soundfile==0.14.0
 
 ---
 
-## Option B — uv + venv (VERIFIED, fastest)
+## Option B — uv + venv (fastest)
 
 ### Step B1 — Install uv and create a venv
 
@@ -160,11 +158,9 @@ uv pip install --python venv/bin/python -e ".[train]"
 source venv/bin/activate
 ```
 
-**Every later chapter assumes the environment from this chapter is ACTIVE in the shell** (conda: `conda activate fs-vlm`; uv: `source venv/bin/activate`). Otherwise `python`/`torchrun` resolve to the system Python 3.10 and `torchrun` is "not found".
-
 ### Check it worked
 
-Run the same two checks as in Option A, but through the venv:
+Run the same checks as in Option A, but through the venv:
 
 ```bash
 venv/bin/python -c "import torch,transformers,peft,liger_kernel,av,foundationscale;print(torch.__version__,torch.cuda.is_available(),transformers.__version__,peft.__version__)"
@@ -173,13 +169,15 @@ venv/bin/python -c "import torch;print(torch.cuda.device_count())"
 
 Expected output: `2.13.0+cu132 True 5.18.0 0.21.2` on the first line (measured on the uv path with the same pinned requirements as Option A), and `2` on the second.
 
-`which foundationscale-train` (or `venv/bin/foundationscale-train`): expected output (MEASURED) is `<your-env>/bin/foundationscale-train` — a path inside `venv/` on this path (i.e. `venv/bin/foundationscale-train`).
+`which foundationscale-train` (or `venv/bin/foundationscale-train`): expected output (measured) is a path inside the env, i.e. `venv/bin/foundationscale-train`.
+
+**Every later chapter assumes this environment is active in the shell** (conda: `conda activate fs-vlm`; uv: `source venv/bin/activate`). Otherwise `python`/`torchrun` resolve to the system Python 3.10 and `torchrun` is "not found".
 
 ---
 
 ## Option C — Docker image
 
-**This VM has no Docker preinstalled.** Installing Docker Engine + the NVIDIA Container Toolkit needs **root** (MEASURED on the VM: ~2 min, Docker 29.9):
+**Docker is not preinstalled on this machine.** Installing Docker Engine + the NVIDIA Container Toolkit needs **root** (about 2 min, Docker 29.9):
 
 ```bash
 apt-get update && apt-get install -y ca-certificates curl gnupg
@@ -207,7 +205,7 @@ https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install
 docker build -f examples/vlm-2xH200/install/Dockerfile -t foundationscale-vlm .
 ```
 
-MEASURED: ~6 min from a fresh clone; the image is 14.5 GB.
+Measured: about 6 min from a fresh clone; the image is 14.5 GB.
 
 ### Step C2 — Run (models and data mounted from the host)
 
@@ -225,10 +223,7 @@ ok 2.13.0+cu132 5.18.0
 
 Inside the container, `python -c "import torch;print(torch.cuda.device_count())"` prints `2`.
 
-VERIFIED 2026-10-11: from a fresh clone, `scripts/train_sft.sh` run inside the container (`-w /workspace/fs-vlm`,
-`STEPS=10`) trained gemma-4-12B-it and Qwen3.6-35B-A3B at 16384 on the image + video + text mix, exit 0,
-adapters saved, save gates PASS. The run manifest reports `code.status=not_a_repository` because the
-working directory is the workspace, not the repository; that is a warning, not a failure.
+Verified inside the container: `scripts/train_sft.sh` (`STEPS=10`) trains gemma-4-12B-it and Qwen3.6-35B-A3B at 16384 on the image + video + text mix — exit 0, adapters saved, save gates PASS. One caveat: the run manifest reports `code.status=not_a_repository` because the working directory is the workspace, not the repository; that is a warning, not a failure.
 
 ### The Dockerfile
 
@@ -271,7 +266,7 @@ The Qwen3.6 models (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.6-27B`) need **flash-lin
 pip install flash-linear-attention==0.5.2
 ```
 
-(Use `uv pip install --python venv/bin/python flash-linear-attention==0.5.2` on the uv path. The Docker image already includes it.) Exact version pin (MEASURED): `0.5.2`.
+(Use `uv pip install --python venv/bin/python flash-linear-attention==0.5.2` on the uv path. The Docker image already includes it.)
 
 Measured on this setup (Qwen3.6-27B LoRA at 32K):
 
@@ -282,7 +277,7 @@ Measured on this setup (Qwen3.6-27B LoRA at 32K):
 
 That's a **2.9x** speedup.
 
-**About `causal-conv1d`:** it is **optional** and **cannot be built on this VM**, because it needs `nvcc` from a CUDA toolkit and only the driver is installed (no system CUDA toolkit). Skip it — the remaining slow path is small. The Docker **devel** route can build it: `TODO(verify)`.
+**About `causal-conv1d`:** it is **optional** and **cannot be built on this machine**, because it needs `nvcc` from a CUDA toolkit and only the driver is installed (no system CUDA toolkit). Skip it — the remaining slow path is small. The Docker **devel** route can build it (not measured).
 
 ---
 
@@ -304,7 +299,7 @@ hf download google/gemma-4-26B-A4B-it --local-dir models/gemma-4-26B-A4B-it
 hf download google/gemma-4-12B-it --local-dir models/gemma-4-12B-it
 ```
 
-(MEASURED) sizes on disk:
+(measured) sizes on disk:
 
 | Model | On disk |
 |---|---|
@@ -315,7 +310,7 @@ hf download google/gemma-4-12B-it --local-dir models/gemma-4-12B-it
 | `google/gemma-4-12B-it` | 23.9 GB |
 | **Total** | **~266 GB** |
 
-Free disk on the VM (MEASURED): you need **~300 GB** free for all five models plus scratch space. Run `df -h` before you start and download only the models you'll tune if space is tight.
+Disk space (measured): you need **~300 GB** free for all five models plus scratch space. Run `df -h` before you start, and download only the models you'll tune if space is tight.
 
 ### Check it worked
 
@@ -323,19 +318,19 @@ Free disk on the VM (MEASURED): you need **~300 GB** free for all five models pl
 ls models/Qwen3.6-27B
 ```
 
-Expected output: `TODO(verify)` (the model's weight/config files in `models/Qwen3.6-27B/`).
+Expected output: the model's weight and config files in `models/Qwen3.6-27B/` (exact listing not measured).
 
 ---
 
-## VM quirks you must know before the next chapter
+## Machine notes you must know before the next chapter
 
-1. **(MEASURED) `localhost` resolves only to the IPv6 address `::1` on this VM image.** Because of that, `torchrun --standalone` **hangs forever in rendezvous**, and the default hostname resolves to a public address that times out. Always launch single-node runs like this:
+1. **`localhost` resolves only to the IPv6 address `::1` on this machine.** Because of that, `torchrun --standalone` **hangs forever in rendezvous**, and the default hostname resolves to a public address that times out. Always launch single-node runs like this:
 
    ```bash
    torchrun --nnodes 1 --nproc_per_node 2 --master_addr 127.0.0.1 --master_port 29500 -m foundationscale.train ...
    ```
 
-   Never use `torchrun --standalone ...` on this VM.
+   Never use `torchrun --standalone ...` on this machine.
 
 2. **GPUs may already be in use.** Check `nvidia-smi` and free them before starting a run.
 
@@ -343,19 +338,19 @@ Expected output: `TODO(verify)` (the model's weight/config files in `models/Qwen
 
 ## Troubleshooting
 
-- **`torchrun` hangs forever at rendezvous / can't connect to the default address (timeouts).** See VM quirk 1 above. Use the explicit `--master_addr 127.0.0.1 --master_port 29500` launch line and drop `--standalone`.
+- **`torchrun` hangs forever at rendezvous / can't connect to the default address (timeouts).** See note 1 above. Use the explicit `--master_addr 127.0.0.1 --master_port 29500` launch line and drop `--standalone`.
 
-- **`nvidia-smi` shows other processes on the GPUs / runs fail with out-of-memory right away.** See VM quirk 2: free the GPUs first.
+- **`nvidia-smi` shows other processes on the GPUs / runs fail with out-of-memory right away.** See note 2: free the GPUs first.
 
 - **Import check prints different versions than `2.13.0+cu132 True 5.18.0 0.21.2`.** Make sure the right env is active and that you installed the repo from the repository root with `pip install -e ".[train]"` (`uv pip install --python venv/bin/python -e ".[train]"` on the uv path). The torch/torchvision wheels come from the PyTorch cu132 index (`--extra-index-url https://download.pytorch.org/whl/cu132` is in `requirements-vlm.txt`).
 
-- **`foundationscale-train: command not found`.** The env isn't active, or Step A3/B2 didn't run. Check with `which foundationscale-train` — it should print `<your-env>/bin/foundationscale-train` (a path inside the env).
+- **`foundationscale-train: command not found`.** The env isn't active, or Step A3/B2 didn't run. Check with `which foundationscale-train` — it should print a path inside the env.
 
-- **`causal-conv1d` fails to build** with errors about `nvcc` / CUDA toolkit. Expected: this VM has no system CUDA toolkit. `causal-conv1d` is optional — leave it out. Only the Docker devel route can build it (`TODO(verify)`).
+- **`causal-conv1d` fails to build** with errors about `nvcc` / CUDA toolkit. Expected: this machine has no system CUDA toolkit. `causal-conv1d` is optional — leave it out. Only the Docker devel route can build it (not measured).
 
-- **Qwen3.6 runs are slow (hundreds of tokens/s instead of ~1.5k at 32K).** Install `flash-linear-attention` (see above). Measured on Qwen3.6-27B LoRA at 32K: 502 → 1461 tokens/s.
+- **Qwen3.6 runs are slow (hundreds of tokens/s instead of ~1.5k at 32K).** Install `flash-linear-attention` (see above).
 
-- **`docker: command not found`.** Docker is not preinstalled on the VM, and installing Docker Engine + the NVIDIA Container Toolkit needs root (links in Option C). If you don't have root, use Option A or B.
+- **`docker: command not found`.** Docker is not preinstalled, and installing Docker Engine + the NVIDIA Container Toolkit needs root (links in Option C). If you don't have root, use Option A or B.
 
 - **Model download is slow or gets rate-limited.** Run `hf auth login` first.
 

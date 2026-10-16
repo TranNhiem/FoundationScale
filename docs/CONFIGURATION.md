@@ -1,14 +1,12 @@
 # Configuration
 
-FoundationScale's configuration has no global config file. There are three layers, and each has its own mechanism, its own failure modes, and its own enforcement point. This chapter covers all three: the package layer (Python objects), the train-loop layer (environment variables), and the launch plane (environment variables only).
+FoundationScale keeps configuration out of a global config file. There are three layers, each with its own mechanism and its own enforcement point: the package layer (Python objects), the train-loop layer (environment variables), and the launch plane (environment variables only).
 
 ## The package layer: configuration as Python objects
 
 The package takes configuration as Python objects — context objects per gate, and topology/profile declarations for the train loop. Anything that would traditionally live in a YAML block lives in a dataclass whose constructor refuses invalid states.
 
-### The doctrine in one sentence
-
-A configuration error should be a `ValueError` raised at construction time, showing the arithmetic, rather than a crash 2m10s into a job. Both `ClusterProfile` and `Topology` validate themselves in `__post_init__`.
+A configuration error should be a `ValueError` raised at construction time, showing the arithmetic, rather than a crash mid-job. Both `ClusterProfile` and `Topology` validate themselves in `__post_init__`.
 
 ## `ClusterProfile`: the cluster as data
 
@@ -29,7 +27,7 @@ A configuration error should be a `ValueError` raised at construction time, show
 | `filesystem_roots` | Mounts that must exist for artifacts/logs/data |
 | `max_nodes` | The cluster's real node ceiling, or `None` if unconstrained |
 
-`max_nodes` is deliberately *not* inherited from launcher habit. The measured estate's 8-node ceiling was a script artifact (`--nodes` only ever `{1,2,4,8}` against `--gpus-per-node=4`) while other users on the same cluster ran 18 nodes. If the real limit differs from the profile, fix the profile data, not the launcher.
+`max_nodes` is deliberately *not* inherited from launcher habit — an assumed 8-node ceiling was a script artifact while other users ran 18 nodes on the same cluster. If the real limit differs from the profile, fix the profile data, not the launcher.
 
 ### Loading profiles
 
@@ -62,7 +60,7 @@ topo = Topology(dp=1, tp=8, pp=1, ep=1, cp=1, nodes=1, gpus_per_node=8)
 
 Construction **is** the launch gate. `__post_init__` requires every degree (`dp`, `tp`, `pp`, `ep`, `cp`) and layout value (`nodes`, `gpus_per_node`) to be a positive integer, then verifies the product rule: `dp x tp x pp x ep x cp` must equal `nodes x gpus_per_node`, or the object never exists and the error message shows both sides of the arithmetic.
 
-`tasks_per_node` defaults to `gpus_per_node`. Any other explicit value is rejected: one launcher slot per GPU is the only mapping the stack supports. This encodes a measured crash — `--ntasks-per-node=8` against `--gpus-per-node=4` died with `ncclInvalidUsage / Duplicate GPU detected` 2m10s into the job, before a single weight was read. Checking at launch costs milliseconds.
+`tasks_per_node` defaults to `gpus_per_node`. Any other explicit value is rejected: one launcher slot per GPU is the only mapping the stack supports. This encodes a measured crash — `--ntasks-per-node=8` against `--gpus-per-node=4` died with `ncclInvalidUsage / Duplicate GPU detected` before a single weight was read. Checking at launch costs milliseconds.
 
 ### Derived quantities
 
@@ -88,31 +86,17 @@ findings = topo.validate_against(
 )
 ```
 
-`validate_against` returns a list of `Finding` objects — one per defect, plus a coverage summary that is **always** appended. A clean result is distinguishable from a validator that examined nothing.
-
-| Code | Severity | What it encodes |
-|---|---|---|
-| `topology.gpus_per_node_exceeds_profile` | BLOCK | Requested GPUs/node exceeds the profile |
-| `topology.nodes_exceed_profile_limit` | BLOCK | `nodes` beyond `profile.max_nodes` |
-| `topology.tp_crosses_node_boundary` | BLOCK (WARN if `mnnvl_available`) | `tp > gpus_per_node`: every TP all-reduce rides the network |
-| `topology.ep1_replicates_experts` | WARN | `ep=1` on an MoE replicates every expert on every model-parallel rank |
-| `topology.ep_uneven_expert_shard` | BLOCK | `num_experts` not divisible by `ep` |
-| `topology.master_addr_unrecorded` | WARN | Multi-node run with no `master_addr` supplied to check |
-| `topology.master_addr_loopback` | BLOCK | `MASTER_ADDR` is loopback with `nodes > 1`; measured verbatim in 27 of 189 launchers |
-| `topology.master_addr_hardcoded_node` | BLOCK | `MASTER_ADDR` matches the profile's `node_pattern`; the launcher is capped at one machine |
-| `topology.runtime_overrides_{pp,cp}` | BLOCK | Config requests a degree the runtime will silently force elsewhere |
-| `topology.{pp,cp}_unverified` | WARN | `pp`/`cp > 1` with no override evidence; demands `declared_vs_effective` |
-| `topology.validate_summary` | OK | Checks run, blocking count, warning count — always emitted |
+`validate_against` returns a list of `Finding` objects — one per defect, plus a coverage summary that is **always** appended. A clean result is distinguishable from a validator that examined nothing. The findings catalogue (codes, severities, and what each encodes) is documented in [docs/DISTRIBUTED.md](DISTRIBUTED.md); among the BLOCK checks, `MASTER_ADDR` set to loopback with `nodes > 1` was measured verbatim in 27 of 189 launchers.
 
 ### `Finding` and `Severity`
 
-Every finding is a frozen `Finding`: `code` (a stable `topology.*` identifier), `severity`, `message`, `details` (JSON-safe evidence), and `control` — the positive control proving the check can fire. An `OK` finding with no control is indistinguishable from a broken detector, which is the `all([]) is True` incident class: `all([])` is True, so a check that reports nothing and names no control is reporting **vacuity, not success**.
+Every finding is a frozen `Finding`: `code` (a stable `topology.*` identifier), `severity`, `message`, `details` (JSON-safe evidence), and `control` — the positive control proving the check can fire. An `OK` finding with no control is indistinguishable from a broken detector: `all([])` is True, so a check that reports nothing and names no control is reporting **vacuity, not success**. The founding `all([])` incident is told once in [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
 `Severity` has three values: `OK`, `WARN`, `BLOCK`. Only `BLOCK` stops a launch. `OK` exists precisely so a check can report *coverage* when it found nothing. `blocking(findings)` filters to the findings that must stop the job; `render_findings(findings)` renders for a launch log and is explicitly non-empty on an empty list — `(no findings — this is itself suspicious; validators never return empty)`.
 
-## `declared_vs_effective`: the comparison nobody had
+## `declared_vs_effective`: declared versus effective degrees
 
-The RL entrypoints hardcoded `m.context_parallel_size = 1` and `m.pipeline_model_parallel_size = 1` while 44 launchers set `CP=${CP:-1}`; the shell variable was never seen by the code and nothing ever compared the two. `declared_vs_effective(declared, effective)` compares all seven fields (five degrees plus `nodes` and `gpus_per_node`) between the topology built from the launch manifest and the one read back from the constructed model:
+RL entrypoints hardcoded `m.context_parallel_size = 1` and `m.pipeline_model_parallel_size = 1` while 44 launchers set `CP=${CP:-1}`; the shell variable was never seen by the code and nothing ever compared the two. `declared_vs_effective(declared, effective)` compares all seven fields (five degrees plus `nodes` and `gpus_per_node`) between the topology built from the launch manifest and the one read back from the constructed model:
 
 - every mismatch emits a BLOCK `topology.effective_overrides_{field}`;
 - mismatches are followed by an OK `topology.effective_comparison_summary` stating how many fields were compared;
@@ -120,20 +104,13 @@ The RL entrypoints hardcoded `m.context_parallel_size = 1` and `m.pipeline_model
 
 ## `partition_consistency`: scanning a launcher corpus
 
-`partition_consistency(files)` takes a mapping of path → file contents and returns a single `Finding`:
-
-| Code | Severity | Condition |
-|---|---|---|
-| `topology.partition_scan_empty` | BLOCK | Zero files supplied — a scan of nothing cannot assert consistency |
-| `topology.partition_not_found` | BLOCK | Files scanned, zero partition declarations extracted |
-| `topology.partition_spelling_variants` | BLOCK | One partition appears under multiple spellings (case and separators ignored: `gpu-h100`, `gpu_h100`, `GPU.H100` are one partition) |
-| `topology.partition_consistent` | OK | One spelling per partition, with scanned-file counts in `details` |
+`partition_consistency(files)` takes a mapping of path → file contents and returns a single `Finding`; its codes and conditions are catalogued in [docs/DISTRIBUTED.md](DISTRIBUTED.md).
 
 The check does **not** assume the majority spelling is correct. The measured estate split 188 files one way and 4 the other on a single partition; the finding reports the split and refuses to resolve it. Extraction keys on `--partition`, `partition=`, and the short `-p` form only on `#SBATCH`/`sbatch`/`srun` lines, because `-p` is overloaded everywhere else.
 
 ## The train-loop layer: `foundationscale-train`
 
-The CLI is installed by `[project.scripts]` as `foundationscale-train`; the heavy dependencies are the `train` extra (`pip install 'foundationscale[train]'`). Both facts are declarations in pyproject.toml, verified by `checks/packaging_reachability.py` against the installed distribution — for one release the packaging stanza lived only in a docstring, so `prog="foundationscale-train"` advertised a command `pip install` never created (finding #224).
+The CLI is installed by `[project.scripts]` as `foundationscale-train`; the heavy dependencies are the `train` extra (`pip install 'foundationscale[train]'`). Both facts are declarations in pyproject.toml, verified by `checks/packaging_reachability.py` against the installed distribution — a command advertised only from a docstring is never installed by `pip install`.
 
 ### The three-layer boundary as flags
 
@@ -176,6 +153,6 @@ The launch plane is configured entirely through environment variables, so that n
 | `FS_RUN_ID` | Run identity (read by the train loop) |
 | `FS_ATTEMPT` | Attempt counter (read by the train loop) |
 
-**No single reference enumerates the full set of launch-plane variables.** They are documented in the header comments of the launchers themselves, which is where they are enforced; variables beyond those in the table above are not catalogued here because they have not been collected into this document yet. If you need a variable not listed, read the launcher header that consumes it — do not guess a name and trust it, because a misspelled environment variable is unset, and an unset guard is a disabled guard.
+All launch-plane variables are enforced in the launchers themselves and documented in the launcher header comments. A variable beyond the table above is documented in the header comment of the launcher that consumes it — do not guess a name and trust it, because a misspelled environment variable is unset, and an unset guard is a disabled guard.
 
-The same catalogue gap applies to the gates' per-gate context objects: the package layer is stated as "context objects per gate" in the package contract, but the individual context-object field shapes are not part of this chapter's source material.
+Per-gate context-object fields are not documented in this chapter; read the gate's context object in the package.

@@ -3,9 +3,9 @@
 The Makefile is convenience only. The source of truth for every check is
 `pyproject.toml` plus `.github/workflows/ci.yml`, and CI does not run `make` —
 each target is a single obvious command that mirrors the corresponding CI step
-exactly. This chapter is the expansion of README §24: what each target runs,
-the two decisions behind interpreter selection, where `make test` deliberately
-diverges from CI, and which parts of the tree each tool does and does not see.
+exactly. This chapter expands README §24: what each target runs, the two
+decisions behind interpreter selection, where `make test` deliberately diverges
+from CI, and which parts of the tree each tool does and does not see.
 
 Every tool is invoked as `$(PY) -m <tool>`, never as a bare name on PATH. That
 convention is load-bearing and is enforced by a gate, not by review discipline;
@@ -20,7 +20,7 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 | `make test` | pytest with `--cov=foundationscale --cov=tools --cov-report=term-missing --cov-report=json --cov-fail-under=90` | writes the `coverage.json` that `coverage-floor` consumes |
 | `make coverage-floor` | `checks/coverage_floor.py --self-test`, then the real run | exits 95 (UNMEASURED) if `coverage.json` is missing, never 0 |
 | `make ci-suite-extras` | `checks/ci_suite_extras.py --self-test`, then the real run | every CI job that runs pytest or `tools/mutate.py` must install the same extras |
-| `make lint` | `ruff check` + `ruff format --check` over `src tests tools checks` | read-only |
+| `make lint` | `ruff check` + `ruff format --check` over `src tools checks` | read-only |
 | `make fmt` | `ruff check --fix` + `ruff format` over the same four directories | rewrites in place |
 | `make typecheck` | mypy over `src` plus three adjudicating CLIs | see [typecheck](#typecheck-and-typecheck-checks) |
 | `make typecheck-checks` | `mypy checks` | a gate, in `check`, and not error-suppressed |
@@ -40,23 +40,20 @@ see [The interpreter is two decisions](#the-interpreter-is-two-decisions) and
 
 ## The interpreter is two decisions
 
-Interpreter selection was reopened as a class by #247 (after #232 fixed bare
-`python` in four targets) and is two decisions, not one.
+Two decisions, not one.
 
 **Decision 1: `-m`, always.** Every recipe calls `$(PY) -m pip`,
 `$(PY) -m pytest`, `$(PY) -m ruff`, `$(PY) -m mypy`. A bare name resolves only
-if the tool happens to be on PATH, and on the machine this file exists to serve
-— a laptop with no venv activated — it is not. During the review campaign
-`make lint` died with `ruff: command not found` and `make packaging` reported
-UNMEASURED purely because the project venv was inactive. CI never sees this:
+if the tool happens to be on PATH — on a laptop with no venv activated it is
+not (`ruff: command not found`). CI never sees this, because
 `actions/setup-python` puts everything on PATH. `-m` additionally binds each
 tool to the same interpreter as the rest of the file.
 
-**Decision 2: which interpreter.** `PY ?= python3` was written first and
-measured, then rejected: under a bare `python3`, `$(PY) -m ruff` turns
-`command not found` into `No module named ruff` — a better error, but not a
-fix. The tools live in the project venv, which is where `make install` puts
-them. So the Makefile prefers the in-tree venv and falls back to `python3`:
+**Decision 2: which interpreter.** `PY ?= python3` alone is not enough: under a
+bare `python3`, `$(PY) -m ruff` turns `command not found` into
+`No module named ruff` — a better error, but not a fix. The tools live in the
+project venv, which is where `make install` puts them, so the Makefile prefers
+the in-tree venv and falls back to `python3`:
 
 ```make
 FS_VENV_PY := $(CURDIR)/.venv/bin/python3
@@ -79,15 +76,14 @@ PY=/usr/bin/python3 make lint   # environment wins
 it deliberately does NOT gate which interpreter you chose or what that
 interpreter has installed — that is a property of the machine, and a gate that
 reddens on it would be reporting the developer's environment as a repository
-defect.
+defect. See CONTRIBUTING.md for the interpreter-selection rules.
 
 ## `make test` and the one declared divergence
 
 `make install` installs `.[checkpoint,dev]` because the `[checkpoint]` extra
 carries torch, and without it 41 tests skip: the suite is 387 passed with
-torch, 346 passed / 41 skipped without — and that skip-heavy run was CI's old
-green. `pytest-cov` rides along because `make test` carries coverage flags,
-exactly like CI's step.
+torch, 346 passed / 41 skipped without. `pytest-cov` rides along because
+`make test` carries coverage flags, exactly like CI's step.
 
 `FS_FORBID_SKIPS` is the one declared divergence between Makefile and CI. The
 CI `check` job sets it job-wide, so any skip fails the build. `make test`
@@ -99,32 +95,27 @@ suite byte-for-byte as CI sees it:
 FS_FORBID_SKIPS=1 make test
 ```
 
-The `skip-guard-probe` target proves the guard is not decorative. It writes
-`tests/test__skip_guard_probe.py` containing a single test that calls
-`pytest.skip(...)`, runs pytest on it with `FS_FORBID_SKIPS=1`, then asserts
-two things: the run's exit code is non-zero, and the output names
-`test_skip_guard_probe`. A guard that fails the run without naming the probe
-fails the probe target itself. It is a compound recipe because the CI step is
-a script and the faithful mirror of a script is the same script; dropping it
-from `make check` would make `check` weaker than CI, which is its own vacuous
-pass.
+The `skip-guard-probe` target writes `tests/test__skip_guard_probe.py`, runs
+pytest on it with `FS_FORBID_SKIPS=1`, and asserts the run's exit code is
+non-zero and the output names `test_skip_guard_probe`; a guard that fails the
+run without naming the probe fails the probe target itself. It stays in
+`make check` because dropping it would make `check` weaker than CI. Skip-guard
+semantics are covered in TESTING.md.
 
 ## The coverage pair
 
 `test` and `coverage-floor` are a pair and their order in `check` is fixed.
 The `--cov=tools` flag on the pytest line matters as much as
-`--cov=foundationscale`: without it a developer running `make check` got a
-green over a denominator two adjudicating modules smaller than the one the
-build enforces. `--cov-report=json` writes the `coverage.json` that
-`coverage-floor` adjudicates. `--cov-fail-under=90` on the pytest line is a
-TOTAL, and a total can be subsidised — one heavily-covered module can carry an
-unmeasured one — which is why `checks/coverage_floor.py` exists as a separate
-per-module gate.
+`--cov=foundationscale`: without it the denominator is two adjudicating modules
+smaller than the one the build enforces. `--cov-report=json` writes the
+`coverage.json` that `coverage-floor` adjudicates. `--cov-fail-under=90` on the
+pytest line is a TOTAL, and a total can be subsidised — one heavily-covered
+module can carry an unmeasured one — which is why `checks/coverage_floor.py`
+exists as a separate per-module gate.
 
 If `coverage.json` is missing, `coverage-floor` exits 95 (UNMEASURED), never
-0: "the report was not there" is not "every module passed". This is the
-founding rule applied to tooling — a check that examined zero units reports
-VACUOUS, not PASS.
+0: a check that examined zero units reports VACUOUS, not PASS. See
+CONTRIBUTING.md for the coverage rules.
 
 ## `typecheck` and `typecheck-checks`
 
@@ -148,11 +139,9 @@ re-export list nobody reads; mypy is what notices when the library's signature
 moves out from under the CLI that forwards to it.
 
 `make typecheck-checks` runs `mypy checks` and is in `check` WITHOUT a `-`
-prefix. It was once `-$(PY) -m mypy checks`, which made it the one recipe that
-could not fail: make prints "Error 1 (ignored)" and returns 0, so the target
-read green while reporting 22 errors. That historical shape is why the current
-command must be read as written — the exclusion is visible only because the
-suppression was removed.
+prefix. A `-`-prefixed recipe cannot fail — make prints "Error 1 (ignored)"
+and returns 0 even while reporting 22 errors — so the command must be read as
+written.
 
 ### Stated typecheck exclusions
 
@@ -160,16 +149,11 @@ Stated so silence does not read as coverage:
 
 - mypy does not check `tools/preflight/`. That directory carries an explicit
   exemption; it is not typed and no target typechecks it.
-- `checks/` **is** typechecked, by `typecheck-checks`. README §24's line
-  naming it "deliberately not a gate" no longer holds: the target gates, is
-  in `check`, and the exclusion note that once stood in the Makefile was
-  itself wrong (it excused a `Distribution.entry_points` fallback as a
-  pre-3.10 shape; `entry_points` is a list before 3.10 and has never been the
-  mapping `.get()` addresses, so the arm was dead on 3.10+ and an
-  `AttributeError` on exactly the interpreters it was written for).
+- `checks/` **is** typechecked, by `typecheck-checks`, which is a gate and is
+  in `check`.
 
 ruff, by contrast, covers everything listed on the command line:
-`src tests tools checks`, including everything under `tools/`.
+`src tools checks`, including everything under `tools/`.
 
 ## The gate targets
 
@@ -206,12 +190,11 @@ $(PY) tools/countables_census.py --no-coverage --out $(CENSUS)
 $(PY) checks/countables_drift.py --census $(CENSUS) $(COUNTABLES_CORPUS)
 ```
 
-The scan set is `docs README.md Makefile .github/workflows/ci.yml`. A
+The scan set is `docs README.md Makefile .github/workflows/ci.yml` — a
 directory argument is walked for `*.md`; a file named outright is scanned
-whatever its suffix, so the two files that decide what CI measures are inside
-the denominator. The census counts `tools/countables_census.py` itself — it is
-inside its own denominator, and editing the producer moves `tools_loc`, which
-is exactly the drift this gate exists to catch. The census lands in the
+whatever its suffix. The census counts `tools/countables_census.py` itself —
+it is inside its own denominator, and editing the producer moves `tools_loc`,
+which is exactly the drift this gate exists to catch. The census lands in the
 working tree as `.countables_census.json`; `make clean` removes it and
 `.gitignore` keeps it out of a commit.
 
@@ -219,22 +202,21 @@ working tree as `.countables_census.json`; `make clean` removes it and
 
 Two bash suites sit beside the Python gates:
 
-- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh` — 156 controls,
-  the largest gate in the repository. Measured 2026-09-11 on an idle
+- `make launcher-contracts` runs `launchers/test_launcher_contracts.sh` — 156
+  controls, the largest gate in the repository. Measured 2026-09-11 on an idle
   developer machine at 28.9s wall / 4.1s user; user time is a seventh of
   wall because the watchdog legs run their budgets concurrently. Its
   anti-orphan leg scans every `launchers/*.py` plus `checks/*.py` for call
   sites and refuses a file that has none.
 - `make checks-gates` runs `launchers/test_checks_gates.sh` — 47 controls,
-  the gate self-tests split out of the launcher suite, 13.4s wall under the
-  same conditions. It grew 4s in the commit that added the #439 topology
-  legs: the discrimination arm copies the four T1 rows into a scratch tree
-  and drives their real composers twice, which is the cost of judging the
-  shipped rows rather than a fixture that resembles them.
+  the gate self-tests split out of the launcher suite. Its discrimination arm
+  copies the four T1 rows into a scratch tree and drives their real composers
+  twice: the cost of judging the shipped rows rather than a fixture that
+  resembles them.
 
-Take the wall figures as dated observations, not budgets. The launcher
-suite measured 63.6s wall on this same machine under concurrent load —
-2.2x — while its user time held at 4.0s. That asymmetry is why the two
+Take the wall figures as dated observations, not budgets and not gates. The
+launcher suite measured 63.6s wall on this same machine under concurrent load
+— 2.2x — while its user time held at 4.0s. That asymmetry is why the two
 halves are treated differently: a control count is a property of the
 repository and is worth anchoring, whereas a wall time is a property of
 whatever else the machine happens to be running, and gating it would
@@ -252,7 +234,8 @@ The corpus is 78 rows over 9 modules: 69 MUST_FIRE mutants and 9 MUST_PASS
 controls. All four counts are anchored in the countables census
 (`total_rows`, `mut_modules`, `must_fire`, `must_pass`), each on its own line
 in the Makefile comment, because the gate reads a clause, not a paragraph. A
-surviving mutant fails `make mutation`.
+surviving mutant fails `make mutation`. Mutation semantics are covered in
+TESTING.md.
 
 Each scoreable row runs the whole suite, so wall time is one full pytest run
 per MUST_FIRE row. The wall time is NOT anchored — it is a property of the
@@ -311,14 +294,12 @@ and `make` recipes stay inside it:
 | 2 | never measured / usage | `mutate.py` with no control row; `mutation-module` with no `MODULE` |
 | 1 | assertion failure inside the probe | `skip-guard-probe` when the guard passed a skipped test |
 
-Codes 5 and 96 also belong to the published gate namespace; the Makefile
-comments reference "the 0/5/95/96 namespace" without assigning 5 and 96 to
-specific make-visible conditions in this file, so this document does not assign
-them either. What is established: a gate that cannot start at all (an import
-error, a missing interpreter module) exits 1, which is OUTSIDE the namespace
-the gates claim to publish — that shape occurred when `checks/` files lacking
-`from __future__ import annotations` died at import on Python 3.9, and it is
-one reason `checks/` is linted and typechecked like everything else.
+Codes 5 and 96 also belong to the published gate namespace — the Makefile
+comments refer to "the 0/5/95/96 namespace" — with no specific make-visible
+condition assigned to 5 or 96. A gate that cannot start at all (an import
+error, a missing interpreter module) exits 1, which is OUTSIDE the published
+namespace; that is one reason `checks/` is linted and typechecked like
+everything else.
 
 ## What this file does not provide
 
@@ -327,7 +308,7 @@ publishing deliverables, or running anything under `validation_campaigns/`;
 the estate launch plane beyond the two contract suites is likewise not
 reachable from the Makefile. Those trees are documented in README §23 as
 lab notebooks and launch code, not framework code, and the absence of a
-target is deliberate rather than an omission to patch ad hoc — but if you add
+target is deliberate rather than an omission to patch ad hoc. If you add
 one, `checks/makefile_tooling.py` will require it to respect the `$(PY) -m`
-convention, and CI will need its own mirror, because the Makefile is the
+convention, and CI will need its own mirror step, because the Makefile is the
 mirror, never the source.

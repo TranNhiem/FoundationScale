@@ -1,22 +1,18 @@
 # Training with FoundationScale
 
-The worked end-to-end recipe README §10 defers to. Two paths are shown, both run and
-measured on the machine that wrote this document, both exiting `0 PASS`:
+The worked end-to-end recipe README §10 defers to. Two paths are shown:
 
 1. **The example** — `python3 examples/train_tiny.py`, model and dataset from the Hub.
 2. **The CLI, offline** — `python3 -m foundationscale.train.cli` against a toy `.jsonl`
    that ships in this repository, with `HF_HUB_OFFLINE=1`.
 
-Everything below is transcript, not illustration. Where output is quoted it was copied
-from the run, not written by hand.
-
 ---
 
 ## 1. Install
 
-The base install in README §8 is deliberately CPU-torch and has **no** `train` extra: it
-is what CI runs to exercise the gate contract. To train you need the extra, and on a GPU
-box you need a torch build for your accelerator rather than the CPU wheel:
+The base install in README §8 is CPU-torch with no `train` extra; it is what CI runs to
+exercise the gate contract. To train you need the extra, and on a GPU box you need a torch
+build for your accelerator rather than the CPU wheel:
 
 ```bash
 git clone https://github.com/TranNhiem/FoundationScale && cd FoundationScale
@@ -118,10 +114,10 @@ Mismatch is caught in the prologue, before a GPU is touched:
 [fs:train:done]          PASS
 ```
 
-Read the adjudication tail closely, because its shape is the whole argument of this
-project. Three gates ran; **one** verified, **two** declared SKIP and said why. A
-framework that printed "all clear" over three skips would be telling you nothing while
-sounding like it told you something. `1 of 3 verified` is the honest denominator.
+Read the adjudication tail closely: its shape is the whole argument of this project.
+Three gates ran; **one** verified, **two** declared SKIP and said why. A framework that
+printed "all clear" over three skips would be telling you nothing while sounding like it
+told you something. `1 of 3 verified` is the honest denominator.
 
 Output lands in `out/train_tiny/` (git-ignored).
 
@@ -164,16 +160,17 @@ fact and has no default. The built-ins:
 Neither will match your estate. Describe yours as **data** — one dict, no code changes —
 as `examples/train_tiny.py` does inline, or as a JSON file for `--profile-path`.
 
-One field is worth calling out because it has already caused a bug in this repository:
+One field is worth calling out: `node_pattern` is a Python regular expression, not a
+Slurm hostlist.
 
 ```python
 "node_pattern": r"compute-0[1-8]",   # a REGEX
 ```
 
-It is a Python regular expression, not a Slurm hostlist. Writing the hostlist spelling of
-that same range puts a `1`-to-`0` range inside a character class, `re.compile` refuses it,
-and the profile fails to construct. `ClusterProfile` catches it in `__post_init__` with a
-named error — but it catches it at *your* first run, so it is worth knowing.
+Writing the hostlist spelling of that same range puts a `1`-to-`0` range inside a
+character class, `re.compile` refuses it, and the profile fails to construct.
+`ClusterProfile` catches it in `__post_init__` with a named error — but at your first
+run, so it is worth knowing.
 
 ### Validate without training
 

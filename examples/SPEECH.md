@@ -1,6 +1,6 @@
 # Speech in FoundationScale: ASR, TTS and omni speech-LLM
 
-This page is the entry point for all speech work: what each example does, which models and training/inference techniques it covers, and what is measured versus planned.
+Entry point for all speech work: what each example does, which models and techniques it covers, and what is measured versus planned.
 
 ## Overview
 
@@ -14,32 +14,30 @@ All ASR numbers on this page were measured on 2 GPUs of type H200. The A100 entr
 
 ## Which one do I need?
 
-- Transcribe speech and score with WER → ASR, [./speech-2xH200/](./speech-2xH200/).
-- Train a recognizer on your own audio (full fine-tune or a small adapter) → ASR.
-- Generate speech or clone a voice and measure WER/SIM → TTS, [./tts-GB200/](./tts-GB200/).
+- Transcribe speech and score with WER, or train a recognizer on your own audio (full fine-tune or a small adapter) → ASR, [./speech-2xH200/](./speech-2xH200/).
+- Generate speech or clone a voice and measure WER/SIM, or teach a TTS model a new language or voice style → TTS, [./tts-GB200/](./tts-GB200/) (Step 6 covers VoxCPM2 Vietnamese LoRA).
 - Answer questions from speech on a spoken benchmark → omni, [./omni-GB200/](./omni-GB200/): cascade if the parts must be swappable, Qwen3-Omni if one checkpoint has to read audio and answer.
-- Teach a TTS model a new language or voice style → TTS Step 6, [./tts-GB200/](./tts-GB200/) (VoxCPM2 Vietnamese LoRA).
 - Nothing here fine-tunes an omni model yet.
 
 ## ASR — VERIFIED on 2x H200 ([./speech-2xH200/](./speech-2xH200/))
 
 Data: `openslr/librispeech_asr` clean/train.100 (28,539 rows / 100.59 h), evaluated on full dev-clean (2,683 rows), 500-step runs. One launcher, `examples/speech-2xH200/scripts/train_speech.sh`, one config per model under `examples/speech-2xH200/configs/`; scoring is `validation_campaigns/speech_p4/eval_wer.py` with paired bootstrap in `validation_campaigns/speech_p7/paired_bootstrap.py`.
 
-- `nvidia/parakeet-ctc-1.1b` — CTC model, full fine-tune. Pick it for a compact, accurate recognizer with little tuning; FoundationScale freezes its BatchNorm running statistics automatically.
-- `openai/whisper-large-v3` — seq2seq (encoder-decoder) full fine-tune on sentence-cased targets. Pick it for the lowest tuned WER here when full fine-tuning is affordable.
-- `google/gemma-4-E4B-it` — audio-LLM with LoRA r16/alpha32 on the language model (audio tower and `embed_audio` projector train in full). Pick it to keep the trainable footprint small on a 4B audio-LLM.
-- `Qwen/Qwen2-Audio-7B-Instruct` LoRA r16/alpha32 — same idea on 7B, with automatic adapter scoping (224 target modules, no `--adapter-target` flag). Pick it when you want the 7B audio-LLM without training 7B of weights.
-- `Qwen/Qwen2-Audio-7B-Instruct` full fine-tune (`SHARDING=fsdp`, `FSDP_STATE_DICT=full`) — pick it when only the best WER matters.
+- `nvidia/parakeet-ctc-1.1b` — CTC model, full fine-tune. Compact and accurate with little tuning; FoundationScale freezes its BatchNorm running statistics automatically.
+- `openai/whisper-large-v3` — seq2seq (encoder-decoder) full fine-tune on sentence-cased targets. Lowest tuned WER here when full fine-tuning is affordable.
+- `google/gemma-4-E4B-it` — audio-LLM with LoRA r16/alpha32 on the language model (audio tower and `embed_audio` projector train in full). Keeps the trainable footprint small on a 4B audio-LLM.
+- `Qwen/Qwen2-Audio-7B-Instruct` LoRA r16/alpha32 — same idea on 7B, with automatic adapter scoping (224 target modules, no `--adapter-target` flag).
+- `Qwen/Qwen2-Audio-7B-Instruct` full fine-tune (`SHARDING=fsdp`, `FSDP_STATE_DICT=full`) — when only the best WER matters.
 
-Headline result (2026-10-10/11): whisper-large-v3 goes from 2.25% to 1.72% WER (-0.53, 95% CI [-0.65, -0.41]); the best overall tuned WER is 1.72% (Whisper) and 2.57% (Qwen2-Audio full fine-tune). Full table: [./speech-2xH200/04_evaluation.md](./speech-2xH200/04_evaluation.md).
+Headline result: whisper-large-v3 goes from 2.25% to 1.72% WER (-0.53, 95% CI [-0.65, -0.41]); the best overall tuned WER is 1.72% (Whisper) and 2.57% (Qwen2-Audio full fine-tune). Full table: [./speech-2xH200/04_evaluation.md](./speech-2xH200/04_evaluation.md).
 
 ## TTS — VERIFIED: Seed-TTS-eval harness and Vietnamese LoRA fine-tuning ([./tts-GB200/](./tts-GB200/))
 
 Evaluation (Steps 1-5) plus one fine-tuning recipe (Step 6). Two scripts synthesize (`synth_qwen3tts.py`, `synth_voxcpm2.py`), `seedtts_score.py` scores, and the upstream Seed-TTS-eval scripts run unmodified as subprocesses (`run_wer.py`, UniSpeech `verification_pair_list_v2.py`). Scoring rule: the judges must reproduce the published scores of the real recordings ("Human" row) before they score any synthesizer. Weights and the `seedtts_testset.zip` / `wavlm_large_finetune.pth` artefacts are fetched by `cluster/fetch_t0.sh` with `sha256` manifests.
 
-- `Qwen/Qwen3-TTS-12Hz-1.7B-Base` / `Qwen/Qwen3-TTS-12Hz-0.6B-Base` — inference-only voice cloning in Qwen's published protocol (`Qwen3TTSModel`, `generate_voice_clone`). Pick these to reproduce Qwen's Seed-TTS numbers with or without the smaller variant.
-- `openbmb/VoxCPM2` — inference-only "ultimate cloning" (prompt wav plus its text, `--cfg-value 2.0`, `--inference-timesteps 10`). Pick it when you have both a prompt clip and its transcript.
-- Judges: `run_wer.py` (Whisper-large-v3 for en, `funasr/paraformer-zh` for zh) and the WavLM-large SIM judge (`--model_name wavlm_large`) — they are the measurement instrument, not candidates.
+- `Qwen/Qwen3-TTS-12Hz-1.7B-Base` / `Qwen/Qwen3-TTS-12Hz-0.6B-Base` — inference-only voice cloning in Qwen's published protocol (`Qwen3TTSModel`, `generate_voice_clone`).
+- `openbmb/VoxCPM2` — inference-only "ultimate cloning" (prompt wav plus its text, `--cfg-value 2.0`, `--inference-timesteps 10`), when you have both a prompt clip and its transcript.
+- Judges: `run_wer.py` (Whisper-large-v3 for en, `funasr/paraformer-zh` for zh) and the WavLM-large SIM judge (`--model_name wavlm_large`) — the measurement instrument, not candidates.
 
 Headline result: the harness scores the ground-truth rows of the en (1,088 as read) and zh (2,020 as read) splits first, validating the judges on real recordings, and then scores each synthesizer the same way. Per-model WER/SIM tables are in [./tts-GB200/](./tts-GB200/); the zh-hard split (400 rows) has no result row yet.
 
@@ -49,16 +47,16 @@ Fine-tuning (Step 6): VoxCPM2 with LoRA r32/alpha 32 on 64.9 h of commercial-saf
 
 Inference and benchmarking only: `voicebench_run.py` wraps upstream VoiceBench (commit `b561541`) and runs each assistant over the objectively scored subsets (`openbookqa`, `mmsu`, `ifeval`, `advbench`, `bbh`); the remaining subsets need a GPT judge and are not run.
 
-- `Qwen3-ASR-1.7B` → `Qwen3-4B-Instruct-2507` (assistant `cascade`) — inference-only cascade: audio is transcribed (its own language identification left on) and the 4B chat model answers with the upstream cascade system prompt. Pick it when the transcriber and the answer model should be swappable.
-- `Qwen3-Omni-30B-A3B-Instruct` (assistant `qwen3_omni`) — inference-only end-to-end speech-LLM, speech in and text out, talker disabled (`disable_talker()`, `return_audio=False`), greedy, `max_new_tokens 2048`. Pick it when speech understanding and answering must live in one checkpoint.
+- `Qwen3-ASR-1.7B` → `Qwen3-4B-Instruct-2507` (assistant `cascade`) — inference-only cascade: audio is transcribed (its own language identification left on) and the 4B chat model answers with the upstream cascade system prompt. Use it when the transcriber and the answer model should be swappable.
+- `Qwen3-Omni-30B-A3B-Instruct` (assistant `qwen3_omni`) — inference-only end-to-end speech-LLM, speech in and text out, talker disabled (`disable_talker()`, `return_audio=False`), greedy, `max_new_tokens 2048`. Use it when speech understanding and answering must live in one checkpoint.
 
-Headline result (2026-10-12/13, cascade): IFEval 79.7, AdvBench refusal rate 99.8%, BBH acc 88.3, OpenBookQA acc 75.4, zero failed rows. O1 was measured the same way on 2026-10-13/14 and compared against the published model card in [./omni-GB200/](./omni-GB200/).
+Headline result (cascade): IFEval 79.7, AdvBench refusal rate 99.8%, BBH acc 88.3, OpenBookQA acc 75.4, zero failed rows. O1 was measured the same way and compared against the published model card in [./omni-GB200/](./omni-GB200/).
 
 ## What is not done yet (IN PROGRESS / PLANNED)
 
-These have no measured result on main yet.
+No measured result on main yet for:
 
-- Omni fine-tuning: the starting point is measured (Qwen3-Omni already transcribes FLEURS-vi at 5.44 WER, better than the 7.49 dedicated judge), so the O2 training target is being re-scoped; no omni training has run.
+- Omni fine-tuning: no omni training has run. The starting point is measured (Qwen3-Omni already transcribes FLEURS-vi at 5.44 WER, better than the 7.49 dedicated judge).
 - TTS naturalness (UTMOS) is not scored.
 
 Settled (see [./tts-GB200/](./tts-GB200/) Step 6): full fine-tuning is no better than LoRA for VoxCPM2 Vietnamese (LoRA stays the recipe), and Qwen3-TTS single-speaker fine-tuning is a null result versus zero-shot cloning.
