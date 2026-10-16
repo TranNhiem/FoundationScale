@@ -27,10 +27,16 @@ def test_every_recipe_carries_its_published_curve_and_model() -> None:
         "dsrl-pi05-libero-spatial-task9",
         "td3bc-pi05-libero-spatial-task2",
         "td3bc-gaussian-libero-spatial-task0",
+        "recap-pi05-libero10-task8",
     }
     for name, spec in PUBLISHED_RECIPES.items():
         assert spec.published is not None and spec.published.trials == 50, name
-        assert spec.value("cluster.actor_rollout_ref.model.path").startswith("Miical/"), name
+        model = (
+            "initial_policy_path"
+            if spec.entrypoint == "vvla-train-recap"
+            else ("cluster.actor_rollout_ref.model.path")
+        )
+        assert spec.value(model).startswith("Miical/"), name
         assert spec.value("output_dir").startswith("./outputs/rl/"), name
 
 
@@ -42,6 +48,7 @@ def test_every_recipe_carries_its_published_curve_and_model() -> None:
         ("dsrl-pi05-libero-spatial-task9", 30, 37, 41),
         ("td3bc-pi05-libero-spatial-task2", 32, 40, 40),
         ("td3bc-gaussian-libero-spatial-task0", 2, 48, 48),
+        ("recap-pi05-libero10-task8", 8, 23, 23),
     ],
 )
 def test_published_counts_are_the_docs(name: str, start: int, end: int, best: int) -> None:
@@ -143,3 +150,12 @@ def test_bad_placement_arguments_are_refused() -> None:
     with pytest.raises(VerlVlaRlError):
         spec.value("no.such.key")
     assert isinstance(spec, VerlVlaRlSpec)
+
+
+def test_recap_on_four_gpus_caps_its_eight_gpu_stages_and_keeps_the_two_gpu_value_model() -> None:
+    spec = on_gpus(PUBLISHED_RECIPES["recap-pi05-libero10-task8"], 4)
+    for stage in ("policy_eval", "collect_data", "train_policy"):
+        assert spec.value(f"recap.{stage}.cluster.resource.model.gpus_per_node") == "4"
+    assert spec.value("recap.train_value_model.cluster.resource.model.gpus_per_node") == "2"
+    assert spec.value("recap.value_infer.num_gpus") == "2"
+    assert render_command(spec)[0] == "vvla-train-recap"
