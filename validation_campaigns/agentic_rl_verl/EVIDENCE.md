@@ -38,7 +38,28 @@ Things the real runs exposed, and the fixes:
 - Rewards are all 0.0: the borrowed `openai/gsm8k` rule scorer expects a `#### N` answer line. Reward
   correctness belongs to the parity step, not to this format check.
 
-Not yet measured: parity against FS GRPO on the music task (MUST_PASS b).
+Parity against FS GRPO on the music task (MUST_PASS b) is measured below.
+
+## Parity: verl GRPO vs FS GRPO on music, 100 steps (2026-10-16)
+
+`verl_parity_launch.sh 7` ran verl's own GRPO trainer with the settings of the FS run `train100_tp1_s7`
+(MiMo-V2.6-Distill 9B, top_p 1.0, T 1.0, lr 1e-6, 4 tasks x 8 samples, centred advantage, clip 0.2, no KL),
+on one GPU with parameter and optimizer offload. It completed all 100 steps (exit 0).
+`parity_stats.py` compares mean rollout reward per window against two FS seeds
+(`parity_tp1_s7.json`, `parity_tp1_s6.json`):
+
+| window | FS seed 6 | FS seed 7 | verl | criterion | verdict |
+|---|---|---|---|---|---|
+| steps 0-19 | 0.070 | 0.133 | 0.085 | inside the FS seed envelope | PASS |
+| steps 20-49 | 0.344 | 0.421 | 0.450 | inside the FS seed envelope | 0.029 above the envelope |
+| steps 50-99 | 0.559 | 0.563 | 0.580 | within 5% of FS | PASS (3.1% / 3.8%) |
+
+Reading: verl and FS reach the same plateau (late window within 5% of both seeds), and verl's early
+learning is inside the FS seed spread. In steps 20-49 verl learns slightly faster than either FS seed.
+Two FS seeds make a narrow envelope, so this is a near-miss rather than a measured divergence. The plan's
+criterion for the middle window is therefore not met on this evidence; a third FS seed (or a second verl seed)
+would settle it. One known difference remains: verl's loss reduction (`seq-mean-token-mean`) is the closest
+verl option to FS's `prompt_mean`, not an identical definition.
 
 ## FS music reward through verl's reward hook (2026-10-12)
 

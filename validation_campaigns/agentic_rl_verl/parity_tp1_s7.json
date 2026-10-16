@@ -1,0 +1,31 @@
+{
+ "band": 0.05,
+ "fs_steps": 100,
+ "verl_steps": 100,
+ "windows": [
+  {
+   "window": "0-19",
+   "paired_steps": 20,
+   "fs_mean": 0.1329,
+   "verl_mean": 0.0847,
+   "rel_diff": 0.3629,
+   "status": "OUTSIDE"
+  },
+  {
+   "window": "20-49",
+   "paired_steps": 30,
+   "fs_mean": 0.4208,
+   "verl_mean": 0.4496,
+   "rel_diff": 0.0684,
+   "status": "OUTSIDE"
+  },
+  {
+   "window": "50-99",
+   "paired_steps": 50,
+   "fs_mean": 0.563,
+   "verl_mean": 0.5804,
+   "rel_diff": 0.0308,
+   "status": "WITHIN"
+  }
+ ]
+}
