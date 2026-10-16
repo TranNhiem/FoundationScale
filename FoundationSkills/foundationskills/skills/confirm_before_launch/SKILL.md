@@ -97,6 +97,8 @@ Consumes an `fs_launch_spec` (envelope or bare payload, hashed the same way
 `fskills hash --spec` / `fskills launch --confirm`. It recomputes the plan hash;
 never submits, never auto-fills.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS.
+
 ## Worked examples
 
 ```python

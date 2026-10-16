@@ -105,6 +105,8 @@ None. `entries=()`, `emits=("finding_set",)`, `apis=()`. Notes: "attribution onl
 call". It consumes finding lists (RED/REFUSED findings from any skill) and emits one `finding_set`
 artifact; it never calls FoundationScale, reads a checkpoint or submits anything.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS.
+
 ## Worked examples
 
 ```python

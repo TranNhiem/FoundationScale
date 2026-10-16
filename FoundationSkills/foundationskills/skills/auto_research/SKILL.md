@@ -228,6 +228,8 @@ Read these when the task needs them:
   `squeue.job_states`, the claims/seeds/concurrency/locks helpers,
   `Ledger` (append/verify/results/launches/tsv_view). `squeue` is read-only. No processes are launched.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS. `submit` also needs FoundationScale (CORE-HOST-001 with the install step); the ledger actions run anywhere.
+
 ## Worked examples
 Four end-to-end request sequences are in `references/worked-examples.md`:
 1. validate a campaign before signing anything;

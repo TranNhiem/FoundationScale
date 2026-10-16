@@ -415,7 +415,7 @@ class TrainingPlannerSkill(BaseSkill):
         RuleSpec("TR-PL-002", "a stage is feasibility-infeasible with no executable feasible alternative", Severity.BLOCK, "handoff"),
         RuleSpec("TR-PL-003", "a stage relies on an unvalidated (literature/community/derived) recipe", Severity.INFO, "handoff"),
         RuleSpec("TR-PL-004", "a stage needs data not yet prepared (handoff to data_engine)", Severity.WARN, "handoff"),
-        RuleSpec("TR-PL-005", "disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)", Severity.INFO, "handoff"),
+        RuleSpec("TR-PL-005", "disclosure: FS SFT on a text column trains on the full text (assistant-only loss needs a conversations column)", Severity.INFO, "handoff"),
         RuleSpec(
             "TR-PL-006",
             "planned max_sequence_length >= 131072, or a goal claim that it works (a 128K claim is a planning fact, "
@@ -676,9 +676,11 @@ class TrainingPlannerSkill(BaseSkill):
             findings.append(
                 self.finding(
                     "TR-PL-005",
-                    "disclosure: FS SFT trains on the full rendered `text` (no assistant-only loss masking)",
+                    "disclosure: FS SFT on a rendered `text` column trains on the full text; assistant-only "
+                    "loss needs the data as a conversations column",
                     {"stages": [s.get("name") for s in stages if s.get("stage") == "sft"]},
-                    "if assistant-only loss is required, the installed FS cannot do it; state this to the user",
+                    "if assistant-only loss is required, prepare the data as a conversations column and declare "
+                    "FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN (FS then masks to assistant turns)",
                 )
             )
         # A4.1 (BLOCK handoff -> RED): TR-PL-006 (a >= 128K planning claim) and

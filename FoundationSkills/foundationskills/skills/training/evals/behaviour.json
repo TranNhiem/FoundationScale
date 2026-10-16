@@ -3000,7 +3000,7 @@
       "rule_id": "TR-PL-005",
       "severity": "INFO",
       "phase": "handoff",
-      "description": "disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)",
+      "description": "disclosure: FS SFT on a text column trains on the full text (assistant-only loss needs a conversations column)",
       "fixture": {
         "fake_plan": {
           "decisions": [],
@@ -3108,13 +3108,13 @@
       },
       "fixture_sha256": "1ecfa28a906f188dc98af189c4d76a9e827a2f91e94bf525acf79e7adcf316c7",
       "expected_behavior": [
-        "Identifies the problem: disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking)",
+        "Identifies the problem: disclosure: FS SFT on a text column trains on the full text (assistant-only loss needs a conversations column)",
         "Records it as information only; it neither blocks nor fails the run",
         "Cites rule TR-PL-005"
       ],
-      "ground_truth": "training.planner: rule TR-PL-005 (INFO, handoff phase) fires: disclosure: FS SFT trains on the full rendered text (no assistant-only loss masking).",
+      "ground_truth": "training.planner: rule TR-PL-005 (INFO, handoff phase) fires: disclosure: FS SFT on a text column trains on the full text (assistant-only loss needs a conversations column).",
       "trigger_facts": [],
-      "question": "I want a domain reasoning assistant on a manufacturing domain using base model \"some-model\" (dense, 8.0B), with preserve_general = true and target_capabilities [\"reasoning\"], on 1 node of 8× H100. My data is one local_dir source at file:///data/corpus with approx_tokens 10,000,000, and data_facts has_instructions = true. I've also been handed a plan document that has a single stage: name/stage \"sft\", algorithm \"sft\", method \"lora\", recipe_id \"recipe-x\" with recipe_provenance \"validated\" and recipe_derived false, data format \"sft\" with tokens 1,000 and ready true, estimate of 1,000 tokens / 0.125 hours / 1.0 gpu_hours, executable true, missing null, and the stated reason \"chosen because the fixture needs a valid stage\". Can you run training.planner on my goal_spec and tell me what the resulting training_plan is?",
+      "question": "I want to turn my 8B dense model \"some-model\" into a manufacturing domain reasoning assistant — a domain_expert that preserves general capability and adds reasoning — and I need a training plan I can actually run. The data is a single local_dir at file:///data/corpus with roughly 10,000,000 tokens, and it does contain instructions. Hardware is 1 node of 8 H100 GPUs. Please produce the full training_plan with staged estimates, and for anything FoundationScale can't execute here, name the exact missing capability instead of guessing.",
       "question_model": "mimo-v2.6-pro"
     },
     {

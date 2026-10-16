@@ -136,6 +136,8 @@ readiness_report artifact `checks` for per-rule details.)
 - APIs for callers: `recommend_pipeline`, `run_pipeline`, `build_readiness`,
   `design_mixture`, `catalog.discover`. No direct processes are launched.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS.
+
 ## Worked examples
 1. CPT from internal PDFs + HTML docs:
    ```
