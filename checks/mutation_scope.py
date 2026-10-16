@@ -102,6 +102,14 @@ PENDING_ENROLMENT: dict[str, str] = {
         "GR00T LIBERO policy adapter (observation batching, float32 state, normalize-then-invert "
         "gripper): pinned against stand-in upstream modules and run on GB200, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/longwam/libero.py": (
+        "Long-WAM LIBERO client (per-step act, NumPy-version-safe array transport, refusals): "
+        "line-covered by tests/vla, no mutation row yet."
+    ),
+    "src/foundationscale/vla/adapters/longwam/server.py": (
+        "Long-WAM policy server over Long-WAM's public API (read_settings, create_policy, "
+        "policy_batch): line-covered against stand-in upstream modules, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/openpi/finetune.py": (
         "openpi fine-tune declaration (pi05_libero recipe) and the scripts/train.py argv: "
         "line-covered by tests/vla, no mutation row yet."

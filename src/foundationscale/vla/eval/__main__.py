@@ -45,6 +45,12 @@ class Protocol:
     source: str
     # env steps per episode for every suite; None takes the suite's cap from LIBERO_MAX_STEPS
     max_steps: int | None = None
+    # per-suite caps when a backend's protocol sets them per suite; a suite not listed falls back
+    max_steps_by_suite: tuple[tuple[str, int], ...] = ()
+
+    def steps_for(self, suite: str) -> int | None:
+        """The env-step cap this protocol gives ``suite`` (None: the suite's LIBERO_MAX_STEPS)."""
+        return dict(self.max_steps_by_suite).get(suite, self.max_steps)
 
 
 PROTOCOLS: dict[str, Protocol] = {
@@ -56,6 +62,24 @@ PROTOCOLS: dict[str, Protocol] = {
     # every suite (MultiStepWrapper counts env steps, not inferences).
     "gr00t": Protocol(
         "seeded_reset", 0, 8, 20, 0, 5555, "Isaac-GR00T examples/LIBERO/README.md", max_steps=720
+    ),
+    # Long-WAM configs/eval/libero.yaml + benchmarks/libero/eval_libero_single.py: suite init
+    # states (index % len), 30 settle steps, the policy called every step (it replans itself), 50
+    # trials per task, seed 1, caps 400 / 400 / 400 / 700.
+    "longwam": Protocol(
+        "suite_init_states",
+        30,
+        1,
+        50,
+        1,
+        5600,
+        "Long-WAM configs/eval/libero.yaml",
+        max_steps_by_suite=(
+            ("libero_spatial", 400),
+            ("libero_object", 400),
+            ("libero_goal", 400),
+            ("libero_10", 700),
+        ),
     ),
 }
 
@@ -95,6 +119,10 @@ def _policy(backend: str, host: str, port: int, protocol: Protocol) -> Any:
         from foundationscale.vla.adapters.openpi.libero import OpenPiLiberoPolicy  # noqa: PLC0415
 
         return OpenPiLiberoPolicy(host, port, replan_steps=protocol.replan_steps)
+    if backend == "longwam":
+        from foundationscale.vla.adapters.longwam.libero import LongWamLiberoPolicy  # noqa: PLC0415
+
+        return LongWamLiberoPolicy(host, port)
     from foundationscale.vla.adapters.gr00t.libero import Gr00tLiberoPolicy  # noqa: PLC0415
 
     return Gr00tLiberoPolicy(host, port, n_action_steps=protocol.replan_steps)
@@ -114,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=protocol.seed if args.seed is None else args.seed,
             init=protocol.init,  # type: ignore[arg-type]
             num_steps_wait=protocol.num_steps_wait,
-            max_steps=protocol.max_steps,
+            max_steps=protocol.steps_for(args.suite),
         )
     except EvalPlanError as exc:
         print(f"REFUSAL (exit 96): {exc}", file=sys.stderr)

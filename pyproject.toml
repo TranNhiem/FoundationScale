@@ -326,6 +326,8 @@ module = [
     "libero.*",
     "robosuite",
     "robosuite.*",
+    "longwam",
+    "longwam.*",
 ]
 ignore_missing_imports = true
 
