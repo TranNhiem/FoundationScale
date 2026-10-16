@@ -193,9 +193,9 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   enroot container backends (`FS_BACKEND=auto|slurm|enroot` in
   `launchers/fs_container_backend.sh`), one H100 tray. It is a concrete, hardened example,
   not a portable launcher.
-* The poster's hardware row lists only estates with recorded runs: 2×A100
-  (examples/A100_2GPU.md), 2×H200 (validation_campaigns/vlm_2xh200) and GB200 trays, local
-  or under Slurm. DGX Cloud / Lepton and Kubernetes, which an earlier poster showed as design
+* The poster's hardware row names the NVIDIA GPU generations with recorded runs: Ampere
+  (2×A100, examples/A100_2GPU.md), Hopper (2×H200, validation_campaigns/vlm_2xh200) and
+  Blackwell (GB200 trays), local or under Slurm. DGX Cloud / Lepton and Kubernetes, which an earlier poster showed as design
   targets from the audit's scaling work (docs/deliverables/B2_scaling.md), are
   **unmeasured** here and no longer appear on it.
 

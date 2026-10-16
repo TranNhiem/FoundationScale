@@ -51,14 +51,17 @@
 
   /* matrix */
   .matrix{display:grid;grid-template-columns:330px repeat(4,1fr);gap:12px}
-  .stagebar{grid-column:2 / 6;height:8px;border-radius:8px;margin:2px 0 4px;
+  .stagebar{grid-column:2 / 6;height:8px;border-radius:8px;margin:6px 14px 18px 0;
     background:linear-gradient(90deg,var(--blue),var(--violet),var(--pink),var(--amber));position:relative}
   .stagebar:after{content:"";position:absolute;right:-12px;top:-7px;border-left:16px solid var(--amber);border-top:11px solid transparent;border-bottom:11px solid transparent}
-  .ch{padding:6px 4px 4px}
-  .ch .st{font-size:25px;font-weight:800}
-  .ch .ss{font-size:16px;color:var(--dim);margin-top:4px}
-  .algs{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-  .a{font-family:var(--mono);font-size:15px;padding:4px 9px;border-radius:6px;background:#0a101a;border:1px solid var(--line2);color:#c9d4e6}
+  .ch{padding:20px 20px 20px;border-radius:16px;border:1px solid var(--line2);border-top:4px solid;background:linear-gradient(180deg,#141d2d,#0f1622);margin-bottom:10px}
+  .ch .st{font-size:34px;font-weight:900;letter-spacing:-.5px}
+  .ch .ss{font-size:18px;color:var(--dim);margin-top:6px}
+  .algs{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .a{font-family:var(--mono);font-size:17px;padding:6px 11px;border-radius:7px;background:#0a101a;border:1px solid var(--line2);color:#dbe3f0}
+  .axis{align-self:stretch;margin-bottom:10px;border-radius:16px;border:1px dashed var(--line2);display:flex;flex-direction:column;justify-content:center;gap:18px;padding:20px 22px}
+  .axis div{font-family:var(--mono);font-size:17px;color:var(--dim);letter-spacing:1px}
+  .axis b{display:block;font-family:var(--sans);font-size:24px;color:var(--text);letter-spacing:0;margin-top:2px}
   .fam{border-radius:14px;padding:18px 20px;border:1px solid var(--line2);background:var(--panel2);display:flex;gap:16px;align-items:flex-start}
   .fam svg{flex:none}
   .fam .fn{font-size:24px;font-weight:800}
@@ -94,7 +97,7 @@
   .pr b{color:var(--lime2);font-weight:700}
 
   /* bottom */
-  .bottom{display:grid;grid-template-columns:1.25fr 1fr;gap:20px}
+  .bottom{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;margin-top:24px}
   .chips{display:flex;flex-wrap:wrap;gap:12px}
   .c{font-size:19px;font-weight:600;padding:12px 18px;border-radius:12px;background:var(--panel2);border:1px solid var(--line2)}
   .c small{display:block;font-family:var(--mono);font-size:14px;color:var(--mute);font-weight:500;margin-top:3px}
@@ -114,7 +117,7 @@
     <div class="tag"><b>Open-source unified training framework</b> &nbsp;·&nbsp; Speech · LLM · Multimodal LLM · VLA &nbsp;·&nbsp; from SFT to Agentic RL</div>
   </div>
   <div class="hw">
-    <div class="pill">● Verified on NVIDIA A100 · H200 · GB200</div>
+    <div class="pill">● Runs across NVIDIA GPU generations</div>
     <div class="pill o">Single GPU → Slurm clusters</div>
   </div>
 </header>
@@ -147,14 +150,14 @@
     <div></div>
     <div class="stagebar"></div>
 
-    <div style="align-self:end;padding:0 4px 8px;font-family:var(--mono);font-size:16px;color:var(--mute)">model family ↓ &nbsp; stage →</div>
-    <div class="ch"><div class="st" style="color:#8fb6ff">SFT</div><div class="ss">full fine-tune · LoRA · packing</div>
+    <div class="axis"><div>TRAINING STAGE →<b>SFT to Agentic RL</b></div><div>MODEL FAMILY ↓<b>Speech · LLM<br>Multimodal · VLA</b></div></div>
+    <div class="ch" style="border-top-color:#4c8dff"><div class="st" style="color:#8fb6ff">SFT</div><div class="ss">full fine-tune · LoRA · packing</div>
       <div class="algs"><span class="a">Full FT</span><span class="a">LoRA</span><span class="a">MoE</span><span class="a">multimodal collators</span></div></div>
-    <div class="ch"><div class="st" style="color:#c3a6ff">Preference</div><div class="ss">offline &amp; online</div>
+    <div class="ch" style="border-top-color:#9b6bff"><div class="st" style="color:#c3a6ff">Preference</div><div class="ss">offline &amp; online</div>
       <div class="algs"><span class="a">DPO</span><span class="a">IPO</span><span class="a">KTO</span><span class="a">ORPO</span><span class="a">SimPO</span><span class="a">CPO</span><span class="a">Online DPO</span><span class="a">Iterative DPO</span></div></div>
-    <div class="ch"><div class="st" style="color:#ff8cc0">RL</div><div class="ss">policy optimization</div>
+    <div class="ch" style="border-top-color:#ec4f9a"><div class="st" style="color:#ff8cc0">RL</div><div class="ss">policy optimization</div>
       <div class="algs"><span class="a">PPO</span><span class="a">GRPO</span><span class="a">Dr.GRPO</span><span class="a">DAPO</span><span class="a">GSPO</span><span class="a">RLOO</span><span class="a">REINFORCE</span><span class="a">REINFORCE++</span><span class="a">RAFT</span><span class="a">Best-of-N</span></div></div>
-    <div class="ch"><div class="st" style="color:#ffc766">Agentic RL</div><div class="ss">multi-turn · tools · sandbox</div>
+    <div class="ch" style="border-top-color:#f4a623"><div class="st" style="color:#ffc766">Agentic RL</div><div class="ss">multi-turn · tools · sandbox</div>
       <div class="algs"><span class="a">Agentic GRPO</span><span class="a">token-mean</span><span class="a">tool gateway</span><span class="a">vLLM fleet</span><span class="a">verl</span></div></div>
 
     <!-- Speech -->
@@ -173,13 +176,13 @@
     <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">thin plane + Megatron-Bridge TP/EP lane</div></div>
     <div class="cell tst"><div class="k"><span class="dot h"></span>Implemented &amp; tested</div></div>
     <div class="cell tst"><div class="k"><span class="dot h"></span>Implemented &amp; tested</div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">end-to-end tool-use RL on GB200 (vLLM)</div></div>
+    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">end-to-end multi-turn tool-use RL (vLLM rollout)</div></div>
 
     <!-- MLLM -->
     <div class="fam" style="border-color:rgba(236,79,154,.45)">
       <svg width="46" height="46" viewBox="0 0 46 46"><rect x="4" y="8" width="30" height="24" rx="5" fill="none" stroke="#ec4f9a" stroke-width="3.2"/><circle cx="13" cy="16" r="3" fill="#ec4f9a"/><path d="M6 30 L15 21 L22 27 L27 22 L33 28" stroke="#ec4f9a" stroke-width="3" fill="none"/><rect x="24" y="22" width="18" height="16" rx="4" fill="#0e1420" stroke="#ec4f9a" stroke-width="3"/><path d="M31 26 L37 30 L31 34Z" fill="#ec4f9a"/></svg>
       <div><div class="fn">Multimodal LLM</div><div class="fm">image · video (frames) · audio<br>Gemma-4 · Qwen3.x VLMs</div></div></div>
-    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">image / video-frame SFT on H200, GB200, A100</div></div>
+    <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">image &amp; video-frame SFT, full FT and LoRA</div></div>
     <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">DPO · IPO · SimPO · CPO · ORPO with images</div></div>
     <div class="cell hwc"><div class="k"><span class="dot f"></span>Verified</div><div class="v">GRPO · Dr.GRPO · DAPO · GSPO · RLOO · REINFORCE++ with images</div></div>
     <div class="cell rm"><div class="k"><span class="dot e"></span>Roadmap</div></div>
@@ -201,31 +204,12 @@
   </div>
 </section>
 
-<div class="conn"><svg width="40" height="34"><path d="M20 0 V26" stroke="#2a3850" stroke-width="2"/><path d="M12 20 L20 30 L28 20" stroke="#86d01f" stroke-width="2.5" fill="none"/></svg></div>
 
-<!-- 03 Gates -->
-<section class="sec">
-  <div class="lbl"><span class="num">03</span><h2>Verification gates</h2><span class="sub">every run ends in exactly one verdict — success is earned, never assumed</span></div>
-  <div class="gates">
-    <div class="vd pass"><div class="code">0</div><div><div class="vn">PASS</div><div class="vx">measured and within bounds</div></div></div>
-    <div class="vd red"><div class="code">5</div><div><div class="vn">RED</div><div class="vx">measured and failed</div></div></div>
-    <div class="vd unm"><div class="code">95</div><div><div class="vn">UNMEASURED</div><div class="vx">check did not run — never a pass</div></div></div>
-    <div class="vd ref"><div class="code">96</div><div><div class="vn">REFUSED</div><div class="vx">fail-closed, names what is missing</div></div></div>
-  </div>
-  <div class="princ">
-    <span class="pr"><b>unmeasured ≠ 0</b> · no silent defaults</span>
-    <span class="pr"><b>coverage</b> · every verdict carries its denominator</span>
-    <span class="pr"><b>provenance</b> on every run</span>
-    <span class="pr"><b>checkpoint, adapter &amp; speech gates</b></span>
-  </div>
-</section>
 
-<div class="conn"><svg width="40" height="34"><path d="M20 0 V26" stroke="#2a3850" stroke-width="2"/><path d="M12 20 L20 30 L28 20" stroke="#86d01f" stroke-width="2.5" fill="none"/></svg></div>
-
-<!-- 04/05 -->
+<!-- 03/04 -->
 <div class="bottom">
   <section class="sec">
-    <div class="lbl"><span class="num">04</span><h2>Scale &amp; serving</h2></div>
+    <div class="lbl"><span class="num">03</span><h2>Scale &amp; serving</h2></div>
     <div class="chips">
       <div class="c">DDP<small>data parallel</small></div>
       <div class="c">FSDP2<small>sharded</small></div>
@@ -235,11 +219,11 @@
     </div>
   </section>
   <section class="sec">
-    <div class="lbl"><span class="num">05</span><h2>Hardware &amp; orchestration</h2></div>
+    <div class="lbl"><span class="num">04</span><h2>NVIDIA GPUs &amp; orchestration</h2></div>
     <div class="chips">
-      <div class="c gpu">A100<small>NVIDIA</small></div>
-      <div class="c gpu">H200<small>NVIDIA</small></div>
-      <div class="c gpu">GB200<small>aarch64 · NVLink</small></div>
+      <div class="c gpu">Ampere<small>generation</small></div>
+      <div class="c gpu">Hopper<small>generation</small></div>
+      <div class="c gpu">Blackwell<small>Grace · aarch64</small></div>
       <div class="c">Local<small>workstation</small></div>
       <div class="c">Slurm<small>clusters</small></div>
     </div>
