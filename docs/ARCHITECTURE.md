@@ -464,7 +464,7 @@ conftest carries the skip guard). Beside the package:
 | `docs/` | User and maintainer documentation; `research/` holds design notes per area. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 455379 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 449089 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
