@@ -161,10 +161,7 @@ def test_evaluate_averages_per_clip_min_ade_and_keeps_failed_clips() -> None:
 
 
 def _cli(monkeypatch: pytest.MonkeyPatch, stream: server.TrajectoryStream) -> None:
-    monkeypatch.setattr(
-        "foundationscale.vla.adapters.alpamayo.client.AlpamayoTrajectoryClient",
-        lambda host, port: _client(stream),
-    )
+    monkeypatch.setattr(drive, "AlpamayoTrajectoryClient", lambda host, port: _client(stream))
 
 
 def _listening() -> tuple[socket.socket, int]:

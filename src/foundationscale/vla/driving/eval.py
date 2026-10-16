@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from foundationscale.vla.adapters.alpamayo.client import AlpamayoTrajectoryClient
 from foundationscale.vla.driving.metrics import min_ade
 
 EXIT_OK, EXIT_UNMEASURED, EXIT_REFUSE = 0, 95, 96
@@ -100,8 +101,6 @@ def main(argv: list[str] | None = None) -> int:
         if not _wait(args.host, args.port, args.serve_timeout_s, proc):
             print(f"UNMEASURED (exit 95): no server at {args.host}:{args.port}", file=sys.stderr)
             return EXIT_UNMEASURED
-        from foundationscale.vla.adapters.alpamayo.client import AlpamayoTrajectoryClient  # noqa: PLC0415
-
         client = AlpamayoTrajectoryClient(args.host, args.port)
         clips = args.clips if args.clips is not None else client.total()
         report = evaluate(client, clips)
