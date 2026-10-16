@@ -10,13 +10,16 @@
 
 ## What is FoundationScale
 
-FoundationScale is one training framework for four model families and five training stages.
-It builds on proven trainers and engines — `transformers.Trainer`, Megatron-Bridge, verl, vLLM
-and the upstream VLA stacks — instead of replacing them, and adds what they lack: a declared,
-checked run configuration and **verification gates** that end every run in an explicit verdict.
+FoundationScale is an open-source framework for training AI models across the whole lifecycle —
+pre-training and continued pre-training, supervised fine-tuning, preference optimization,
+reinforcement learning and agentic RL — for speech, language, multimodal and
+vision-language-action models.
 
-On top sits **FoundationSkills**, a set of agent skills that turn a goal into data, a training
-plan and a launch command. Nothing launches until a person confirms the plan.
+It brings these into one framework built on proven engines — Hugging Face Transformers,
+Megatron-Bridge, vLLM, verl, GR00T and openpi — so the same project scales from a single
+GPU to a Slurm cluster. **FoundationSkills** adds an agent layer on top: describe a goal, and
+agents prepare the data, plan the stages, write the launch spec and evaluate the result, with
+your confirmation before anything runs.
 
 ## Highlights
 
@@ -25,7 +28,7 @@ plan and a launch command. Nothing launches until a person confirms the plan.
 - **20 preference & RL algorithms** in one registry, from DPO to GRPO, DAPO, GSPO and PPO.
 - **Agentic RL** — multi-turn tool use in sandboxed environments with a vLLM rollout fleet.
 - **FoundationSkills** — agents plan, prepare data, launch, evaluate and research, with a human confirmation step.
-- **Verification gates** — every run ends in PASS, RED, UNMEASURED or REFUSED; a check that did not run is never a pass.
+- **Measured recipes** — step-by-step examples that report the results they reached on real GPUs.
 - **Scales out** — DDP, FSDP2 and Megatron-Bridge (TP / PP / EP / CP) on NVIDIA Ampere, Hopper and Blackwell, local or under Slurm.
 
 ## Training stages
@@ -58,8 +61,8 @@ plan and a launch command. Nothing launches until a person confirms the plan.
 </p>
 
 FoundationSkills is the agent layer: it decides *what* to train, and FoundationScale executes it.
-It plans only against what the installed framework measurably runs, and launches only with the
-user's confirmed plan hash.
+It plans only against what the installed framework can actually run, and launches only after the
+user confirms the plan.
 
 | Skill | What it does |
 |---|---|
@@ -71,20 +74,6 @@ user's confirmed plan hash.
 
 Read more in [FoundationSkills/README.md](FoundationSkills/README.md); agents start at
 [FoundationSkills/SKILLS.md](FoundationSkills/SKILLS.md).
-
-## Verification gates
-
-Gates are checks that run at fixed points in a job — launch, data, first save, every save,
-export. Each one reports what it examined, and the run ends in exactly one verdict:
-
-| Verdict | Exit code | Meaning |
-|---|---|---|
-| PASS | 0 | Measured and within bounds |
-| RED | 5 | Measured and failed |
-| UNMEASURED | 95 | The check could not run — never counted as a pass |
-| REFUSED | 96 | Fail-closed before training, naming what is missing |
-
-See [docs/VERIFICATION.md](docs/VERIFICATION.md) and [docs/CUSTOM_GATES.md](docs/CUSTOM_GATES.md).
 
 ## Installation
 
