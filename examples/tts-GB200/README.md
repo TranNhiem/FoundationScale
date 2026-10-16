@@ -373,7 +373,18 @@ Upstream `finetuning/sft_12hz.py` (qwen-tts 0.1.1) trains one fixed new voice pe
 | SFT lr 2e-6 (README value) | 2.165 | 44.47 |
 | SFT lr 2e-5 (upstream script default) | 217.17 | 4.49 |
 
-At the README learning rate the fine-tuned voice is no better than zero-shot cloning (WER [-0.50, 0.00], SIM [-2.5, +1.8], n=60). At 10x it diverges into runaway generation. For new voices, use zero-shot cloning; for a new language, use the VoxCPM2 LoRA path above.
+At the README learning rate the fine-tuned voice is no better than zero-shot cloning (WER [-0.50, 0.00], SIM [-2.5, +1.8], n=60). At 10x it diverges into runaway generation. For a new language, use the VoxCPM2 LoRA path above; for a new voice, see the next section.
+
+### Speaker adaptation with LoRA: VoxCPM2 on the same speaker (VERIFIED, 2026-10-15)
+
+The same 28-minute LibriTTS-R speaker (60 held-out utterances), trained as a VoxCPM2 LoRA adapter with the Step 6 tooling (`validation_campaigns/tts_train/`):
+
+| | held-out SIM | held-out WER |
+|---|---|---|
+| base VoxCPM2, zero-shot clone | 44.48 | 2.597 |
+| speaker LoRA | 47.43 | 2.886 |
+
+Speaker similarity rises significantly: paired +2.95 [+1.44, +4.49]. The WER change is unresolved at n=60 (CI [-0.50, +1.47]). With the adapter loaded, zero-shot cloning of other voices does not regress in intelligibility: Seed-TTS test-en WER 1.624 vs 1.706 (paired [-0.27, +0.10]), with a small similarity cost (SIM 74.22 vs 75.0, paired -0.78 [-1.03, -0.53]). Use it as an optional per-speaker adapter. Contrast: Qwen3-TTS fine-tuning on the same speaker was a null result (previous section).
 
 ### Not measured yet
 

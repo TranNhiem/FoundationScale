@@ -21,7 +21,7 @@ No fine-tuning has been run anywhere in this example. All three models are used 
 | Processing | one ASR transcript, then one chat turn | audio handed straight to the model |
 | Decoding | greedy, `max_new_tokens 2048` | greedy, `max_new_tokens 2048` |
 | Output | text | text (talker disabled: `disable_talker()`, `return_audio=False`) |
-| Bigger subset wins here | BBH, AdvBench | OpenBookQA, IFEval (and MMSU, which the cascade never finished) |
+| Bigger subset wins here | BBH, AdvBench | OpenBookQA, IFEval MMSU (76.8 vs 70.5) |
 
 **Cascade (`cascade`)** — INFERENCED PAIR, training status: no fine-tuning. `Qwen3-ASR-1.7B` is a dedicated ASR front end run in transcription-only mode with its own language identification left on, "as in its own evaluation"; `Qwen3-4B-Instruct-2507` is a text-only chat LLM run in bf16 with greedy decoding. Pick this when you want a small stack where you can read the intermediate transcript and swap either half independently.
 
@@ -195,7 +195,7 @@ The generation loop is resumable via a per-row progress file, added after the in
 | IFEval | final **79.7** (strict-prompt 75.1, loose-instruction 84.1) | 345 | 0 | 2.20 | 21.58 |
 | AdvBench | refusal rate **99.8%** | 520 | 0 | 0.84 | 4.88 |
 | BBH | acc **88.3** | 1,000 | 0 | 2.91 | 24.39 |
-| MMSU | **NOT FINISHED** — "the run was stopped when its GPUs were released" | 3,074 (rows, published) | – | – | – |
+| MMSU | acc **70.5** (unparsable 1.4%) | 3,074 | 0 | – | – |
 
 ### O1 end-to-end `Qwen3-Omni-30B-A3B-Instruct` — 2026-10-13/14, vs the model card (`30B-A3B-Instruct` column)
 
@@ -205,7 +205,7 @@ The generation loop is resumable via a per-row progress file, added after the in
 | IFEval (final) | 81.5 | 77.8 | +3.7 | 79.7 |
 | AdvBench (refusal %) | 99.4 | 99.3 | +0.1 | 99.8 |
 | BBH | 85.0 | 80.4 | +4.6 | 88.3 |
-| MMSU | 76.8 (unparsable 3.3%) | 68.1 | +8.7 | (stopped) |
+| MMSU | 76.8 (unparsable 3.3%) | 68.1 | +8.7 | 70.5 |
 
 **Decoding caveat.** Both arms decode greedily (`do_sample=False`, `max_new_tokens` capped at `MAX_RESPONSE_TOKENS = 2048`, "upstream base.generate_audio default"). Relative to the card this is a documented gap in decoding settings, not a reproduction: "The card does not publish its decoding settings (we decode greedily), so this is recorded as a documented upward gap, not as 'reproduced'." And: "Our scores sit 2.8-8.7 points above the card on four of five subsets; at n=455-1,000 that is systematic, not sampling noise."
 
@@ -219,7 +219,7 @@ Stated technical deviation: the resampler uses `resample_poly` ("not identical t
 
 - `O0` (cascade) and `O1` (Qwen3-Omni) are done as evaluations; see `docs/research/tts_omni_plan.md`.
 - **O2 starting point (VERIFIED, 2026-10-15):** before teaching Qwen3-Omni Vietnamese speech input, its existing ability was measured. Prompted with "Transcribe the Vietnamese audio into text." (talker disabled, greedy), it reaches **5.44 WER** on all 857 FLEURS-vi test rows, better than the dedicated Vietnamese judge Qwen3-ASR-1.7B (7.49). There is little headroom on read speech, so the O2 training target is being re-scoped before any GPU time is spent on it. This is the point of measuring first.
-- The cascade's MMSU run is being re-run with the resumable runner; its row stays "not finished" until it lands.
+- The cascade's MMSU run finished with the resumable runner: 70.5 accuracy on all 3,074 rows (1.4% unparsable). O0 is complete on all five subsets; Qwen3-Omni leads MMSU by 6.3 points. `voicebench_run.py --rows START:END` lets an extra GPU take a slice of rows; a final full run merges and scores them.
 - Speech-out evaluation is not recorded: `O1` runs text out with the talker disabled (`disable_talker()`, `return_audio=False`).
 
 ---

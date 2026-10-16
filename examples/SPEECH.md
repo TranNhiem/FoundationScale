@@ -8,7 +8,7 @@ This page is the entry point for all speech work: what each example does, which 
 |---|---|---|---|---|
 | ASR (speech to text) | [./speech-2xH200/](./speech-2xH200/), [./speech-2xA100/](./speech-2xA100/) | `nvidia/parakeet-ctc-1.1b`, `openai/whisper-large-v3`, `google/gemma-4-E4B-it`, `Qwen/Qwen2-Audio-7B-Instruct` | training: full fine-tune (CTC, seq2seq, FSDP) and LoRA r16/alpha32 (audio tower + `embed_audio` projector in full) | VERIFIED — all five configs measured |
 | TTS (text to speech) | [./tts-GB200/](./tts-GB200/) | `Qwen/Qwen3-TTS-12Hz-1.7B-Base`, `Qwen/Qwen3-TTS-12Hz-0.6B-Base`, `openbmb/VoxCPM2` | zero-shot voice cloning scored by the Seed-TTS-eval harness (WER + WavLM SIM); LoRA fine-tuning for a new language (VoxCPM2, Vietnamese) | VERIFIED — evaluation and Vietnamese LoRA fine-tuning measured |
-| omni speech-LLM | [./omni-GB200/](./omni-GB200/) | `Qwen3-ASR-1.7B` + `Qwen3-4B-Instruct-2507` (cascade), `Qwen3-Omni-30B-A3B-Instruct` (end-to-end) | inference only: VoiceBench benchmarking, upstream `evaluate.py` unmodified | VERIFIED — cascade (O0, MMSU not finished) and Qwen3-Omni (O1, all five subsets); fine-tuning PLANNED |
+| omni speech-LLM | [./omni-GB200/](./omni-GB200/) | `Qwen3-ASR-1.7B` + `Qwen3-4B-Instruct-2507` (cascade), `Qwen3-Omni-30B-A3B-Instruct` (end-to-end) | inference only: VoiceBench benchmarking, upstream `evaluate.py` unmodified | VERIFIED — cascade (O0) and Qwen3-Omni (O1), all five subsets; fine-tuning PLANNED |
 
 All ASR numbers on this page were measured on 2 GPUs of type H200. The A100 entry point for the same task lives at [./speech-2xA100/](./speech-2xA100/); no numbers on this page come from it.
 
@@ -59,7 +59,6 @@ Headline result (2026-10-12/13, cascade): IFEval 79.7, AdvBench refusal rate 99.
 These have no measured result on main yet.
 
 - Omni fine-tuning: the starting point is measured (Qwen3-Omni already transcribes FLEURS-vi at 5.44 WER, better than the 7.49 dedicated judge), so the O2 training target is being re-scoped; no omni training has run.
-- The cascade's MMSU subset is being re-run (resumable).
 - TTS naturalness (UTMOS) is not scored.
 
 Settled (see [./tts-GB200/](./tts-GB200/) Step 6): full fine-tuning is no better than LoRA for VoxCPM2 Vietnamese (LoRA stays the recipe), and Qwen3-TTS single-speaker fine-tuning is a null result versus zero-shot cloning.
