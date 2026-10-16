@@ -234,3 +234,21 @@ def test_the_default_client_is_multiprocessing_connection(monkeypatch: pytest.Mo
     monkeypatch.setattr(mpc, "Client", lambda address, authkey: conn)
     LongWamLiberoPolicy("h", 7).reset()
     assert conn.sent == [{"op": "reset"}]
+
+
+@pytest.mark.parametrize("probe", [EOFError, ConnectionResetError])
+def test_a_port_probe_that_never_authenticates_does_not_stop_the_server(probe: type) -> None:
+    from multiprocessing import AuthenticationError
+
+    conn = _Conn([{"op": "reset"}])
+    attempts = [probe(), AuthenticationError("digest"), conn]
+
+    class _Listener:
+        def accept(self) -> _Conn:
+            item = attempts.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+    assert server.serve(_Policy(), lambda o, t: o, _Listener(), max_connections=1) == 1
+    assert conn.sent == [{"ok": True}]

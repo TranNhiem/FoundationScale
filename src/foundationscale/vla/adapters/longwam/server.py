@@ -44,8 +44,15 @@ def serve(
 ) -> int:
     """Answer requests one connection at a time (the runner opens one); returns requests served."""
     served = connections = 0
+    from multiprocessing import AuthenticationError  # noqa: PLC0415
+
     while max_connections is None or connections < max_connections:
-        conn = listener.accept()
+        try:
+            conn = listener.accept()
+        except (EOFError, ConnectionError, AuthenticationError):
+            # the FS runner first probes the port with a bare TCP connect that never authenticates;
+            # that is a readiness check, not a client, and must not take the server down
+            continue
         connections += 1
         try:
             while True:
