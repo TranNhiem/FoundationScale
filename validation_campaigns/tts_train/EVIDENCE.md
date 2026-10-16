@@ -46,3 +46,26 @@ with the LoRA loaded, scored by the T0 harness (`cluster/run_t3_zeroshot.sh`), a
 WER 1.624 vs 1.706 (paired diff [-0.27, +0.10]: no regression), SIM 74.22 vs 75.0 (paired diff -0.78,
 [-1.03, -0.53]). Zero-shot cloning survives with a small, significant similarity cost, the same direction
 and size as T2b's -1.07 on Vietnamese. Ship the speaker LoRA as an optional adapter, not merged weights.
+
+## SP-5: multi-speaker VoxCPM2 LoRA (2026-10-16/17)
+
+ROADMAP SP-5 asks for speaker similarity up on the fine-tuned speakers without losing zero-shot
+similarity or intelligibility. Upstream Qwen3-TTS fine-tuning is single-speaker with no cloning
+(T2a), so the criterion is tested on VoxCPM2, the family where T3 showed LoRA adapts a voice.
+`cluster/build_sp5.py` takes the 8 LibriTTS-R train-clean-100 speakers with the most utterances
+(21-33 min each, 2,740 train rows), 20 held out per speaker (160 rows), one fixed 6-12 s prompt clip
+per speaker; `cluster/run_sp5.sh` trains the upstream LoRA config for 3 epochs (514 steps, final step
+fixed in advance) and runs both evaluations.
+
+| check (paired bootstrap, LoRA minus base) | base | LoRA | difference, 95% CI | criterion |
+|---|---|---|---|---|
+| held-out SIM, 8 fine-tuned speakers (n=160) | 49.91 | 52.95 | +3.05 [+1.59, +4.58] | met |
+| held-out WER (n=160) | 2.939 | 2.493 | -0.45 [-1.77, +0.54] | no regression |
+| zero-shot WER, Seed-TTS test-en (n=1,088) | 1.706 | 1.728 | [-0.23, +0.34] | no regression |
+| zero-shot SIM, Seed-TTS test-en | 75.0 | 74.05 | -0.95 [-1.19, -0.70] | **not met** |
+
+Training on 8 speakers instead of 1 does not remove the zero-shot similarity cost (-0.95 here vs
+-0.78 for T3's single speaker). So SP-5 is not met by a single merged model. What is met: serving the
+LoRA as an adapter loaded only for the fine-tuned voices (zero-shot requests use the base weights, so
+their scores are T1's by construction). Next lever to test: whether a lower LoRA rank or fewer steps
+keeps the held-out gain while shrinking the zero-shot cost.

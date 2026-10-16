@@ -80,3 +80,30 @@ moves more because it counts the verbatim style the model has just learned.
   control run on the committed code). FS now tells DDP to expect unused parameters when the
   config declares layerdrop, leaving the recipe as upstream ships it. The same 2-GPU run passes
   (336/336 audio rows).
+
+## SP-4: Qwen3-ASR-0.6B through the same recipe (2026-10-16/17)
+
+`sp4_run.sh` runs the 1.7B process unchanged on `Qwen/Qwen3-ASR-0.6B-hf` (Apache-2.0, sha256 checked
+against the Hub): same data (`earnings_train6000`), lr 1e-5, global batch 16, 750 steps, bf16, seed 0,
+same selection rule and test rows. One difference: one GPU with per-device batch 16 instead of two
+GPUs x 8 (same global batch), because no tray had two idle GPUs; `train.sh` takes `MODEL`/`BS`,
+`decode.sh` takes `PROC` (the 0.6B processor). WER below is the FS normalizer
+(`speech_metrics.corpus_error_rate`).
+
+| checkpoint (`earnings_validation1000`) | FS-normalizer WER |
+|---|---|
+| base | 20.81 |
+| **250** | **14.09** |
+| 500 | 14.29 |
+| 750 | 14.54 |
+
+| `ood_earnings223000_conv` (2,503 scored rows, 6 unseen calls) | FS-normalizer WER |
+|---|---|
+| Qwen3-ASR-0.6B zero-shot | 16.09 |
+| **Qwen3-ASR-0.6B + Earnings, FS fine-tune (step 250)** | **10.93** |
+
+Paired bootstrap on identical rows: **-5.16 points, 95% CI [-5.60, -4.75]** (the 1.7B gained -4.88).
+Decode health on the test set: runaway hypotheses 0, repetition-loop rows 0 (base and fine-tuned).
+The 0.6B peaks earlier than the 1.7B (step 250 vs 500) and then drifts up slightly on validation.
+Two decodes had to be rerun after a tray's shared filesystem went read-only mid-run; the reruns are
+the reported numbers.
