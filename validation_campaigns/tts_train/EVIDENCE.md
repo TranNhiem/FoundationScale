@@ -79,6 +79,7 @@ Same data, evaluation and paired bootstraps (`run_sp5.sh` with `RUN`/`RANK`/`EPO
 | r32, 3 epochs (above) | +3.05 [+1.59, +4.58] | [-1.77, +0.54] | -0.95 [-1.19, -0.70] | [-0.23, +0.34] |
 | **r8, 3 epochs** | **+2.49 [+0.95, +4.14]** | [-1.78, +0.46] | **-0.28 [-0.53, -0.03]** | [-0.20, +0.16] |
 | r32, 1 epoch | +1.18 [-0.32, +2.79] | [-1.32, +1.15] | -0.47 [-0.71, -0.22] | [-0.26, +0.08] |
+| r4, 3 epochs (run after the rule was fixed) | +1.90 [+0.51, +3.44] | [-1.63, +0.75] | -0.33 [-0.57, -0.08] | **+0.36 [+0.14, +0.58]** |
 
 Rank, not training length, sets the trade-off: r8 keeps most of the speaker gain and cuts the
 zero-shot cost by ~70%, still just significant. Because this sweep reads Seed-TTS test-en, picking a
@@ -86,7 +87,6 @@ variant from it is selection on that set. Rule fixed before the r4 result: the c
 one with the smallest zero-shot SIM cost whose held-out SIM gain CI excludes 0; it is then confirmed
 on a set the sweep never read (Seed-TTS test-zh, zero-shot SIM and CER) before SP-5 is called met.
 
-| r4, 3 epochs (run after the rule was fixed) | +1.90 [+0.51, +3.44] | [-1.63, +0.75] | -0.33 [-0.57, -0.08] | **+0.36 [+0.14, +0.58]** |
 
 r4 is no cheaper on zero-shot SIM than r8 and regresses zero-shot WER, so the fixed rule picks **r8**.
 
