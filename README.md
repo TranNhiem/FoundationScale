@@ -270,8 +270,11 @@ workloads on GB200 (Gemma-4 E4B-it) on 2026-10-07. [-> FoundationSkills/README.m
   GR00T N1.7 and openpi pi0.5 LIBERO results and verl-vla FPO RL reproduce their published
   numbers within tolerance [-> docs/research/vla.md]. The remaining names are tested on
   fixtures, not benchmarked. [-> docs/RL_ALGORITHMS.md]
-* **Not yet**: pre-training recipes and the unified data contract remain roadmap items
-  with falsification conditions in docs/deliverables/.
+* **Pre-training**: continued pre-training (CPT) runs through the same
+  `foundationscale-train` entry as SFT, planned by FoundationSkills as a `cpt` stage
+  [-> FoundationSkills/foundationskills/interfaces/fs/emit_train.py].
+* **Not yet**: curated from-scratch pre-training recipes and the unified data contract
+  remain roadmap items with falsification conditions in docs/deliverables/.
 
 [-> docs/WORKFLOWS.md]
 ## 8. Installation
@@ -454,8 +457,9 @@ geometry before any process group exists, so a nonsense layout fails on the logi
 rather than at NCCL init. Actual multi-process orchestration lives in the launch plane:
 `launchers/fs_container_backend.sh` routes every in-container step — preflight probes and
 the training run alike — through one backend function, with `FS_USE_TORCHRUN` selecting
-torchrun on the enroot arm. A library-level distributed runtime (the DP/TP/PP/EP
-strategies an earlier poster showed) is design-stage; do not read this section as an API.
+torchrun on the enroot arm. The poster's parallelism panel maps each strategy to the
+backend that runs it (DDP, FSDP2, Megatron-Bridge for TP/PP/EP/CP); FoundationScale adds no
+library-level distributed runtime of its own, and that design is still design-stage; do not read this section as an API.
 [-> docs/DISTRIBUTED.md]
 
 ## 15. Multi-node training
@@ -571,7 +575,7 @@ itself, from the Makefile's own accounting:
 
 `src/` = 102029 LOC across 175 files. `launchers/` contains 10231 shell LOC plus 1615 Python
 LOC, and `validation_campaigns/h100_validation/` adds another 34169 Python LOC and 6706 shell LOC on top of the
-package. `tools/` contains 10192 Python LOC. 454645 git-tracked .py/.sh/.md lines repo-wide.
+package. `tools/` contains 10192 Python LOC. 454649 git-tracked .py/.sh/.md lines repo-wide.
 
 ```
 src/foundationscale/   the package: gates/, checkpoint/, verify/, provenance/,
