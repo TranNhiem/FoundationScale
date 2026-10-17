@@ -230,6 +230,7 @@ def _probe_backends(sharding: tuple[str, ...], megatron_key: dict[str, Any]) -> 
 _MEASURED, _UNMEASURED = "measured", "unmeasured"
 PROBE_KEYS = (
     "agentic_rl", "speech", "video_frame_budget", "sft_assistant_label_mask", "megatron_bridge",
+    "linear_attention_kernels",
 )
 
 
@@ -326,11 +327,22 @@ def _probe_manifest(errors: list[str]) -> list[dict[str, Any]]:
         return []
 
 
+def _probe_linear_attention_key() -> dict[str, Any]:
+    """Hybrid linear-attention models (Qwen3.5's Gated DeltaNet layers) need flash-linear-attention
+    and causal-conv1d for the fast path; without them transformers falls back to a torch
+    implementation (measured 2026-10-17: Qwen3.5-4B SFT about 29 s/step at 11% GPU on a GB200)."""
+    value = {"fla": _has_module("fla"), "causal_conv1d": _has_module("causal_conv1d")}
+    missing = [name for name, present in value.items() if not present]
+    reason = f"not importable here: {', '.join(missing)} (torch fallback)" if missing else ""
+    return _key(_MEASURED, value, reason)
+
+
 def _probe_keys(errors: list[str]) -> dict[str, dict[str, Any]]:
     probes = {"agentic_rl": _probe_agentic_rl_key, "speech": _probe_speech_key,
               "video_frame_budget": _probe_video_key,
               "sft_assistant_label_mask": _probe_label_mask_key,
-              "megatron_bridge": _probe_megatron_key}
+              "megatron_bridge": _probe_megatron_key,
+              "linear_attention_kernels": _probe_linear_attention_key}
     keys: dict[str, dict[str, Any]] = {}
     for name, fn in probes.items():
         try:

@@ -34,7 +34,10 @@ from foundationskills.skills.training.knowledge import find_variant, load_algori
 from foundationskills.skills.training.method import select_method
 from foundationskills.skills.training.posttrain import select_algorithm
 from foundationskills.skills.training.recipes import RecipeQuery, rank_recipes, select_recipe
-from foundationskills.skills.training.unknown_model import synthesize_variant as _synthesize_variant
+from foundationskills.skills.training.unknown_model import (
+    linear_attention_note as _linear_attention_note,
+    synthesize_variant as _synthesize_variant,
+)
 
 PLANNING_STEPS: tuple[str, ...] = (
     "goal",
@@ -760,6 +763,10 @@ def plan(
         family, variant, note = _synthesize_variant(base_model)
         provenance_notes.append(note)
         decide("model_analysis", model_ref, note)
+    note = _linear_attention_note(model_ref, variant, caps)
+    if note:
+        provenance_notes.append(note)
+        decide("model_analysis", "linear-attention fast path missing", note)
     fs_family = _get(family, "fs_family")
     if fs_family is None:
         decide(

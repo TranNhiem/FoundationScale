@@ -382,3 +382,24 @@ def test_unknown_local_checkpoint_with_a_broken_config_refuses(tmp_path) -> None
     (tmp_path / "config.json").write_text("{not json")
     with pytest.raises(PlanningRefusal, match="base_model architecture"):
         planner._synthesize_variant({"name_or_path": str(tmp_path), "size_b": 4.0})
+
+
+def _caps_with_kernels(present: bool, status: str = "measured") -> SimpleNamespace:
+    value = {"fla": present, "causal_conv1d": present}
+    key = {"status": status, "value": value, "reason": "" if present else "missing"}
+    return SimpleNamespace(probe_keys={"linear_attention_kernels": key})
+
+
+def test_linear_attention_fallback_is_disclosed_only_when_measured_missing(tmp_path) -> None:
+    import json
+
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"text_config": {"layer_types": ["linear_attention", "full_attention"]}}))
+    variant = SimpleNamespace(local_path=str(tmp_path))
+    note = planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(False))
+    assert note and "torch fallback" in note and "time estimates assume the fast path" in note
+    assert planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(True)) is None
+    unmeasured = _caps_with_kernels(False, "unmeasured")
+    assert planner._linear_attention_note(str(tmp_path), variant, unmeasured) is None
+    (tmp_path / "config.json").write_text(json.dumps({"layer_types": ["full_attention"]}))
+    assert planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(False)) is None

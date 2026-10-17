@@ -285,7 +285,9 @@ def test_f15_mfu_point_by_config_and_rl_factor():
 # ---------------------------------------------------------------- planner (F7, F8, rv13)
 def test_rv13_non_numeric_goal_facts_refuse_by_name():
     from foundationskills.skills.training.planner import PlanningRefusal, plan
-    goal = {"objective": "x", "target_capabilities": ["reasoning"], "base_model": {"name_or_path": "m", "size_b": 7},
+    arch = {"hidden": 4096, "layers": 32, "heads": 32, "kv_heads": 8, "vocab": 32000, "context_length": 8192}
+    goal = {"objective": "x", "target_capabilities": ["reasoning"],
+            "base_model": {"name_or_path": "m", "size_b": 7, "architecture": arch},
             "data": {"sources": [{"uri": "u", "kind": "jsonl", "approx_examples": "lots"}]},
             "hardware": {"gpu": "NVIDIA GB200", "gpus_per_node": 4, "nodes": 1}}
     with pytest.raises(PlanningRefusal, match="approx_examples"):

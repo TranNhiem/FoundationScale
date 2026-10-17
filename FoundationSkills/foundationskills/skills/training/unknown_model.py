@@ -175,3 +175,28 @@ def synthesize_variant(base_model: dict) -> tuple[Any, Any, str | None]:
         f"vocab {facts['vocab']}, context {facts['context_length']}) from {source}; {where}"
     )
     return family, variant, note
+
+
+def linear_attention_note(model_ref: str, variant: Any, caps: Any) -> str | None:
+    """A disclosure when the model declares linear-attention layers and the probe measured the
+    fast-path kernels missing: FS then trains on the torch fallback, several times slower than the
+    time estimate."""
+    path = getattr(variant, "local_path", None) or model_ref
+    try:
+        cfg = json.loads((Path(str(path)) / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    text = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else cfg
+    if "linear_attention" not in (text.get("layer_types") or cfg.get("layer_types") or []):
+        return None
+    key = (getattr(caps, "probe_keys", None) or {}).get("linear_attention_kernels") or {}
+    if key.get("status") != "measured" or all((key.get("value") or {}).values()):
+        return None
+    return (
+        "model declares linear-attention layers and the probe measured "
+        + str(key.get("reason"))
+        + ": FS trains on the torch fallback (measured 2026-10-17: Qwen3.5-4B SFT about 29 s/step "
+        "at 11% GPU utilisation); time estimates assume the fast path, so expect a several-fold "
+        "longer run or install "
+        "flash-linear-attention and causal-conv1d"
+    )
