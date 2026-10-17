@@ -135,7 +135,7 @@ Around that sit the support modules named in README §1:
 
 ## The RL plane: `src/foundationscale/rl/`
 
-The RL plane is 43 modules; `src/foundationscale/rl/` measures 32077 lines and the default install registers 20 algorithm names. Those three numbers are derived by `tools/countables_census.py` and anchored by `checks/countables_drift.py`, so a restatement that drifts here is a gate failure rather than a reader's problem. The name count is the *default install* specifically — `register()` is a public runtime API, so what a caller adds after import is outside this denominator.
+The RL plane is 44 modules; `src/foundationscale/rl/` measures 33388 lines and the default install registers 20 algorithm names. Those three numbers are derived by `tools/countables_census.py` and anchored by `checks/countables_drift.py`, so a restatement that drifts here is a gate failure rather than a reader's problem. The name count is the *default install* specifically — `register()` is a public runtime API, so what a caller adds after import is outside this denominator.
 
 **Contracts.** The invariant the plane enforces is that a *binding* never edits a contract: adding a family is a new module plus one registry line. It is **not** that a contract and an implementation never share a file — colocation is used deliberately where the implementations are the contract's own vocabulary, in `advantage.py` (`AdvantageFn`, `TemporalAdvantageFn`, and the estimators that satisfy them) and in `preference.py` (`PreferenceObjective` and `PreferenceAlgorithm`). The contract-only modules:
 
@@ -203,7 +203,7 @@ The entry point is deliberately thin. `cli.py` and `loop.py` validate the declar
 
 ## Around the package
 
-`src/` is 104492 LOC across 190 files; `tests/` adds 138874 `.py` LOC (its conftest carries the skip guard). Beside the package:
+`src/` is 105803 LOC across 191 files; `tests/` adds 141012 `.py` LOC (its conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
 |---|---|
@@ -214,7 +214,7 @@ The entry point is deliberately thin. `cli.py` and `loop.py` validate the declar
 | `docs/` | User and maintainer documentation; `research/` holds design notes per area. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 455222 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 460018 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
