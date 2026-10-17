@@ -24,6 +24,7 @@ monkeypatched in the one test that names a checkpoint path.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -634,3 +635,59 @@ def test_recovery_repush_may_run_its_own_event_loop(
     batch = host.rollout(0)
     assert pushed == [str(tmp_path / "pub" / "step_000003")]
     assert all(reward is not None for reward in batch.columns["reward"])
+
+
+def _publishing_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reports: list[bool], *, retries: int
+) -> tuple[RolloutHost, FakeFleet, list[str]]:
+    """A host whose pushes report ``reports`` in order (True = complete); no real save."""
+    import foundationscale.rl.distributed as distributed
+
+    fleet = FakeFleet(FleetMode(cured_by_restart=True))
+    host, pushed = _recovering_host(
+        tmp_path, monkeypatch, fleet, mode="reload_endpoint", complete=True
+    )
+    host = dataclasses.replace(host, engine_recovery_retries=retries, gates=False)
+    outcomes = list(reports)
+
+    def scripted_push(self: DiskWeightSync, path: str) -> SyncReport:
+        pushed.append(path)
+        return _report(complete=outcomes.pop(0))
+
+    monkeypatch.setattr(DiskWeightSync, "push", scripted_push)
+    monkeypatch.setattr(distributed, "save_checkpoint", lambda *args, **kwargs: None)
+    return host, fleet, pushed
+
+
+class _Rank0:
+    rank = 0
+
+
+def test_an_incomplete_publish_push_restarts_the_fleet_and_pushes_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A hang that timed out only part of a step trains anyway; the push then meets the hung
+    # engine. Recovery restarts the fleet and pushes THIS checkpoint (GB200 math_grpo_s5).
+    host, fleet, pushed = _publishing_host(tmp_path, monkeypatch, [False, True], retries=1)
+    host.publish(object(), object(), _Rank0(), 4)
+    new = host.weight_sync.path_for(5)  # type: ignore[union-attr]
+    assert pushed == [new, new]
+    assert (fleet.stop_calls, fleet.start_calls) == (1, 1)
+    assert host._state["last_pushed_path"] == new
+    assert '"publish_step": 4' in capsys.readouterr().err
+
+
+def test_an_incomplete_publish_push_without_retries_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host, fleet, pushed = _publishing_host(tmp_path, monkeypatch, [False], retries=0)
+    with pytest.raises(RolloutHostRefusal, match="weight push to the fleet was NOT complete"):
+        host.publish(object(), object(), _Rank0(), 4)
+    assert (fleet.stop_calls, len(pushed)) == (0, 1)
+
+
+def test_a_failed_publish_recovery_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    host, fleet, pushed = _publishing_host(tmp_path, monkeypatch, [False, False], retries=1)
+    with pytest.raises(RolloutHostRefusal, match="re-push of .* was NOT complete"):
+        host.publish(object(), object(), _Rank0(), 4)
+    assert (fleet.start_calls, len(pushed)) == (1, 2)

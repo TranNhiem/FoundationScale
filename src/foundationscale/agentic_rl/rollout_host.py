@@ -413,7 +413,7 @@ class RolloutHost:
                 session_index += 1
         return list(await asyncio.gather(*episodes))
 
-    def _recover_engines(self, step: int) -> None:
+    def _recover_engines(self, step: int) -> SyncReport | None:
         """Restart the generation fleet and make it serve the CURRENT policy again.
 
         A hung engine is not repaired by another request: stop and start it. The
@@ -433,7 +433,8 @@ class RolloutHost:
         is already running -- measured on GB200, where the first real recovery
         crashed exactly that way -- and a restart blocks for minutes.
 
-        Raises ``RolloutHostRefusal`` rather than returning a report: a recovery
+        Returns the re-push's report (``None`` when nothing was re-pushed). Raises
+        ``RolloutHostRefusal`` instead of returning an incomplete one: a recovery
         that cannot restart the fleet, or that re-pushed only PART of it, leaves
         the run generating on a stale/partial fleet -- the same dishonesty
         ``publish`` itself refuses -- so it must not be retried past.
@@ -476,6 +477,7 @@ class RolloutHost:
                 f"transferred, failed_ranks={report.failed_ranks}): the restarted fleet would "
                 f"keep serving a stale checkpoint on every subsequent rollout without saying so"
             )
+        return report
 
     async def rollout_async(self, step: int) -> ExperienceBatch:
         """The async core of ``rollout``: draw this step's tasks, run every attempt
@@ -614,6 +616,31 @@ class RolloutHost:
                     cache_dir=f"{self.weight_sync.publish_root}/.serving_cache",
                 )
             report = self.weight_sync.push(path)
+            pushes = 0
+            while not report.complete and pushes < self.engine_recovery_retries:
+                # A hang that timed out only SOME of the step's episodes (under max_infra_rate)
+                # never triggers rollout recovery; the step trains and the push then meets the
+                # hung engine (GB200 math_grpo_s5, step 4: 9/32 engine_timeout, push 0 of 1).
+                # Restart the fleet and push THIS checkpoint, as rollout recovery does.
+                pushes += 1
+                print(
+                    "[agentic-rl:engine-recovery] "
+                    + json.dumps(
+                        {
+                            "publish_step": step,
+                            "attempt": pushes,
+                            "of": self.engine_recovery_retries,
+                            "failed_ranks": list(report.failed_ranks),
+                        },
+                        sort_keys=True,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._state["last_pushed_path"] = path
+                recovered = self._recover_engines(step)
+                if recovered is not None:
+                    report = recovered
             if not report.complete:
                 raise RolloutHostRefusal(
                     f"RolloutHost.publish: step {step}: the weight push to the fleet was "
