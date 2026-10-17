@@ -203,10 +203,17 @@ def test_unknown_model_without_size_refuses(patched, monkeypatch) -> None:
         planner.plan(goal, caps=_fake_caps())
 
 
+ARCH = {"hidden": 4096, "layers": 32, "heads": 32, "kv_heads": 8, "vocab": 128256,
+        "context_length": 131072}
+
+
 def test_unknown_model_with_size_synthesizes_variant(patched, monkeypatch) -> None:
     monkeypatch.setattr(planner, "find_variant", lambda model: None)
     monkeypatch.setattr(planner, "load_hardware", lambda: {"h100": patched.hw})
-    payload = planner.plan(_goal(), caps=_fake_caps())
+    goal = _goal()
+    # stated: there is no local checkpoint to read
+    goal["base_model"] = dict(goal["base_model"], architecture=ARCH)
+    payload = planner.plan(goal, caps=_fake_caps())
     assert payload["model"]["in_knowledge_base"] is False
     assert any("not in the knowledge base" in n for n in payload["provenance_notes"])
 
@@ -341,3 +348,37 @@ def test_operator_rl_floor_is_not_clobbered_by_the_goal(patched, monkeypatch) ->
     payload = planner.plan(_goal(rl_min_measured_fraction=0.8), caps=_fake_caps())
     by_stage = {s["stage"]: s for s in payload["stages"]}
     assert by_stage["rl"]["hparams"]["min_measured_fraction"] == 0.2
+
+
+@pytest.mark.usefixtures("patched")
+def test_unknown_model_without_architecture_names_remedies(monkeypatch) -> None:
+    monkeypatch.setattr(planner, "find_variant", lambda _model: None)
+    with pytest.raises(PlanningRefusal, match="base_model architecture") as err:
+        planner.plan(_goal(), caps=_fake_caps())
+    assert "config.json" in str(err.value) and "base_model.architecture" in str(err.value)
+
+
+def test_unknown_local_checkpoint_reads_its_config_json(tmp_path) -> None:
+    # measured 2026-10-17: Qwen3.5-4B (a VLM; facts under text_config) is no KB variant, and the old
+    # SimpleNamespace stand-in crashed the planner (no total_params; None dims compared with ints)
+    import json
+
+    ckpt = tmp_path / "Qwen3.5-4B"
+    ckpt.mkdir()
+    (ckpt / "config.json").write_text(json.dumps({
+        "model_type": "qwen3_5", "vision_config": {}, "tie_word_embeddings": True,
+        "text_config": {"hidden_size": 2560, "num_hidden_layers": 32, "num_attention_heads": 16,
+                        "num_key_value_heads": 4, "head_dim": 256, "vocab_size": 248320,
+                        "max_position_embeddings": 262144}}))
+    family, variant, note = planner._synthesize_variant(
+        {"name_or_path": str(ckpt), "family": "qwen3.5", "size_b": 4.66})
+    assert (variant.hidden, variant.layers, variant.heads, variant.kv_heads) == (2560, 32, 16, 4)
+    assert variant.context_length == 262144 and variant.tied_embeddings is True
+    assert variant.total_params == 4_660_000_000  # the property the stand-in lacked
+    assert "from config.json" in note and variant in family.variants
+
+
+def test_unknown_local_checkpoint_with_a_broken_config_refuses(tmp_path) -> None:
+    (tmp_path / "config.json").write_text("{not json")
+    with pytest.raises(PlanningRefusal, match="base_model architecture"):
+        planner._synthesize_variant({"name_or_path": str(tmp_path), "size_b": 4.0})

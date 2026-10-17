@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import dataclasses
 
-from types import SimpleNamespace
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
@@ -35,6 +34,7 @@ from foundationskills.skills.training.knowledge import find_variant, load_algori
 from foundationskills.skills.training.method import select_method
 from foundationskills.skills.training.posttrain import select_algorithm
 from foundationskills.skills.training.recipes import RecipeQuery, rank_recipes, select_recipe
+from foundationskills.skills.training.unknown_model import synthesize_variant as _synthesize_variant
 
 PLANNING_STEPS: tuple[str, ...] = (
     "goal",
@@ -242,49 +242,6 @@ def _apply_operator_stages(requested: Any, selected: list[dict], rules: list[dic
             decide("operator_override", f"-{stage}",
                    f"operator omitted {stage} that rule {sel.get('rule_id', '?')} added: {sel.get('because', '')}")
     return out
-
-
-def _synthesize_variant(base_model: dict) -> tuple[Any, Any, str | None]:
-    """Fallback model description from goal facts. Returns (family, variant, note)."""
-    size_b = base_model.get("size_b")
-    if size_b is None:
-        raise PlanningRefusal(
-            "missing input: base_model.size_b (model not found in the knowledge base; "
-            "state the parameter count in billions so memory/time can be estimated)"
-        )
-    size_b = float(size_b)
-    arch = str(base_model.get("arch") or "dense")
-    variant = SimpleNamespace(
-        id=str(base_model.get("name_or_path")),
-        hf_id=None,
-        local_path=None,
-        size_b=size_b,
-        active_b=size_b if arch == "dense" else None,
-        arch=arch,
-        hidden=None,
-        layers=None,
-        heads=None,
-        kv_heads=None,
-        head_dim=None,
-        vocab=None,
-        context_length=None,
-        num_experts=None,
-        experts_per_token=None,
-        tied_embeddings=False,
-        instruct=False,
-    )
-    family = SimpleNamespace(
-        name=str(base_model.get("family") or "unknown"),
-        display_name=str(base_model.get("name_or_path")),
-        fs_family=None,
-        model_types=(),
-        raw={"name": str(base_model.get("family") or "unknown")},
-    )
-    note = (
-        f"model {base_model.get('name_or_path')!r} not in the knowledge base; "
-        "using goal.base_model.size_b/arch as stated facts (unvalidated)"
-    )
-    return family, variant, note
 
 
 def _sft_processed_tokens(tokens: int, hparams: dict, readiness_stats: dict, micro_batch: int,
