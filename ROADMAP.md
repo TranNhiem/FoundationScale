@@ -58,17 +58,19 @@ An item becomes **Available** when:
 - **Done when:** CPT lowers held-out loss and, after the usual SFT, matches or beats the SFT-only baseline on WER.
 
 #### SP-2 · Speech preference optimization
-**Status:** Planned · **With:** RL
+**Status:** Done (2026-10-17) · **With:** RL
 - **Goal:** DPO-family training for speech — TTS pairs ranked by intelligibility and speaker similarity, ASR hypotheses ranked by WER.
 - **Start from:** the preference trainer [src/foundationscale/rl/preference_trainer.py](src/foundationscale/rl/preference_trainer.py), which already takes images ([multimodal DPO test](validation_campaigns/vlm_2xh200/test_preference_trainer_multimodal_dpo.py)), and the evaluation in `validation_campaigns/tts_eval/` and `validation_campaigns/speech_eval/`.
 - **Done when:** preference training on audio improves WER (ASR) or Seed-TTS-eval scores (TTS) over the SFT model.
+- **Result:** RPO (DPO plus an NLL term on the chosen transcript) on Qwen3-ASR-0.6B, Earnings-22: held-out WER 10.93 -> 10.65, paired [-0.49, -0.06], no runaway or loop rows; plain DPO made WER worse. Disclosure: two candidates were decoded on the test set, so the reported one carries one extra look. Evidence: [validation_campaigns/speech_pref](validation_campaigns/speech_pref/EVIDENCE.md).
 - **Plan (2026-10-17, awaiting approval: it changes the RL plane):** the trainer has no audio path today, and `_MODALITY_KEYS` lists only image/video, so an `audio` field is silently ignored instead of refused. About 125 lines: `audio_column`/`audio_language` on `PreferenceTrainConfig`, `"audio"` added to `_MODALITY_KEYS`, and an `_encode_batch_audio` that reuses the Qwen3-ASR transcription collator from `train/audio.py`. Pairs come from N sampled hypotheses per Earnings-22 utterance from the SP-4 SFT model: chosen is the lowest WER, rejected the highest, with ties, runaways and empty references dropped.
 
 #### SP-3 · Speech RL
-**Status:** Planned · **With:** RL
+**Status:** In progress · **With:** RL
 - **Goal:** GRPO-family RL with speech rewards — WER/CER for ASR, intelligibility and speaker similarity for TTS.
 - **Start from:** [src/foundationscale/rl/trainer.py](src/foundationscale/rl/trainer.py), [grpo.py](src/foundationscale/rl/grpo.py), [rewards.py](src/foundationscale/rl/rewards.py) and WER from [speech_metrics.py](src/foundationscale/train/speech_metrics.py).
 - **Done when:** RL improves held-out WER (or TTS scores) over the SFT model with no runaway or repetition failures.
+- **Progress:** ASR rollouts and a WER reward are merged; no learning rate tried so far beats the SFT model (see [validation_campaigns/speech_pref](validation_campaigns/speech_pref/EVIDENCE.md)).
 - **Plan (2026-10-17, awaiting approval; after SP-2):** `rl/trainer.py` hard-codes `MCQLetterReward` and has no audio rollouts. About 265 lines:
   - a `WERReward` in `rewards.py` (1 - WER, abstains on an empty reference, optional runaway/loop penalty);
   - an `RLTrainConfig.reward` field in place of the fixed MCQ reward;

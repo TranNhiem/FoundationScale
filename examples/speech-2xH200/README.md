@@ -123,6 +123,10 @@ LibriSpeech is read audiobook speech. To show the audio-LLM recipe on harder dat
 
 WER uses the FS normalizer. Neither model produced runaway or repetition-loop hypotheses. The 0.6B peaks earlier (step 250) and then drifts up slightly on validation, which is why the checkpoint is chosen on validation rather than taken from the last step.
 
+### Preference training on audio (RPO)
+
+On top of the fine-tuned Qwen3-ASR-0.6B, preference training with RPO (DPO plus an NLL term on the chosen transcript, `sft_weight` 1.0, lr 1e-6, 2 epochs, checkpoint picked on validation) lowers held-out WER from 10.93 to **10.65** (paired [-0.49, -0.06]), with no runaway or loop rows. Plain DPO without the NLL anchor made WER worse (14.87 on validation), so keep the anchor. Two candidates were decoded on the test set, so the reported result carries one extra look. Evidence and commands: [validation_campaigns/speech_pref/](../../validation_campaigns/speech_pref/).
+
 ## Measured results: 4 ASR models, LibriSpeech, 2x H200
 
 Workload: 500-step runs, global batch 8 (parakeet/whisper/qwen2-audio) or 16 (gemma-4), trained on the FULL
