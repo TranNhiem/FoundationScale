@@ -210,6 +210,14 @@ At 60% of the schedule (step 18,000) the same run already scored 494/500 = 98.8%
 
 ## 7. Known gaps / next
 
+- **Long-WAM fine-tune (rung 3), pipeline only**: `LongWamFinetuneSpec` renders Long-WAM's own `scripts/train.py` at the
+  published global batch of 128 (8 GPUs x 8 x 2 in `docs/TRAINING.md`; 2 GPUs x 4 x 16 here). A 60-step run trained
+  (loss 1.06 -> 0.62), wrote a checkpoint, and that checkpoint evaluated through the FS harness (0/50 on spatial, as
+  expected after 60 steps, 0 episode errors). Not a reproduction: the LIBERO ActionDiT init asset is not public, so the
+  run sets `model.action_dit_pretrained_path=null`; a full 10-epoch run is the next step.
+- **RL at the published placement**: `across_nodes` spreads a recipe's 8 model GPUs over 2 nodes x 4; TD3+BC and RECAP
+  reruns at that placement are pending GPU availability (both collapse at 4 GPUs).
+
 - **GR00T rung (c) done, one seed**: the training run is not yet a registry row (its checkpoint is ours, not an upstream
   artifact), so the Level 3 regression still replays the published checkpoint. Scaling measured on the way: 1 GPU
   109 samples/s; 3 GPUs DDP 283 samples/s (87% efficiency); 4 GPUs ~400 samples/s (1.61 s per 640-sample step).
