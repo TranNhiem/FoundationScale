@@ -66,11 +66,11 @@ An item becomes **Available** when:
 - **Plan (2026-10-17, awaiting approval: it changes the RL plane):** the trainer has no audio path today, and `_MODALITY_KEYS` lists only image/video, so an `audio` field is silently ignored instead of refused. About 125 lines: `audio_column`/`audio_language` on `PreferenceTrainConfig`, `"audio"` added to `_MODALITY_KEYS`, and an `_encode_batch_audio` that reuses the Qwen3-ASR transcription collator from `train/audio.py`. Pairs come from N sampled hypotheses per Earnings-22 utterance from the SP-4 SFT model: chosen is the lowest WER, rejected the highest, with ties, runaways and empty references dropped.
 
 #### SP-3 · Speech RL
-**Status:** In progress · **With:** RL
+**Status:** Done (2026-10-18) · **With:** RL
 - **Goal:** GRPO-family RL with speech rewards — WER/CER for ASR, intelligibility and speaker similarity for TTS.
 - **Start from:** [src/foundationscale/rl/trainer.py](src/foundationscale/rl/trainer.py), [grpo.py](src/foundationscale/rl/grpo.py), [rewards.py](src/foundationscale/rl/rewards.py) and WER from [speech_metrics.py](src/foundationscale/train/speech_metrics.py).
 - **Done when:** RL improves held-out WER (or TTS scores) over the SFT model with no runaway or repetition failures.
-- **Progress:** ASR rollouts and a WER reward are merged; no learning rate tried so far beats the SFT model (see [validation_campaigns/speech_pref](validation_campaigns/speech_pref/EVIDENCE.md)).
+- **Result:** GRPO with a WER reward and a KL term on Qwen3-ASR-0.6B, Earnings-22 (16 clips x 8 rollouts per step, lr 1e-6, step 50 picked on validation): held-out WER 10.93 -> 10.57, paired [-0.58, -0.15]; 0 repetition-loop rows and one borderline runaway flag, a one-word reference where both the RL and SFT models also transcribe background speech (explained in the evidence). It needs the large batch (4 clips per step never beat SFT) and early stopping: after about 100 steps the model learns to truncate (deletions 666 -> 7,424 at step 200). Evidence: [validation_campaigns/speech_pref](validation_campaigns/speech_pref/EVIDENCE.md).
 - **Plan (2026-10-17, awaiting approval; after SP-2):** `rl/trainer.py` hard-codes `MCQLetterReward` and has no audio rollouts. About 265 lines:
   - a `WERReward` in `rewards.py` (1 - WER, abstains on an empty reference, optional runaway/loop penalty);
   - an `RLTrainConfig.reward` field in place of the fixed MCQ reward;

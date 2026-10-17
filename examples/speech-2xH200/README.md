@@ -127,6 +127,8 @@ WER uses the FS normalizer. Neither model produced runaway or repetition-loop hy
 
 On top of the fine-tuned Qwen3-ASR-0.6B, preference training with RPO (DPO plus an NLL term on the chosen transcript, `sft_weight` 1.0, lr 1e-6, 2 epochs, checkpoint picked on validation) lowers held-out WER from 10.93 to **10.65** (paired [-0.49, -0.06]), with no runaway or loop rows. Plain DPO without the NLL anchor made WER worse (14.87 on validation), so keep the anchor. Two candidates were decoded on the test set, so the reported result carries one extra look. Evidence and commands: [validation_campaigns/speech_pref/](../../validation_campaigns/speech_pref/).
 
+RL with a WER reward also helps, with care: GRPO with a KL term, 16 clips x 8 rollouts per step, lr 1e-6, checkpoint picked on validation (step 50) reaches **10.57** held-out WER (paired [-0.58, -0.15]). Two conditions matter: a large batch (4 clips per step never beat the SFT model) and early stopping, because after about 100 steps the model learns to truncate transcripts (deletions 666 -> 7,424 at step 200). The recipe is `build_pairs.py`, `train_dpo.py`, `train_grpo.py` and `select_and_test.py` in the same folder.
+
 ## Measured results: 4 ASR models, LibriSpeech, 2x H200
 
 Workload: 500-step runs, global batch 8 (parakeet/whisper/qwen2-audio) or 16 (gemma-4), trained on the FULL
