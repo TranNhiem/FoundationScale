@@ -4,8 +4,9 @@
 # (the SFT model, 14.09, is the bar), and only that checkpoint is decoded on the held-out test (select_and_test.sh).
 # usage: gpu-pool run 1 --job foxbrain-sp2-dpo -- bash run_dpo.sh   (FS_TREE = FoundationScale tree)
 set -u
+# SFT dir = checkpoint-250 weights + the 0.6B processor files (checkpoints carry weights only)
 G=${CUDA_VISIBLE_DEVICES:?run through gpu-pool}; R=${FS_TREE:?}
-S=$HOME/datasets/speech; W=$HOME/pretraining_weights/Speech-Models; O=$S/sp2_pref; SFT=$S/sp4_q3asr06/train/out/checkpoint-250
+S=$HOME/datasets/speech; W=$HOME/pretraining_weights/Speech-Models; O=$S/sp2_pref; SFT=$S/sp4_q3asr06/sft250_with_processor
 CT="env ENROOT_DATA_PATH=$HOME/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e PYTHONPATH=$R/src -e CUDA_VISIBLE_DEVICES=$G -e HF_HUB_OFFLINE=1 --mount $HOME:$HOME fs-g4e4b-nemo-automodel-26-04_compute"
 P=${PAIRS_PER_STEP:-16}; N=$(wc -l < $O/pairs.jsonl); STEPS=$(( N / P )); EVERY=$(( STEPS / 4 )); D=$O/dpo${RUN:+_$RUN}
 echo "pairs $N -> $STEPS steps, save every $EVERY"
