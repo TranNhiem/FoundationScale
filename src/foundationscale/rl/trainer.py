@@ -1646,7 +1646,7 @@ class RLTrainer:
         # Any for that one leg (asr_rollout.AudioRow is deliberately not
         # corpus.Sample, which has no clip field): every reader below is
         # duck-typed and `sample.gold` is the one attribute they read.
-        samples: tuple[Any, ...] | list[Any]
+        samples: Any  # Any, not a union: mypy narrows a declared union on assignment
         if self.config.audio_column is not None:
             from foundationscale.rl.asr_rollout import load_audio_manifest
 
@@ -2158,6 +2158,8 @@ class RLTrainer:
                     assert loss_fn is not None
                     from foundationscale.rl.asr_rollout import asr_rollout_step
 
+                    # validated in __post_init__: audio_column implies audio_language
+                    assert self.config.audio_language is not None
                     report = asr_rollout_step(
                         trainer=self,
                         step=step,

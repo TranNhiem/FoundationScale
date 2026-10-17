@@ -47,7 +47,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
-
     from foundationscale.rl.algorithm import StepReport
 
 from foundationscale.rl.trainer import (
