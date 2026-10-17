@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -708,7 +709,7 @@ def test_create_for_task_builds_named_sandbox_and_vault(tmp_path: Path) -> None:
     assert isinstance(env, TaskSandboxEnvironment)
     assert len(sandbox_specs) == 1
     spec = sandbox_specs[0]
-    assert spec.name == "fsar-t-0"
+    assert re.fullmatch(r"fsar-t-0-[0-9a-f]{6}", spec.name)
     assert spec.image == "img:1"
     assert spec.network == "no-network"
     assert spec.isolate_network is True
@@ -721,7 +722,7 @@ def test_create_for_task_builds_named_sandbox_and_vault(tmp_path: Path) -> None:
     assert len(vault_calls) == 1
     assert vault_calls[0][0] is sandboxes[0]
     assert vault_calls[0][1] == HiddenSpec(paths=("/tests", "/solution"))
-    assert vault_calls[0][2] == str(Path("/scratch") / "fsar-t-0.vault")
+    assert vault_calls[0][2] == str(Path("/scratch") / f"{sandbox_specs[0].name}.vault")
     assert vault_calls[0][2].endswith(".vault")
 
 
@@ -788,12 +789,12 @@ def test_enroot_task_backend_default_factories(monkeypatch: pytest.MonkeyPatch) 
     backend = EnrootTaskBackend(roots=_ROOTS, environ={})
     env = backend.create_for_task(_spec(), _task(_META), instance_id="t#0")
     assert isinstance(env, TaskSandboxEnvironment)
-    assert [spec.name for spec in sandbox_specs] == ["fsar-t-0"]
+    assert [spec.name[:-7] for spec in sandbox_specs] == ["fsar-t-0"]
     assert runners == [None]  # no FS_SANDBOX_BROKER: EnrootSandbox's own subprocess runner
     assert len(vault_calls) == 1
     assert vault_calls[0][0] is sandbox_instances[0]
     assert vault_calls[0][1] == HiddenSpec(paths=("/tests",))
-    assert vault_calls[0][2] == str(Path("/scratch") / "fsar-t-0.vault")
+    assert vault_calls[0][2] == str(Path("/scratch") / f"{sandbox_specs[0].name}.vault")
 
 
 def test_get_env_backend_enroot_task_is_task_aware() -> None:

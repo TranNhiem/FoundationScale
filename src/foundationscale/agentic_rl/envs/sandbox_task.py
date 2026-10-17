@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import secrets
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -648,14 +649,17 @@ class EnrootTaskBackend:
     ) -> TaskSandboxEnvironment:
         """Build one episode's sandbox, hidden-test vault and environment from ``task``.
 
-        The sandbox is named ``"fsar-<sanitised instance_id>"`` and gets its own network
-        namespace with no egress (``network="no-network"``, ``isolate_network=True``); the vault
-        lives beside it in ``roots.scratch_root``. Nothing is started here -- ``start()`` does
-        that.
+        The sandbox is named ``"fsar-<sanitised instance_id>-<random hex>"`` and gets its own
+        network namespace with no egress (``network="no-network"``, ``isolate_network=True``);
+        the vault lives beside it in ``roots.scratch_root``. Nothing is started here --
+        ``start()`` does that.
         """
         config = TaskSandboxConfig.from_task(task)
         roots = self._resolve_roots()
-        name = "fsar-" + _sandbox_name(instance_id)
+        # A random suffix: a crashed run leaves its container and vault dir behind, and a retry
+        # reuses the same instance ids -- a fixed name then collided ("vault target already
+        # exists") and turned every retried episode into an infra abstention.
+        name = f"fsar-{_sandbox_name(instance_id)}-{secrets.token_hex(3)}"
         sandbox = self._sandbox_factory(
             SandboxSpec(
                 name=name,
