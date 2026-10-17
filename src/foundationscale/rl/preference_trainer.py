@@ -1537,8 +1537,19 @@ class PreferenceTrainer:
         # the transcript's final token and DPO must price the same span.
         completion_mask = (labels[:, 1:] != -100).to(torch.float32)
         target_ids = input_ids[:, 1:]
+        # The audio tower does not cast its inputs: float32 log-mel features
+        # meet bf16 conv weights and the forward raises. Floating features
+        # take the policy's dtype (recorded in run(); None under fsdp, whose
+        # MixedPrecisionPolicy casts forward inputs itself).
+        feature_dtype = getattr(self, "_audio_feature_dtype", None)
         modality_kwargs: dict[str, torch.Tensor] = {
-            key: (value.to(device) if hasattr(value, "to") else value)
+            key: (
+                value.to(device, feature_dtype)
+                if feature_dtype is not None
+                and isinstance(value, torch.Tensor)
+                and value.is_floating_point()
+                else (value.to(device) if hasattr(value, "to") else value)
+            )
             for key, value in collated.items()
             if key not in ("input_ids", "attention_mask", "labels")
         }
@@ -2298,6 +2309,10 @@ class PreferenceTrainer:
         else:
             policy_model.to(device)
         policy_model.train()
+        if self._needs_audio and self.config.sharding != "fsdp":
+            self._audio_feature_dtype = next(
+                p.dtype for p in policy_model.parameters() if p.is_floating_point()
+            )
 
         probe = next(
             (parameter for parameter in policy_model.parameters() if parameter.requires_grad),
