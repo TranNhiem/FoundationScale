@@ -713,6 +713,10 @@ class AutoResearchSkill(BaseSkill):
 
     # ---- constructor / helpers ---------------------------------------------
 
+    def fs_required(self, request: dict[str, Any]) -> bool:
+        """A1.5: only `submit` emits through FS (training.emit); ledger actions run anywhere."""
+        return request.get("action") == "submit"
+
     def __init__(
         self,
         *,

@@ -109,6 +109,12 @@ PROCESS_ONLY = re.compile(r"\bread\b.*SKILL\.md|before acting|loaded the", re.IG
 
 _RETRY_SEED_OFFSET = 1000  # retry seed for an empty/failed completion
 _MAX_EXCERPT = 300
+# Progressive disclosure (A1.4): a skill with references/*.md shows the gated agent an index of
+# them; the agent may answer READ references/<file>.md up to this many times before its final
+# answer. A host agent reads references on demand with a file tool; this harness models that,
+# bounded.
+_MAX_READS = 3
+_READ = re.compile(r"^\s*`?READ\s+(references/[A-Za-z0-9_./-]+\.md)`?\s*$")
 _WEAKEST_WIDTH = 80
 
 
@@ -176,6 +182,31 @@ def _ungraded_count(case: dict) -> int:
 # --- prompting -------------------------------------------------------------------------------
 
 
+def references_index(references: Mapping[str, str]) -> str:
+    """The gated agent's view of a skill's reference files: path and first heading per line."""
+    if not references:
+        return ""
+    lines = []
+    for path, text in sorted(references.items()):
+        headings = (ln.lstrip("# ").strip() for ln in text.splitlines() if ln.startswith("#"))
+        heading = next(headings, "")
+        lines.append(f"- {path}: {heading}" if heading else f"- {path}")
+    return ("\n\nReference files for this skill (read on demand):\n" + "\n".join(lines)
+            + "\nTo read files, reply with only `READ references/<file>.md` lines (one per file) "
+            "and nothing else; you may read up to "
+            f"{_MAX_READS} files in total, then give your final answer.")
+
+
+def read_request(content: str | None) -> list[str]:
+    """The reference paths a reply asks for, when the reply is ONLY READ lines (agents batch them);
+    anything else, including READ lines mixed with prose, is a final answer and returns []."""
+    lines = [ln for ln in (content or "").splitlines() if ln.strip()]
+    matches = [_READ.match(ln) for ln in lines]
+    if not lines or not all(matches):
+        return []
+    return [m.group(1) for m in matches if m]
+
+
 def build_agent_messages(arm: str, skill_md: str, question: str) -> list[dict]:
     """Build the system/user message pair that asks the agent for one plan-level answer."""
     _require_arm(arm, "build_agent_messages")
@@ -239,21 +270,44 @@ def run_behaviour_eval(
         for rep in range(reps)
     ]
 
+    reference_texts = {str(e["package"]): _load_references(e) for e in selected}
+
     def run_one(job: tuple[str, dict, dict, int]) -> dict:
         arm, entry, case, rep = job
         kept = reuse.get((arm, str(entry["name"]), str(case["id"]), rep))
         if kept is not None:
             return dict(kept, reused=True)
-        response, retried = _complete_retrying(
-            agent,
-            build_agent_messages(arm, skill_mds[str(entry["package"])], str(case.get("question") or "")),
-            temperature=float(agent_temperature),
-            max_tokens=int(agent_max_tokens),
-            seed=rep,
-            json_mode=False,
-        )
+        package = str(entry["package"])
+        references = reference_texts.get(package, {}) if arm == GATED_ARM else {}
+        messages = build_agent_messages(arm, skill_mds[package] + references_index(references),
+                                        str(case.get("question") or ""))
+        reads: list[str] = []
+        retried = False
+        while True:
+            response, retried_now = _complete_retrying(
+                agent, messages, temperature=float(agent_temperature),
+                max_tokens=int(agent_max_tokens), seed=rep, json_mode=False)
+            retried = retried or retried_now
+            wanted = read_request(response.content) if references else []
+            if not wanted or len(reads) >= _MAX_READS:
+                break
+            batch = wanted[: _MAX_READS - len(reads)]
+            reads.extend(batch)
+            parts = []
+            for path in batch:
+                body = references.get(path)
+                missing = f"No such reference file: {path}. Available: {sorted(references)}"
+                parts.append(f"=== {path} ===\n{body if body is not None else missing}")
+            if len(wanted) > len(batch):
+                parts.append(
+                    f"(read budget of {_MAX_READS} files reached: give your final answer now)")
+            reply = "\n\n".join(parts)
+            messages = [*messages, {"role": "assistant", "content": response.content or ""},
+                        {"role": "user", "content": reply}]
         row = _record_call(response, arm, entry, case, rep, judge, int(judge_max_tokens))
         row["agent_retried"] = retried
+        if references:
+            row["references_read"] = reads
         return row
 
     calls = list(map_ordered(run_one, jobs, int(workers)))
@@ -364,6 +418,17 @@ def _load_skill_md(entry: dict) -> str:
             f"load_skill_md: {package}: SKILL.md sha256 {digest[:12]} is not the index sha256 "
             f"{expected[:12]}; the index is stale")
     return data.decode("utf-8")
+
+
+def _load_references(entry: dict) -> dict[str, str]:
+    """``references/*.md`` of the package (relative path -> text); empty when it has none.
+    Already bound to the report by the bundle hash _load_skill_md checks."""
+    root = importlib.resources.files(str(entry["package"])).joinpath("references")
+    if not root.is_dir():
+        return {}
+    return {f"references/{f.name}": f.read_text(encoding="utf-8")
+            for f in sorted(root.iterdir(), key=lambda f: f.name)
+            if f.is_file() and f.name.endswith(".md")}
 
 
 def _complete_retrying(backend: LLMBackend, messages: list[dict], *, seed: int, **kwargs: Any

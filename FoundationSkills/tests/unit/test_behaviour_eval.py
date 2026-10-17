@@ -169,8 +169,14 @@ def make_case(case_id: str, behaviours: list[str]) -> dict:
     }
 
 
+def plain_entry(index: list[dict]) -> dict:
+    """The first package with no bundle files (references/ etc.): these tests were written for SKILL.md-only
+    packages, whose bundle hash IS the SKILL.md sha. auto_research ships references/ since A1.4."""
+    return dict(next(e for e in index if e["skill_bundle_sha256"] == e["skill_md_sha256"]))
+
+
 def make_entry(index: list[dict], cases: list[dict]) -> dict:
-    entry = dict(index[0])
+    entry = plain_entry(index)
     entry["evals"] = [dict(case) for case in cases]
     return entry
 
@@ -182,7 +188,8 @@ def index() -> list[dict]:
 
 @pytest.fixture(scope="session")
 def skill_md(index: list[dict]) -> str:
-    return importlib.resources.files(str(index[0]["package"])).joinpath("SKILL.md").read_text(encoding="utf-8")
+    package = str(plain_entry(index)["package"])
+    return importlib.resources.files(package).joinpath("SKILL.md").read_text(encoding="utf-8")
 
 
 def test_load_index_reads_real_packages(index: list[dict]) -> None:
@@ -568,7 +575,7 @@ def test_oracle_case_source_grades_every_behaviour_json_case(
     monkeypatch: pytest.MonkeyPatch, index: list[dict],
 ) -> None:
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
-    entry = dict(index[0])
+    entry = plain_entry(index)
     agent, judge = FakeAgent(), FakeJudge()
     report = run_behaviour_eval(
         [entry], agent, judge, cases="oracle", arms=("with_skill",), reps=1, workers=1, created=CREATED,
@@ -589,7 +596,7 @@ def test_oracle_report_renders_behaviour_oracle_md_with_a_per_severity_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: list[dict],
 ) -> None:
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
-    entry = dict(index[0])
+    entry = plain_entry(index)
     report = run_behaviour_eval(
         [entry], FakeAgent(), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
         threshold=0.7, created=CREATED,
@@ -636,7 +643,7 @@ def test_oracle_case_source_refuses_a_missing_behaviour_json(
         raise oracle_cases.OracleCasesRefused("load_cases: demo: evals/behaviour.json is missing")
 
     monkeypatch.setattr(behaviour_eval, "load_cases", missing)
-    entry = dict(index[0])
+    entry = plain_entry(index)
     with pytest.raises(BehaviourEvalRefused) as excinfo:
         run_behaviour_eval([entry], FakeAgent(), FakeJudge(), cases="oracle", reps=1, workers=1, created=CREATED)
     assert str(entry["package"]) in str(excinfo.value) and "behaviour.json" in str(excinfo.value)

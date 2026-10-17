@@ -168,6 +168,22 @@ class SkillResult:
         }
 
 
+HOST_INSTALL_STEP = (
+    "install step: on a host with the target GPUs, `pip install -e <FoundationScale repo>` and "
+    "`pip install -e <FoundationScale repo>/FoundationSkills` (or run on the GPU cluster where "
+    "both are installed), then rerun; checks that could not run here are UNMEASURED, never PASS"
+)
+
+
+def _foundationscale_missing() -> str | None:
+    """None when FoundationScale imports here, else the import error text."""
+    try:
+        import foundationscale  # type: ignore  # noqa: F401, PLC0415
+    except Exception as exc:  # noqa: BLE001 - any import failure means not usable here
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 class BaseSkill(abc.ABC):
     """Base class for skills. Subclasses define schemas/rules and implement hooks."""
 
@@ -182,7 +198,11 @@ class BaseSkill(abc.ABC):
     rules: tuple[RuleSpec, ...] = ()
     fs_interface: FSInterface = FSInterface((), (), ())
 
-    _CORE_RULES = {"CORE-EXC", "CORE-OUT-SCHEMA", "CORE-UNDECLARED-RULE"}
+    _CORE_RULES = {"CORE-EXC", "CORE-OUT-SCHEMA", "CORE-UNDECLARED-RULE", "CORE-HOST-001"}
+    # A1.5 host portability: a skill whose work needs FoundationScale sets this (or overrides
+    # fs_required) so that on a host without it, execute() REFUSES with the install step instead of
+    # producing a plan nothing can run.
+    requires_fs: bool = False
 
     @abc.abstractmethod
     def check_inputs(self, request: dict[str, Any], ctx: SkillContext) -> list[Finding]:
@@ -203,6 +223,10 @@ class BaseSkill(abc.ABC):
     @abc.abstractmethod
     def must_fire_fixtures(self) -> dict[str, dict[str, Any]]:
         """Return one negative fixture per declared rule keyed by rule_id."""
+
+    def fs_required(self, request: dict[str, Any]) -> bool:  # noqa: ARG002 - overrides read it
+        """Whether THIS request needs FoundationScale importable here (default: ``requires_fs``)."""
+        return self.requires_fs
 
     def rule(self, rule_id: str) -> RuleSpec:
         for spec in self.rules:
@@ -225,6 +249,15 @@ class BaseSkill(abc.ABC):
         except SchemaError as exc:
             first = str(exc).split("; ", 1)[0]
             return self._refused(f"invalid request: {first}")
+
+        if self.fs_required(request):
+            missing = _foundationscale_missing()
+            if missing is not None:
+                message = (f"{self.name} needs FoundationScale, which is not importable on this "
+                           f"host: {missing}; nothing was planned or emitted")
+                finding = Finding("CORE-HOST-001", Severity.BLOCK, message,
+                                  {"import_error": missing}, HOST_INSTALL_STEP)
+                return self._refused(f"CORE-HOST-001: {finding.message}", [finding])
 
         input_findings = list(self.check_inputs(request, ctx) or [])
         blockers = [f for f in input_findings if f.severity is Severity.BLOCK]

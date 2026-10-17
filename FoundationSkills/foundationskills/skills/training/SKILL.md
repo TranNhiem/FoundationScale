@@ -71,8 +71,9 @@ load-bearing facts from `foundationskills.agent.intake`).
   `executable: false`).
 - hardware: gb200, h100, a100 knowledge entries (fuzzy GPU-name mapping).
 - FS facts this skill plans around: only `--objective sft` exists (CPT/pretrain
-  run the same entry over a `text` corpus); SFT trains on the *full rendered
-  text* (no assistant-only masking — disclosed via TR-PL-005); DDP/FSDP only,
+  run the same entry over a `text` corpus); SFT on a rendered `text` column trains
+  on the full text; assistant-only loss needs the data as a conversations column
+  (`FOUNDATIONSCALE_TRAIN_CONVERSATIONS_COLUMN`) — disclosed via TR-PL-005; DDP/FSDP only,
   tp>1/cp>1 execute, pp>1/ep>1 are refused; RL is library-only, single-device,
   with only dr_grpo/gspo/dapo runnable.
 
@@ -100,7 +101,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | TR-PL-002 | BLOCK | handoff | a stage is infeasible with no executable feasible alternative |
 | TR-PL-003 | INFO | handoff | a stage relies on an unvalidated (literature/community/derived) recipe |
 | TR-PL-004 | WARN | handoff | a stage needs data not yet prepared (handoff data_engine) |
-| TR-PL-005 | INFO | handoff | an sft stage is present: FS SFT full-sequence loss disclosure |
+| TR-PL-005 | INFO | handoff | an sft stage is present: a `text` column trains with full-sequence loss; assistant-only loss needs a conversations column |
 | TR-PL-006 | BLOCK | handoff | planned `max_sequence_length >= 131072`, or a goal claim that 128K works: RED (131072 OOMs all five measured models, examples/vlm-2xH200) |
 | TR-PL-007 | BLOCK | handoff | gemma-4-31B-it planned above 32768: RED (its measured 2×H200 maximum is 32K) |
 | TR-PL-009 | WARN | handoff | (agentic) `agentic_grpo_token_mean`, the measured control arm, chosen as the default: note |
@@ -169,6 +170,8 @@ Playbook keys:
 - Runnability always comes from `FSCapabilities.check` / `rl_runnable` —
   registered is not runnable.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS. This skill also needs FoundationScale itself: without it the code refuses with CORE-HOST-001 and the install step (`pip install -e <FoundationScale repo>`).
+
 ## Worked examples
 
 ### 1. Manufacturing reasoning model from an open 7B (the reference scenario)
@@ -193,7 +196,7 @@ corpus request is too easy, expect `reward_saturation_unmeasured_steps`.
 
 Goal: general_chat from the 27B instruct base. One `sft` stage, method `lora`
 (CPVT-size data is far below the 50M-token full-tuning threshold), LoRA targets
-from the family card's `lora_targets`. TR-PL-005 discloses full-sequence loss;
+from the family card's `lora_targets`. TR-PL-005 discloses full-sequence loss on the `text` column;
 the recipe provenance is flagged TR-PL-003 when the match is literature.
 
 ## Sub-skills

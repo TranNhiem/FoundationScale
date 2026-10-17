@@ -98,6 +98,8 @@ Consumes `claim_set` entries and emits `claim_set` entries — a pure rewrite ov
 evidence pointers (`resolve_evidence` in `measured_or_unmeasured/evidence.py`).
 No FoundationScale call, no CLI, no network.
 
+**Host portability (A1.5).** On a host where the `fskills` CLI or the `foundationskills` package is missing, do not improvise a plan or simulate a result: report REFUSED with the install step (`pip install -e <FoundationScale repo>/FoundationSkills`, or run where it is installed), and report every check that could not run as UNMEASURED, never PASS.
+
 ## Worked examples
 
 ```python
