@@ -55,7 +55,7 @@
   },
   "harness": {
     "name": "native_tool_loop",
-    "parser": "hermes_json",
+    "parser": "qwen_xml",
     "tools": "default"
   },
   "budget": {

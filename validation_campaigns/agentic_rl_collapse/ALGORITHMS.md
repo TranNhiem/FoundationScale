@@ -1,5 +1,10 @@
 # Agentic music collapse: which algorithms survive the sampler/trainer mismatch (2026-10-16)
 
+> **Correction (2026-10-18):** these runs used `harness.parser: "hermes_json"`, but this model writes
+> Qwen-XML tool calls, so every tool call failed to parse and episodes ran without working tools. The
+> reward reads the submitted text, so the comparisons below hold for tool-less episodes. See
+> `examples/agentic-rl-GB200/README.md` for the measurement.
+
 Setup for every row: MiMo-V2.6-Distill 9B, music task, lr 1e-6, 4 tasks x 8 samples, top_p 0.95, one update
 per step. Eval: 100 held-out prompts x 4 samples, mean reward (the `pass>0` column counts samples above zero,
 out of 400). "Raw scoring" scores tokens with raw logits while sampling truncates to the 0.95 nucleus (the

@@ -1,5 +1,10 @@
 # Agentic music collapse: mechanism probe (2026-10-13)
 
+> **Correction (2026-10-18):** these runs used `harness.parser: "hermes_json"`, but this model writes
+> Qwen-XML tool calls, so every tool call failed to parse and episodes ran without working tools. The
+> reward reads the submitted text, so the comparisons below hold for tool-less episodes. See
+> `examples/agentic-rl-GB200/README.md` for the measurement.
+
 Runs: MiMo-V2.6-Distill 9B, music task, `agentic_grpo`, lr 1e-6, 4 tasks x 8, top_p 0.95.
 g_s6 used raw-logit scoring (collapsed to ~0 reward by step ~55; final checkpoint evals 0.0).
 sc_s6 used consistent sampled-distribution scoring (main b60ce53; no collapse; step-89 checkpoint evals 0.653).

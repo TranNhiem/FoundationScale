@@ -5,7 +5,7 @@
 ## What one training step does
 
 - **Tasks:** each step draws 4 tasks from the training file and samples 8 episodes per task: 32 trajectories.
-- **Episode:** an episode is a tool loop (`native_tool_loop`, `hermes_json` tool-call parser, default tools). It allows at most
+- **Episode:** an episode is a tool loop (`native_tool_loop`, `qwen_xml` tool-call parser, default tools). It allows at most
   2 model turns and 12,000 response tokens. The model writes ABC notation and submits it.
 - **Reward:** the reward converts the ABC with `abc2midi` and scores the piece in [0, 1].
   - Text with no ABC scores 0, noted `no_abc` in the log.

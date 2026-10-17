@@ -22,7 +22,7 @@ from foundationscale.agentic_rl.harness.base import EpisodeBudget, EpisodeTask, 
 from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MusicRewardFn
 from foundationscale.agentic_rl.rewards.music import MusicReward
-from foundationscale.agentic_rl.tools import HermesJsonToolCallParser, default_tools
+from foundationscale.agentic_rl.tools import QwenXmlToolCallParser, default_tools
 
 
 async def evaluate(a: argparse.Namespace) -> dict:
@@ -35,7 +35,7 @@ async def evaluate(a: argparse.Namespace) -> dict:
         repetition_penalty=1.0, max_new_tokens=a.max_tokens,
     )  # fmt: skip
     loop = NativeToolLoop(
-        tools=default_tools(), parser=HermesJsonToolCallParser(), sampling=sampling, tokenizer=tok
+        tools=default_tools(), parser=QwenXmlToolCallParser(), sampling=sampling, tokenizer=tok
     )
     reward = MusicRewardFn(MusicReward(abc2midi_bin=a.abc2midi, timeout_s=60.0), decode=tok.decode)
     backend = get_env_backend("local")

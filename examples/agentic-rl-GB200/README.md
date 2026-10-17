@@ -18,6 +18,15 @@ an `abc2midi` binary. Other users take idle GPUs within minutes on a shared tray
 
 Eval: 100 held-out prompts, 4 samples each (400 samples), mean reward. The checkpoint before RL scores **0.137**.
 
+> **Correction (2026-10-18): the numbers below were measured with the wrong tool-call parser.**
+> These runs used `harness.parser: "hermes_json"`, but MiMo-V2.6-Distill-Qwen-9B writes Qwen-XML
+> tool calls (`<tool_call><function=bash><parameter=command>...`). Every tool call failed to parse,
+> so the model trained and was evaluated without working tools. The reward reads the submitted text,
+> so the scores and the collapse comparison are still valid, but they measure tool-less episodes.
+> This example's config now uses `qwen_xml`; tool-using numbers will replace these once re-measured.
+> On 50 MATH-500 problems the base model's tool calls failed 135 of 135 times under `hermes_json`
+> and 0 of 66 times under `qwen_xml`. Pick the parser that matches your model's chat template.
+
 **Consistent vs raw scoring** (agentic_grpo, 100 steps):
 
 | Scoring | Seed 6 | Seed 5 | Seed 4 |
