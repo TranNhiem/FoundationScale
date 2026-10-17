@@ -180,3 +180,29 @@ def test_the_ledger_refuses_to_append_to_a_damaged_file(tmp_path: Path) -> None:
     path.write_text("# Writing A/B ledger\n\nsomething edited by hand\n")
     with pytest.raises(wr.WritingRoundRefused, match="ledger table row"):
         wr.append_ledger(path, [["x"] * len(wr.LEDGER_COLUMNS)])
+
+
+def test_a_failing_first_export_restores_the_skill_md(pkg: Path, tmp_path: Path) -> None:
+    # measured: two parallel rounds raced on the export tree and the first export raised after the
+    # candidate was written, leaving it in place; every write is now inside the restore guard
+    calls = []
+
+    def export() -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise FileNotFoundError("marketplace.json.tmp")
+
+    before = {c: report(c, "b0", FLAT) for c in wr.CASE_SETS}
+    with pytest.raises(FileNotFoundError):
+        wr.run_round(
+            pkg,
+            "CANDIDATE\n",
+            before,
+            bundle_sha=lambda: "b0",
+            run_eval=lambda _c: {},
+            export=export,
+            change_family="x",
+            ledger=tmp_path / "l.md",
+        )
+    assert (pkg / "SKILL.md").read_text() == "ORIGINAL\n" and len(calls) == 2  # restore re-exported
+    assert not (tmp_path / "l.md").exists()

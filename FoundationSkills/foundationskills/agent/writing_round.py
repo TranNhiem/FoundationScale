@@ -160,11 +160,11 @@ def run_round(
             (package_root / name).write_bytes(data)
         export()
 
-    skill_md.write_text(candidate, encoding="utf-8")
-    export()
     results: dict[str, dict[str, Any]] = {}
     after: dict[str, Mapping[str, Any]] = {}
-    try:
+    try:  # from the first write on, any failure (an export included) restores every saved byte
+        skill_md.write_text(candidate, encoding="utf-8")
+        export()
         for cases in CASE_SETS:
             after[cases] = run_eval(cases)
             results[cases] = ab_compare(before[cases], after[cases])
@@ -189,6 +189,17 @@ def run_round(
         "ledger_rows_appended": appended,
         "skill_md_restored": decision != "keep",
     }
+
+
+def _locked_export(export_skills: Any) -> object:
+    """Regenerate the export tree under an inter-process lock: rounds on different skills run in
+    parallel, and two concurrent exports raced on the same marketplace.json.tmp (measured)."""
+    import fcntl  # noqa: PLC0415
+
+    repo_root, plugin_root = export_skills._roots()
+    with (plugin_root / ".export.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return export_skills.write_tree(repo_root, plugin_root)
 
 
 def run_cli(args: Any) -> int:
@@ -271,7 +282,7 @@ def run_cli(args: Any) -> int:
             before,
             bundle_sha=lambda: routing_eval.skill_bundle_sha256(root),
             run_eval=run_eval,
-            export=lambda: export_skills.write_tree(*export_skills._roots()),
+            export=lambda: _locked_export(export_skills),
             change_family=args.change_family,
             ledger=ledger,
         )
