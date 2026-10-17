@@ -266,7 +266,7 @@ def _stack_feature_rows(values: Sequence[Any], *, key: str) -> Any:
     for value in values:
         missing = width - int(value.shape[axis])
         if missing:
-            shape = [1] * len(reference)
+            shape = [int(d) for d in value.shape]  # every other axis as the clip's own
             shape[axis] = missing
             value = torch.cat([value, value.new_zeros(shape)], dim=axis)
         padded.append(value)

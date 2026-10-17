@@ -876,3 +876,23 @@ def test_run_uses_config_reward_on_the_audio_leg(tmp_path: Path, monkeypatch: An
             "the audio feature tensors must follow the same per-row row space as "
             "input_ids -- group-expanded and narrowed like every other modality key"
         )
+
+
+def test_stack_feature_rows_pads_the_frame_axis_keeping_the_mel_axis() -> None:
+    """Clips of different lengths: (1, 128, frames) rows pad frames, keep 128 mel bins.
+
+    Regression (GPU smoke run, 2026-10-17): the pad block was built with size 1 on
+    every non-frame axis, so cat() failed on the 128-bin mel axis.
+    """
+    import torch
+
+    from foundationscale.rl.asr_rollout import _stack_feature_rows
+
+    short = torch.ones(1, 128, 30)
+    long = torch.ones(1, 128, 50)
+    out = _stack_feature_rows([short, long], key="input_features")
+    assert tuple(out.shape) == (2, 128, 50)
+    assert float(out[0, :, 30:].abs().sum()) == 0.0  # padding is zeros
+    assert float(out[0, :, :30].sum()) == 128 * 30  # the clip itself is untouched
+    masks = _stack_feature_rows([torch.ones(1, 30), torch.ones(1, 50)], key="mask")
+    assert tuple(masks.shape) == (2, 50) and float(masks[0, 30:].sum()) == 0.0
