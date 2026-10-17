@@ -19,6 +19,7 @@ __all__ = [
     "PublishedCurve",
     "VerlVlaRlError",
     "VerlVlaRlSpec",
+    "across_nodes",
     "on_gpus",
     "render_command",
     "with_output_dir",
@@ -113,6 +114,30 @@ def on_gpus(spec: VerlVlaRlSpec, num_gpus: int) -> VerlVlaRlSpec:
         raise VerlVlaRlError(f"num_gpus is {num_gpus!r}; expected an int >= 1")
     for key in spec.gpu_keys:
         spec = _set(spec, key, str(min(int(spec.value(key)), num_gpus)))
+    return spec
+
+
+def across_nodes(spec: VerlVlaRlSpec, nnodes: int, gpus_per_node: int) -> VerlVlaRlSpec:
+    """The recipe's own model GPU counts spread over ``nnodes`` nodes of ``gpus_per_node`` GPUs.
+
+    A pool that fits on one node keeps its count and stays on one node; a larger pool must equal
+    ``nnodes * gpus_per_node`` exactly (the published total, so world size and batch math are
+    unchanged) and gets ``gpus_per_node`` plus ``nnodes`` (verl-vla's resource ``nnodes`` key).
+    """
+    for name, value in (("nnodes", nnodes), ("gpus_per_node", gpus_per_node)):
+        if type(value) is not int or value < 1:
+            raise VerlVlaRlError(f"{name} is {value!r}; expected an int >= 1")
+    for key in spec.gpu_keys:
+        count = int(spec.value(key))
+        if count <= gpus_per_node:
+            continue
+        if count != nnodes * gpus_per_node:
+            raise VerlVlaRlError(
+                f"{key} is {count} GPUs; {nnodes} nodes x {gpus_per_node} GPUs = "
+                f"{nnodes * gpus_per_node} would change the published world size"
+            )
+        spec = _set(spec, key, str(gpus_per_node))
+        spec = _set(spec, f"++{key.rsplit('.', 1)[0]}.nnodes", str(nnodes))
     return spec
 
 

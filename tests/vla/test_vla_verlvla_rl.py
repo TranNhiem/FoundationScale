@@ -11,6 +11,7 @@ from foundationscale.vla.adapters.verlvla import (
     PublishedCurve,
     VerlVlaRlError,
     VerlVlaRlSpec,
+    across_nodes,
     on_gpus,
     render_command,
     with_output_dir,
@@ -159,3 +160,23 @@ def test_recap_on_four_gpus_caps_its_eight_gpu_stages_and_keeps_the_two_gpu_valu
     assert spec.value("recap.train_value_model.cluster.resource.model.gpus_per_node") == "2"
     assert spec.value("recap.value_infer.num_gpus") == "2"
     assert render_command(spec)[0] == "vvla-train-recap"
+
+
+def test_across_nodes_splits_the_published_total_and_keeps_one_node_pools() -> None:
+    recap = across_nodes(PUBLISHED_RECIPES["recap-pi05-libero10-task8"], 2, 4)
+    for stage in ("policy_eval", "collect_data", "train_policy"):
+        assert recap.value(f"recap.{stage}.cluster.resource.model.gpus_per_node") == "4"
+        assert recap.value(f"recap.{stage}.cluster.resource.model.nnodes") == "2"
+    assert recap.value("recap.train_value_model.cluster.resource.model.gpus_per_node") == "2"
+    assert not any(
+        k.lstrip("+") == "recap.train_value_model.cluster.resource.model.nnodes"
+        for k, _ in recap.overrides
+    )
+    argv = render_command(recap)
+    assert "++recap.train_policy.cluster.resource.model.nnodes=2" in argv
+
+
+@pytest.mark.parametrize(("nnodes", "gpus"), [(3, 4), (2, 3), (0, 4), (2, 0)])
+def test_across_nodes_refuses_a_split_that_changes_the_world_size(nnodes: int, gpus: int) -> None:
+    with pytest.raises(VerlVlaRlError):
+        across_nodes(PUBLISHED_RECIPES["td3bc-pi05-libero-spatial-task2"], nnodes, gpus)
