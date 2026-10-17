@@ -421,6 +421,14 @@ def asr_rollout_step(
         pad_token_id=pad_token_id,
         device=device,
     )
+    # The audio tower does not cast its inputs: float32 log-mel features meet
+    # bf16 conv weights and the forward raises. Floating features take the
+    # policy's dtype; token ids and integer masks are left alone.
+    feature_dtype = next(p.dtype for p in model.parameters() if p.is_floating_point())
+    prompt_ids = {
+        key: (value.to(feature_dtype) if value.is_floating_point() else value)
+        for key, value in prompt_ids.items()
+    }
     with torch.no_grad(), _generation_mode(model) as gen_model:
         generated = gen_model.generate(
             **prompt_ids,
