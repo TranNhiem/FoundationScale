@@ -377,6 +377,18 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
     from foundationskills.agent.routing_eval import load_index
     from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
 
+    if args.behaviour_command == "ab":
+        from foundationskills.agent import skill_ab
+
+        try:
+            before = json.loads(Path(args.before).read_text())
+            after = json.loads(Path(args.after).read_text())
+            result = skill_ab.ab_compare(before, after, n_boot=args.n_boot, seed=args.seed)
+        except (OSError, ValueError) as exc:
+            print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
+            return 96
+        print(json.dumps(result, indent=2))
+        return {"keep": 0, "reject": 5, "unmeasured": 95}[result["verdict"]]
     if args.behaviour_command == "uplift":
         return _cmd_behaviour_uplift(args)
     try:
@@ -693,6 +705,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_uplift.add_argument("--ledger", default=None, help="append one row per package to this skill-impact ledger")
     p_uplift.add_argument("--change-family", default=None, help="ledger change family, e.g. baseline")
     p_uplift.set_defaults(func=_cmd_behaviour_eval)
+    p_ab = behaviour_sub.add_parser("ab", help="A2.2 keep-only-if: paired with-skill A/B")
+    p_ab.add_argument("--before", required=True, help="report before the writing change")
+    p_ab.add_argument("--after", required=True, help="report after the writing change")
+    p_ab.add_argument("--n-boot", type=int, default=2000)
+    p_ab.add_argument("--seed", type=int, default=0)
+    p_ab.set_defaults(func=_cmd_behaviour_eval)
 
     p = sub.add_parser("oracle-cases", help="build and check the code-grounded oracle behaviour cases")
     oracle_sub = p.add_subparsers(dest="oracle_command", required=True, parser_class=_Parser)
