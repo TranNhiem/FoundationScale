@@ -8,7 +8,7 @@ set -u
 G=${CUDA_VISIBLE_DEVICES:?run through gpu-pool}; R=${FS_TREE:?}
 S=$HOME/datasets/speech; W=$HOME/pretraining_weights/Speech-Models; O=$S/sp2_pref; SFT=$S/sp4_q3asr06/sft250_with_processor
 CT="env ENROOT_DATA_PATH=$HOME/.local/share/enroot enroot start -e PYTHONNOUSERSITE=1 -e PYTHONPATH=$R/src -e CUDA_VISIBLE_DEVICES=$G -e HF_HUB_OFFLINE=1 --mount $HOME:$HOME fs-g4e4b-nemo-automodel-26-04_compute"
-P=${PAIRS_PER_STEP:-16}; N=$(wc -l < $O/pairs.jsonl); STEPS=$(( N / P )); EVERY=$(( STEPS / 4 )); D=$O/dpo${RUN:+_$RUN}
+P=${PAIRS_PER_STEP:-16}; N=$(wc -l < $O/pairs.jsonl); STEPS=$(( ${EPOCHS:-1} * N / P )); EVERY=$(( STEPS / 4 )); D=$O/dpo${RUN:+_$RUN}
 echo "pairs $N -> $STEPS steps, save every $EVERY"
 [ -d $D/final ] || $CT $HOME/envs/hf-cand-519/bin/python $R/validation_campaigns/speech_pref/train_dpo.py --model $SFT --pairs $O/pairs.jsonl \
   --save-dir $D --beta ${BETA:-0.1} --sft-weight ${SFTW:-0.0} --learning-rate ${LR:-1e-6} --pairs-per-step $P --max-steps $STEPS --save-every $EVERY < /dev/null > $D.log 2>&1 || { echo "dpo failed"; tail -5 $D.log; exit 1; }
