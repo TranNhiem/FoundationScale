@@ -36,7 +36,7 @@ The rollout reward then falls to about 0 around step 45-55
 | Algorithm | Raw scoring | Consistent scoring |
 |---|---|---|
 | agentic_grpo (default) | collapses | 0.599 / 0.592 / 0.619 (seeds 6 / 5 / 4) |
-| gspo | **no collapse on 4 of 4 seeds**: 0.447 / 0.516 / 0.545 / 0.557 | 0.559 / 0.613 (seeds 6 / 5) |
+| gspo | **no collapse on 4 of 4 seeds**: 0.447 / 0.516 / 0.545 / 0.557 | 0.559 / 0.613 / 0.596 / 0.533 (seeds 6 / 5 / 7 / 4; mean 0.575) |
 | dapo | collapses (0.010) | not measured |
 | dr_grpo | collapses (0.014) | not measured |
 | grpo | collapses (0.039) | not measured |

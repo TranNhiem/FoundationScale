@@ -34,7 +34,7 @@ runs through.
 | configuration | seeds | step-60 eval |
 |---|---|---|
 | agentic_grpo + consistent scoring | 6 / 5 / 4 | 0.599 / 0.592 / 0.619 (mean 0.603) |
-| gspo + consistent scoring | 6 | 0.559 (315/400); seeds 4, 5 and 7 running |
+| gspo + consistent scoring | 6 / 5 / 7 / 4 | 0.559 / 0.613 / 0.596 / 0.533 (mean 0.575) |
 | gspo + raw scoring | 6 / 5 / 4 / 7 | mean 0.516 |
 | agentic_grpo + raw scoring | 6 / 5 | collapsed (100-step finals 0.0 / 0.091) |
 
@@ -47,8 +47,10 @@ At 100 steps the consistent-scoring agentic_grpo runs reach 0.653 / 0.651 / 0.62
 - Of the algorithms, only GSPO survives the mismatch on its own (4 of 4 seeds), at about 0.09 below the
   consistently scored default at step 60. It is the robust choice when scoring cannot match the sampler
   (for example an engine whose sampling the trainer cannot reproduce).
-- On seed 6 GSPO + consistent scoring (0.559) is below agentic_grpo + consistent scoring (0.599); with one seed
-  that difference is not yet established. The three running seeds will settle whether combining them helps.
+- Combining GSPO with consistent scoring does not help: over four seeds it averages 0.575 against 0.603 for
+  agentic_grpo with consistent scoring (paired seeds 6 / 5 / 4: 0.559 vs 0.599, 0.613 vs 0.592, 0.533 vs
+  0.619). Once scoring is consistent the default algorithm is the better choice; GSPO's value is robustness
+  when scoring cannot be made consistent.
 - Best-checkpoint selection by rollout reward did not beat the final checkpoint once scoring was consistent
   (sc_s5: best step 75 0.618 vs final 0.651; sc_s6: best step 83 0.634 vs final 0.653). It pays off only as
   insurance against a collapse (DAPO: best 0.339 vs final 0.010).
