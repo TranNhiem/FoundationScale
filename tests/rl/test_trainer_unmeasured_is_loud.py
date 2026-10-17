@@ -76,11 +76,12 @@ def test_every_unmeasured_exit_from_one_step_is_announced() -> None:
 
 
 def test_the_tail_keeps_one_announced_exit_of_its_own() -> None:
-    # _one_step's own leg (encode -> generate -> decode -> score) keeps the
-    # single UNMEASURED exit that belongs to IT: every rollout abstained
-    # before any row ever reached _priced_tail.
-    total, silent = _silent_unmeasured_exits(_trainer_source(), "_one_step")
-    assert total >= 1, f"expected at least 1 bare `return None` in _one_step, found {total}"
+    # The generate -> decode -> score leg keeps the single UNMEASURED exit that
+    # belongs to IT: every rollout abstained before any row reached
+    # _priced_tail. Since SP-3 that leg is _price_generated, shared by the text
+    # (_one_step) and audio (asr_rollout) rollouts.
+    total, silent = _silent_unmeasured_exits(_trainer_source(), "_price_generated")
+    assert total >= 1, f"expected at least 1 bare `return None` in _price_generated, found {total}"
     assert silent == [], f"UNMEASURED steps leave silently at line(s) {silent}"
 
 

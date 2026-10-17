@@ -20,7 +20,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-__all__ = ("MCQLetterReward",)
+from foundationscale.train.speech_metrics import (
+    is_runaway,
+    loop_words,
+    normalize_transcript,
+    word_errors,
+)
+
+__all__ = ("MCQLetterReward", "WERReward")
 
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -106,3 +113,58 @@ class MCQLetterReward:
         if letter == gold.upper():
             return self.correct
         return self.incorrect
+
+
+@dataclass(frozen=True, slots=True)
+class WERReward:
+    """Verifiable reward: one minus the transcript's word error rate -- or abstain.
+
+    ``score`` is ``1.0 - word_errors(gold, response).rate()`` with BOTH sides
+    normalized by ``speech_metrics``' own ``normalize_transcript`` -- the one
+    named in ``TRANSCRIPT_NORMALIZER_ID``. That normalizer is HALF of the WER
+    claim (see speech_metrics' docstring: a rate without its normalizer is not
+    reproducible), so this reward is comparable only against scores published
+    under the same id, and it restates no normalisation of its own.
+
+    ``score`` returns ``None`` -- an ABSTENTION -- when the gold normalizes to
+    the empty token list. ``EditCounts.rate()`` raises on that zero reference
+    length (an empty reference has no words to have measured) and 0.0 there
+    would turn "nothing measured" into "perfect", so the row is dropped and the
+    trainer's ``used < offered`` accounting keeps the gap visible -- the same
+    reason :class:`MCQLetterReward` abstains on its own unreadable cases.
+
+    The reward is NOT clamped to [0, 1]: the rate is not clamped either (100
+    deletions against one reference word is a rate of 100.0, see
+    ``EditCounts.rate``), so the score can run below 0.0 and the two declared
+    penalties subtract further on top. Each penalty is taken when the response
+    is flagged by the speech side's OWN detector (``is_runaway``, and
+    ``loop_words`` over its normalized words returning nonzero) and
+    contributes exactly nothing when the flag is absent. Both default to 0.0,
+    so an undeclared penalty is a stated absence -- never a guessed strength --
+    and the detectors' own thresholds (``RUNAWAY_RATIO``/``RUNAWAY_SLACK_WORDS``,
+    ``LOOP_MIN_RUN``) live with the detectors and travel in their manifests.
+
+    WHAT IS NOT CLAIMED: that this is any published implementation's WER
+    reward; that the penalty magnitudes are tuned; or that a flagged response
+    is punished by any particular amount beyond what the caller declared.
+    """
+
+    runaway_penalty: float = 0.0
+    loop_penalty: float = 0.0
+
+    def score(self, *, response: str, gold: str) -> float | None:
+        """Score one generated transcript; ``None`` means abstain, never ``0.0``.
+
+        ``gold`` is the record's VERIFIED transcript -- on the audio leg its
+        manifest refuses a blank one with its line number (asr_rollout), so a
+        normที่... an empty NORMALIZED gold is not a gold at all and abstains
+        rather than scoring against nothing.
+        """
+        if not normalize_transcript(gold):
+            return None
+        score = 1.0 - word_errors(gold, response).rate()
+        if is_runaway(gold, response):
+            score -= self.runaway_penalty
+        if loop_words(normalize_transcript(response)) > 0:
+            score -= self.loop_penalty
+        return score

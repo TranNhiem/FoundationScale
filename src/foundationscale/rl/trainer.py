@@ -1123,6 +1123,15 @@ class RLTrainConfig:
     # corpus files carry the English prompt marker the inference path requires, so
     # a plane that cannot be told where gold lives cannot score real data at all.
     gold_key: str | None = None
+    # The object that scores ONE completion against ONE gold, replacing the
+    # hard-coded MCQLetterReward: anything exposing
+    # ``score(*, response=..., gold=...) -> float | None`` where ``None`` is an
+    # abstention (rewards.WERReward is the shipped ASR scorer). Read by run()'s
+    # built-in legs and by the audio rollout alike. A declared reward OWNS the
+    # response/gold surface whole, so it is refused together with
+    # answer_pattern / gold_key (which configure MCQLetterReward's letter
+    # parsing and the loader's gold lookup for it) -- see RLTrainer.__init__.
+    reward: Any | None = None
     group_size: int = 4
     learning_rate: float = 1e-6
     # None means "decide by measurement": use host-fp32 master weights whenever
@@ -1220,6 +1229,20 @@ class RLTrainConfig:
     video_sampling: str = "uniform"
     video_max_side: int | None = None
     video_cache_dir: str | None = None
+    # Audio rollout surface (Qwen3-ASR, train/audio.py's request path): both
+    # None by default -- EXACTLY today's generate-and-score leg over the
+    # ShareGPT corpus, byte-identical. ``audio_column`` sets the WHOLE leg's
+    # mode: the dataset is then the jsonl manifest whose records name
+    # ``audio``/``text`` (asr_rollout), prompts are transcription requests over
+    # the named clip, completions are transcripts and ``reward`` scores them
+    # against the record's own gold. ``audio_language`` is its MANDATORY
+    # companion -- the request API is TOLD the language, and a default would
+    # transcribe one language under another's label. Both-or-neither and
+    # non-blank; refused with rollout_source and refused below 256
+    # max_new_tokens (64 truncates transcripts) in RLTrainer.__init__ -- the
+    # same partial-declaration doctrine as adapter_*/video_* above.
+    audio_column: str | None = None
+    audio_language: str | None = None
     # Declared adapter mode. None means FULL FINE-TUNE, stated as data rather
     # than implied by the absence of peft wiring -- the SAME convention
     # train/loop.py's SFT plane uses. Every adapter_* knob is None by default,
@@ -1341,6 +1364,90 @@ class RLTrainer:
                 raise TrainerRefusal(
                     "adapter_targets=() is refused as vacuous: name at least "
                     "one target, or pass None to use peft's per-model defaults"
+                )
+        if config.reward is not None:
+            if not callable(getattr(config.reward, "score", None)):
+                raise TrainerRefusal(
+                    f"reward={config.reward!r}: 1 of 1 declared rewards must "
+                    f"expose score(*, response=..., gold=...) -> float | None "
+                    f"(None abstaining); an object with no such call cannot be "
+                    f"asked anything at all"
+                )
+            # A declared reward OWNS the response/gold scoring surface whole:
+            # answer_pattern configures MCQLetterReward's letter parsing and
+            # gold_key locates the gold FOR it, so keeping either beside a
+            # custom reward would leave a knob wired to nothing -- silently
+            # unused, the same unrecorded-config failure the adapter block
+            # below refuses on the same argument.
+            for field_name in ("answer_pattern", "gold_key"):
+                value = getattr(config, field_name)
+                if value is not None:
+                    raise TrainerRefusal(
+                        f"{field_name}={value!r} is set together with reward="
+                        f"{type(config.reward).__name__}: a declared reward "
+                        f"scores the raw response against the raw gold, so "
+                        f"{field_name} would be silently unused. Clear "
+                        f"{field_name}, or drop reward to score with "
+                        f"MCQLetterReward"
+                    )
+            if config.rollout_source is not None:
+                raise TrainerRefusal(
+                    f"reward={type(config.reward).__name__} is set together "
+                    f"with rollout_source: the rollout source prices its own "
+                    f"reward column on every row it hands over, so the declared "
+                    f"reward would be silently unused. Drop one of the two."
+                )
+        # The audio fields are validated exactly like preference_trainer.py's:
+        # both or neither, each non-blank -- a partial declaration would drop
+        # the modality between the dataset and the forward rather than run.
+        if config.audio_column is not None and (
+            not isinstance(config.audio_column, str) or not config.audio_column.strip()
+        ):
+            raise TrainerRefusal(
+                f"field audio_column={config.audio_column!r}: None or a "
+                f"non-empty string is required; an empty column name names no "
+                f"manifest field"
+            )
+        if config.audio_language is not None and (
+            not isinstance(config.audio_language, str) or not config.audio_language.strip()
+        ):
+            raise TrainerRefusal(
+                f"field audio_language={config.audio_language!r}: None or a "
+                f"non-empty string is required; a blank language would label "
+                f"every transcript under no language at all"
+            )
+        if config.audio_column is None and config.audio_language is not None:
+            raise TrainerRefusal(
+                f"field audio_language={config.audio_language!r} is set while "
+                f"audio_column is None: a partial audio specification is "
+                f"refused. Declare audio_column, or clear audio_language"
+            )
+        if config.audio_language is None and config.audio_column is not None:
+            raise TrainerRefusal(
+                f"field audio_column={config.audio_column!r} is set while "
+                f"audio_language is None: the transcription request API must "
+                f"be TOLD the language (train/audio.py refuses language=None "
+                f"for the same reason), and defaulting one would transcribe "
+                f"the clip under another language's label"
+            )
+        if config.audio_column is not None:
+            if config.rollout_source is not None:
+                raise TrainerRefusal(
+                    f"audio_column={config.audio_column!r} is set together "
+                    f"with rollout_source: the rollout source replaces the "
+                    f"generate-and-score leg entirely, so the clip/transcript "
+                    f"manifest would be declared and never read. Drop one of "
+                    f"the two."
+                )
+            if config.max_new_tokens < 256:
+                raise TrainerRefusal(
+                    f"max_new_tokens={config.max_new_tokens} with audio_column="
+                    f"{config.audio_column!r}: an audio rollout generates a "
+                    f"whole TRANSCRIPT and the 64-token default truncates it "
+                    f"mid-utterance -- the WER reward would then score a "
+                    f"deliberately cut response against an uncut gold and call "
+                    f"the cut a decoding failure. 256 is the floor this leg "
+                    f"accepts; raise max_new_tokens or drop audio_column."
                 )
         self.config = config
         # reinforce_baseline's carried EMA state: None means UNSEEDED (no
@@ -1514,11 +1621,25 @@ class RLTrainer:
                 "dataset=None without a rollout_source: the built-in leg draws its "
                 "prompts from the corpus, and there is none to draw from"
             )
-        samples: tuple[Sample, ...] | list[Sample] = (
-            ()
-            if self.config.dataset is None
-            else load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
-        )
+        # In audio mode the dataset is the jsonl manifest of clips and gold
+        # transcripts (asr_rollout.load_audio_manifest, keys `audio`/`text`),
+        # NOT a ShareGPT corpus: every one of its rows carries verifiable gold
+        # and no prompt turn at all -- the clip IS the prompt, entered through
+        # train/audio.py's transcription request. The annotated type widens to
+        # Any for that one leg (asr_rollout.AudioRow is deliberately not
+        # corpus.Sample, which has no clip field): every reader below is
+        # duck-typed and `sample.gold` is the one attribute they read.
+        samples: tuple[Any, ...] | list[Any]
+        if self.config.audio_column is not None:
+            from foundationscale.rl.asr_rollout import load_audio_manifest
+
+            samples = load_audio_manifest(self.config.dataset)
+        else:
+            samples = (
+                ()
+                if self.config.dataset is None
+                else load_sharegpt(self.config.dataset, gold_key=self.config.gold_key)
+            )
         # #371: corpus.py PARSES `image` and `video` into Sample.images/.video,
         # and its docstring advertises "text-only, image-text, multi-image, and
         # video" records. This trainer references neither field: it builds every
@@ -1547,7 +1668,12 @@ class RLTrainer:
         # naming the samples and the knob. Against the measured 131,072-token
         # context, 258 tok/frame puts the ceiling near 508 frames -- ample, which
         # is precisely why the budget is chosen by the caller, not inherited.
-        samples = _expand_video_samples(samples, self.config)
+        # The audio manifest carries clips and nothing else: its rows hold no
+        # video to expand (asr_rollout.AudioRow names `audio`), so this frame
+        # pass stays a ShareGPT-corpus pass -- skipped by MODE, never by an
+        # attribute probe that would read a field those rows never declared.
+        if self.config.audio_column is None:
+            samples = _expand_video_samples(samples, self.config)
         try:
             import torch
         except ImportError:
@@ -1608,8 +1734,22 @@ class RLTrainer:
             # (pad_token_id, batch_decode, apply_chat_template): a processor
             # carries its own .tokenizer, so both paths expose the same
             # surface and no call site had to change to gain the capability.
-            needs_images = any(sample.images for sample in samples)
-            prompt_surface = resolve_prompt_surface(self.config.model, needs_images)
+            if self.config.audio_column is not None:
+                # train/audio.py's OWN surface resolver for a declared audio
+                # axis -- CALL that helper rather than re-deriving it (the same
+                # rule preference_trainer.run follows): its AutoProcessor
+                # refusal names the AUDIO axis, where resolve_prompt_surface's
+                # messages name image data, and its no-modality arm would hand
+                # back a bare tokenizer that encodes the transcript text and
+                # drops the waveform without a signal. That is exactly the
+                # silent drop this leg refuses to run without.
+                from foundationscale.train.audio import resolve_audio_surface
+
+                prompt_surface = resolve_audio_surface(self.config.model)
+                needs_images = False
+            else:
+                needs_images = any(sample.images for sample in samples)
+                prompt_surface = resolve_prompt_surface(self.config.model, needs_images)
             tokenizer = (
                 prompt_surface.surface
                 if prompt_surface.kind == "tokenizer"
@@ -1618,7 +1758,25 @@ class RLTrainer:
         except Exception as exc:  # noqa: BLE001 -- load surface failure is a refusal
             _refuse_exit_96(f"tokenizer load failed for {self.config.model!r}: {exc}")
 
-        model = _load_causal_lm(self.config.model, needs_images=needs_images)
+        # One loader per role and no re-derived copy: an audio-declared run
+        # loads through preference_trainer's OWN _load_asr_lm (imported on the
+        # audio branch below, never duplicated) --
+        # Qwen3ASRForConditionalGeneration with that module's
+        # input_features-consumption proof, the audio twin of _load_causal_lm's
+        # pixel-consumption proof -- and the frozen reference loads the same
+        # way, so the k3 term prices an audio-conditioned reference against an
+        # audio-conditioned policy instead of a copy that silently absorbed the
+        # features.
+        load_asr_model: Any = None
+        if self.config.audio_column is not None:
+            from foundationscale.rl.preference_trainer import _load_asr_lm
+
+            load_asr_model = _load_asr_lm
+        model = (
+            load_asr_model(self.config.model)
+            if load_asr_model is not None
+            else _load_causal_lm(self.config.model, needs_images=needs_images)
+        )
         # adapter_notes is a dict a manifest-keeping caller could consume;
         # this loop has no manifest of its own (unlike train/loop.py's SFT
         # plane) -- _apply_lora_adapter already PRINTS the same facts to
@@ -1663,11 +1821,32 @@ class RLTrainer:
             model.to(device)
             model.train()
 
-        if not getattr(tokenizer, "chat_template", None):
+        # An audio-declared run renders NO chat template: its prompt is the
+        # clip, and train/audio.py's request API wraps its own typed prefix
+        # around the waveform's placeholders (the same reason
+        # preference_trainer.run skips this refusal in its audio mode), so
+        # demanding a template here would refuse every real Qwen3-ASR tokenizer
+        # over a surface this leg never reads.
+        if self.config.audio_column is None and not getattr(tokenizer, "chat_template", None):
             _refuse_exit_96(
                 f"tokenizer for {self.config.model!r} has no chat template: "
                 f"prompt construction REFUSES to concatenate strings silently; "
                 f"set tokenizer.chat_template explicitly"
+            )
+        if self.config.audio_column is not None and not callable(
+            getattr(prompt_surface.surface, "apply_transcription_request", None)
+        ):
+            # The audio twin of the refusal above: this leg builds every prompt
+            # through the processor's own transcription request, and a surface
+            # without it would fail mid-rollout -- or, through some other call,
+            # silently produce an un-audio prompt.
+            _refuse_exit_96(
+                f"model {self.config.model!r}: processor "
+                f"{type(prompt_surface.surface).__name__} exposes no "
+                f"apply_transcription_request(...) call, which is 1 of 1 prompt "
+                f"surfaces the audio leg reads; the clip and its declared "
+                f"language would have nowhere to go. Resolve an audio processor "
+                f"(train/audio.py's resolve_audio_surface) or drop audio_column."
             )
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -1741,8 +1920,13 @@ class RLTrainer:
                 # declaring a non-zero kl_weight (or an operator forcing
                 # reference_policy=True) pays this memory; _resolve_objective
                 # already refused the needs-one-but-forbidden combination.
-                ref_model = _load_causal_lm(
-                    self.config.reference_model or self.config.model, needs_images=needs_images
+                ref_model = (
+                    load_asr_model(self.config.reference_model or self.config.model)
+                    if load_asr_model is not None
+                    else _load_causal_lm(
+                        self.config.reference_model or self.config.model,
+                        needs_images=needs_images,
+                    )
                 )
                 if self.config.sharding == "fsdp":
                     # Sharded too: a frozen full-size replica on each rank
@@ -1755,8 +1939,26 @@ class RLTrainer:
                 ref_model.eval()
                 for parameter in ref_model.parameters():
                     parameter.requires_grad_(False)
-        reward = MCQLetterReward(answer_pattern=self.config.answer_pattern)
+        # A declared reward replaces the hard-coded MCQLetterReward whole (see
+        # RLTrainConfig.reward); __init__ already refused a custom reward beside
+        # the knobs that configure the built-in scorer's parsing.
+        reward = (
+            self.config.reward
+            if self.config.reward is not None
+            else MCQLetterReward(answer_pattern=self.config.answer_pattern)
+        )
         use_ppo = is_ppo(objective)
+        if self.config.audio_column is not None and (use_ppo or online_pref):
+            _refuse_exit_96(
+                f"algorithm={self.config.algorithm!r} together with "
+                f"audio_column={self.config.audio_column!r}: the audio leg "
+                f"generates one transcript group per clip and prices it "
+                f"group-relatively, while ppo's temporal advantage and the "
+                f"online-preference family's mined pairs price entirely "
+                f"different rows from the ones that leg produces. The two "
+                f"declarations are incompatible: drop audio_column, or choose "
+                f"a group-relative algorithm."
+            )
         loss_fn = None if online_pref or use_ppo else TensorPolicyLoss(objective=objective)
         # #369: bf16 params stepped directly by AdamW at lr=1e-6 discard every
         # sub-ulp update, so the loop trains ~nothing while loss, grad-norm,
@@ -1928,6 +2130,33 @@ class RLTrainer:
                             f"[trainer] reference refreshed from policy after step {step}",
                             file=sys.stderr,
                         )
+                elif self.config.audio_column is not None:
+                    # The audio leg: asr_rollout builds one transcription
+                    # request per record (its clip plus the declared language,
+                    # never its gold), generates group_size transcript
+                    # completions per clip and decodes them row by row, then
+                    # prices the kept rows through the SAME _price_generated
+                    # seam the built-in leg uses -- the clip's feature tensors
+                    # ride the modality-kwargs path from there.
+                    assert loss_fn is not None
+                    from foundationscale.rl.asr_rollout import asr_rollout_step
+
+                    report = asr_rollout_step(
+                        trainer=self,
+                        step=step,
+                        chunk=chunk,
+                        model=model,
+                        processor=prompt_surface.surface,
+                        reward=reward,
+                        objective=objective,
+                        loss_fn=loss_fn,
+                        optimizer=optimizer,
+                        ref_model=ref_model,
+                        device=device,
+                        pad_token_id=tokenizer.pad_token_id,
+                        language=self.config.audio_language,
+                        ctx=ctx,
+                    )
                 else:
                     assert loss_fn is not None
                     report = self._one_step(
@@ -1983,7 +2212,10 @@ class RLTrainer:
         model: Any,
         tokenizer: Any,
         surface: Any,
-        reward: MCQLetterReward,
+        # Duck-typed scoring surface (score(*, response=..., gold=...) -> float
+        # | None, None abstaining): MCQLetterReward unless the run declared
+        # RLTrainConfig.reward, which run() swapped in above.
+        reward: Any,
         objective: Any,
         loss_fn: TensorPolicyLoss,
         optimizer: Any,
@@ -1999,7 +2231,7 @@ class RLTrainer:
 
         WHAT IS NOT CLAIMED: that any particular step produces a report.
         """
-        from foundationscale.rl.distributed import DistContext, agree_all, generate_kwargs_for
+        from foundationscale.rl.distributed import DistContext, generate_kwargs_for
 
         if ctx is None:
             ctx = DistContext(
@@ -2042,6 +2274,69 @@ class RLTrainer:
             )
         prompt_width = prompt_ids["input_ids"].shape[1]
         completions = tokenizer.batch_decode(generated[:, prompt_width:], skip_special_tokens=True)
+
+        return self._price_generated(
+            step=step,
+            generated=generated,
+            prompt_ids=prompt_ids,
+            prompt_width=prompt_width,
+            completions=completions,
+            golds=golds,
+            reward=reward,
+            model=model,
+            optimizer=optimizer,
+            ref_model=ref_model,
+            device=device,
+            pad_token_id=tokenizer.pad_token_id,
+            objective=objective,
+            loss_fn=loss_fn,
+            ctx=ctx,
+        )
+
+    def _price_generated(
+        self,
+        *,
+        step: int,
+        generated: torch.Tensor,
+        prompt_ids: dict[str, Any],
+        prompt_width: int,
+        completions: Sequence[str],
+        golds: Sequence[str | None],
+        reward: Any,
+        model: Any,
+        optimizer: Any,
+        ref_model: Any | None,
+        device: str,
+        pad_token_id: int,
+        objective: Any,
+        loss_fn: TensorPolicyLoss,
+        ctx: Any,
+    ) -> StepReport | None:
+        """Score one generated group and price the rows that scored: the shared seam.
+
+        WHAT IS CLAIMED: this is EVERY line from the decoded completions onward
+        on BOTH rollout legs -- the built-in encode -> generate -> decode leg
+        (``_one_step``) and the audio leg (``asr_rollout.asr_rollout_step``)
+        call this method rather than restating the scoring, the abstention
+        accounting or the plane construction. Completion row i is scored against
+        ``golds[i // group_size]`` (both legs' generates return rows
+        prompt-major: ``[p0g0 .. p0gG-1, p1g0 ..]``), an abstaining row is
+        DROPPED (never priced as 0.0), a null rank participates with one
+        zero-weight dummy row, and every non-text key ``prompt_ids`` carried --
+        pixel_values and friends on the image families, ``input_features`` and
+        its frame mask on the audio one -- is group-expanded, width-checked and
+        handed to ``_priced_tail`` as ``modality_kwargs``, so that conditioning
+        rides EVERY old / current / reference forward exactly as an image's
+        does.
+
+        WHAT IS NOT CLAIMED: that any particular step produces a report. A
+        scorer that abstains on every row, and an advantage estimator that
+        refuses its whole batch, both leave here as UNMEASURED in the same
+        voice ``_priced_tail`` uses for the rows it kept.
+        """
+        import torch
+
+        from foundationscale.rl.distributed import agree_all
 
         # score, then drop abstentions row by row.
         rows: list[tuple[int, float]] = []
@@ -2090,7 +2385,7 @@ class RLTrainer:
         # narrower. Passing the shifted mask as attention_mask hands the
         # model a mask that disagrees with input_ids -- either a hard shape
         # error or, worse, a one-position attention shift.
-        attention = (kept_sequences != tokenizer.pad_token_id).long()
+        attention = (kept_sequences != pad_token_id).long()
         shifted_attention = attention[:, 1:]
         response_mask = torch.zeros_like(target_ids, dtype=torch.float32)
         response_mask[:, prompt_width - 1 :] = shifted_attention[:, prompt_width - 1 :]

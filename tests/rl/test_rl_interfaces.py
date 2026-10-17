@@ -39,6 +39,7 @@ from foundationscale.rl import (
 # below refuses if any ``foundationscale.rl`` module is missing an entry, so
 # the next module to land cannot repeat it.
 TORCH_FREE_MODULES = {
+    "foundationscale.rl.asr_rollout": ("AudioRow", "asr_rollout_step", "load_audio_manifest"),
     "foundationscale.rl.megatron": (
         "GlobalDenominators",
         "MegatronLaneConfig",
