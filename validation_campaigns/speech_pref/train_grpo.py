@@ -44,6 +44,7 @@ def main() -> None:
     ap.add_argument("--save-every", type=int, default=0)
     ap.add_argument("--learning-rate", type=float, default=1e-6)
     ap.add_argument("--max-new-tokens", type=int, default=256)
+    ap.add_argument("--logprob-micro-batch", type=int, default=0, help="0 = score all rows at once")
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--runaway-penalty", type=float, default=1.0)
     ap.add_argument("--loop-penalty", type=float, default=1.0)
@@ -68,6 +69,7 @@ def main() -> None:
         max_steps=args.max_steps,
         learning_rate=args.learning_rate,
         max_new_tokens=args.max_new_tokens,
+        logprob_micro_batch=args.logprob_micro_batch,
         temperature=args.temperature,
         device="cuda",
         gradient_checkpointing=True,
