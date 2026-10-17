@@ -287,6 +287,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/__init__.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/advantage.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/algorithm.py": 100,  # set by --update; measured 100.0%
+    "src/foundationscale/rl/asr_rollout.py": 98,  # measured 99.2%; 1 pt CI slack
     "src/foundationscale/rl/group_policy.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/interfaces.py": 100,  # set by --update; measured 100.0%
     "src/foundationscale/rl/losses.py": 100,  # set by --update; measured 100.0%
