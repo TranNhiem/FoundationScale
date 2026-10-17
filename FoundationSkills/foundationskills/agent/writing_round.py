@@ -240,12 +240,19 @@ def run_cli(args: Any) -> int:
             "--write-behaviour",
             *passthrough,
         ]
-        subprocess.run([*base, "--out", str(out)], check=False)  # noqa: S603
-        report = json.loads(out.read_text())
-        if report.get("verdict") == "unmeasured":  # one resume: re-asks only the unmeasured calls
-            resumed = work / f"{args.package}_{cases}_resumed.json"
-            subprocess.run([*base, "--resume", str(out), "--out", str(resumed)], check=False)  # noqa: S603
-            report = json.loads(resumed.read_text())
+        log = work / f"{args.package}_{cases}.log"
+        with log.open(
+            "a", encoding="utf-8"
+        ) as sink:  # the child's report goes to its log, not our stdout
+            subprocess.run([*base, "--out", str(out)], check=False, stdout=sink, stderr=sink)  # noqa: S603
+            report = json.loads(out.read_text())
+            if (
+                report.get("verdict") == "unmeasured"
+            ):  # one resume: re-asks only the unmeasured calls
+                resumed = work / f"{args.package}_{cases}_resumed.json"
+                resume = [*base, "--resume", str(out), "--out", str(resumed)]
+                subprocess.run(resume, check=False, stdout=sink, stderr=sink)  # noqa: S603
+                report = json.loads(resumed.read_text())
         return report
 
     try:
