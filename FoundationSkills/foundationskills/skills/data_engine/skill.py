@@ -241,6 +241,7 @@ class DataEngineSkill(BaseSkill):
                 benchmarks=list(request.get("benchmarks") or []),
                 seq_len=int(request.get("seq_len") or 4096),
                 drop_overlong=bool(request.get("drop_overlong", False)),
+                reasoning_unsupported=request.get("reasoning_unsupported"),
                 benchmark_sources=dict(request.get("benchmark_sources") or {}) or None,
                 allow_benchmark_download=bool(request.get("allow_benchmark_download", False)),
             )
@@ -316,6 +317,12 @@ class DataEngineSkill(BaseSkill):
             else:
                 message = "pipeline wrote zero records; the dataset artifact was not written"
                 recovery = "inspect stats.json dropped-reason counters; the clean/quality thresholds may be too strict"
+                lost = sum(int((st.get("dropped") or {}).get("reasoning_lost_in_template", 0)) for st in result.stats)
+                if lost:
+                    message += f"; {lost} record(s) carry a reasoning trace the chat template drops"
+                    recovery = ('the template has no thinking slot: choose explicitly with request '
+                                '"reasoning_unsupported": "inline_think" (trace as <think> in the answer) or '
+                                '"drop_trace" (train on the answer only), or use a reasoning-capable template')
             findings.append(
                 self.finding(
                     "DE-HO-003",

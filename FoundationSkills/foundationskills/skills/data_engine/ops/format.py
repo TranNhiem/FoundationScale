@@ -30,6 +30,11 @@ Deliberate choices where the spec is silent:
   ``unconvertible:<target>`` in strict mode (default), or passed through
   UNCHANGED in non-strict mode, counted in
   ``stats.modified["unconvertible_passthrough"]``.
+- A reasoning trace the chat template drops (no thinking slot, no injector; measured on Gemma-3) drops the
+  record as ``reasoning_lost_in_template`` by default. ``cfg["reasoning_unsupported"]`` makes the choice
+  explicit instead: ``inline_think`` writes the trace into the assistant content as ``<think>...</think>``
+  (the model learns a format its template does not know), ``drop_trace`` trains on the answer only. Either
+  is counted in ``stats.extra["reasoning_render"]`` and disclosed in ``stats.extra["reasoning_unsupported"]``.
 - For sft/mm_sft the op always sets ``stats.extra["sft_loss_scope"] =
   "full_sequence"``: FS's sft objective trains on the full rendered text with
   NO assistant-only loss masking (measured, FS 77bfa65). This must be
@@ -365,6 +370,26 @@ def _load_tokenizer(path: str) -> tuple[Any | None, str | None]:
         return None, f"{type(exc).__name__}: {exc}"
 
 
+_REASONING_POLICIES = ("drop_record", "inline_think", "drop_trace")
+
+
+def _apply_reasoning_policy(messages: list[dict[str, Any]], policy: str, family: str | None,
+                            tokenizer: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """The user's explicit choice for traces the template drops; returns (messages, text, mode)."""
+    out = []
+    for m in messages:
+        trace = m.get("reasoning_content") if m.get("role") == "assistant" else None
+        m = {k: v for k, v in m.items() if k != "reasoning_content"}
+        if trace and policy == "inline_think":
+            m["content"] = f"<think>\n{trace}\n</think>\n\n{m.get('content') or ''}"
+        out.append(m)
+    text = render_chat(out, family=family, tokenizer=tokenizer)
+    if policy == "inline_think":
+        traces = [m["reasoning_content"] for m in messages if m.get("reasoning_content")]
+        return out, text, "inline_think" if all(t in text for t in traces) else "lost"
+    return out, text, "trace_dropped"
+
+
 def _convert(
     rec: dict,
     target: str,
@@ -375,6 +400,7 @@ def _convert(
     gold_key: str,
     image_column: str,
     index: int,
+    reasoning_unsupported: str = "drop_record",
 ) -> tuple[dict, str | None, str | None] | None:
     """Return (out_record, template_source, template_error) or None if unconvertible."""
     meta = dict(rec.get("meta") or {})
@@ -400,6 +426,8 @@ def _convert(
         mode = "none"
         if any(m.get("reasoning_content") for m in messages):
             text, mode = render_with_reasoning(messages, family=family, tokenizer=tokenizer)
+            if mode == "lost" and reasoning_unsupported != "drop_record":
+                messages, text, mode = _apply_reasoning_policy(messages, reasoning_unsupported, family, tokenizer)
         text, parity = align_with_generation_prompt(messages, text, tokenizer)
         text = _strip_bos(text, tokenizer)
         meta["reasoning_render"] = mode
@@ -479,6 +507,11 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
     gold_key = cfg.get("gold_key") or "answer"
     image_column = cfg.get("image_column") or "image"
     strict = bool(cfg.get("strict", True))
+    reasoning_unsupported = cfg.get("reasoning_unsupported") or "drop_record"
+    if reasoning_unsupported not in _REASONING_POLICIES:
+        raise ValueError(f"format op: reasoning_unsupported {reasoning_unsupported!r} not in {_REASONING_POLICIES}")
+    if reasoning_unsupported != "drop_record":
+        stats.extra["reasoning_unsupported"] = reasoning_unsupported
 
     tokenizer: Any = None
     tok_spec = cfg.get("tokenizer")
@@ -523,6 +556,7 @@ def _format_records(records: Iterable[dict], cfg: dict, stats: OpStats) -> Itera
             gold_key=gold_key,
             image_column=image_column,
             index=index,
+            reasoning_unsupported=reasoning_unsupported,
         )
         if converted is None:
             if strict:
@@ -578,6 +612,7 @@ _CONFIG_SCHEMA = {
         "gold_key": {"type": "string", "minLength": 1},
         "image_column": {"type": "string", "minLength": 1},
         "strict": {"type": "boolean"},
+        "reasoning_unsupported": {"enum": list(_REASONING_POLICIES)},
     },
 }
 
