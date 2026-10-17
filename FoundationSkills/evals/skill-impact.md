@@ -46,3 +46,6 @@ Append-only: one row per measured change family (A2.1 baselines first). Rows are
 | 2026-10-16 | a15-host-portability | fskills-refusal-surface | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | be551f9b3cc1 | 24f72b0f1ec1 | 0.889 | 0.259 | 0.630 | [0.333, 0.889] | 3/0 | uplift | 43f8003785eb |
 | 2026-10-16 | a15-host-portability | fskills-measured-or-unmeasured | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 6070d39a416c | 0c62ae9b19c3 | 0.974 | 0.154 | 0.833 | [0.667, 0.972] | 6/0 | uplift | 3a10e1922ad5 |
 | 2026-10-16 | a15-host-portability | fskills-measured-or-unmeasured | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 6070d39a416c | 0fe2950f46d1 | 0.889 | 0.407 | 0.481 | [0.333, 0.667] | 3/0 | uplift | ee4c3001ff81 |
+| 2026-10-17 | a22-anti-rationalizations | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | b27a8f6b39b5 | 0.951 | 0.408 | 0.539 | [0.386, 0.680] | 17/0 | unmeasured | 2ebff5ba1223 |
+| 2026-10-17 | a22-anti-rationalizations | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | a2414802e5ca | 0.892 | 0.178 | 0.714 | [0.609, 0.808] | 33/0 | uplift | a10505795503 |
+| 2026-10-17 | a22-anti-rationalizations | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | b27a8f6b39b5 | 0.951 | 0.407 | 0.539 | [0.386, 0.680] | 17/0 | uplift | 38903c48cb3c |
