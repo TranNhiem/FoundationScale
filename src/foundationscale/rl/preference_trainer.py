@@ -12,8 +12,12 @@ torch and transformers are imported lazily in ``run()``, the same idiom
 ``trainer.py`` uses, so importing this module on a torch-free host always
 succeeds. A host that cannot supply either dependency is refused under the
 repository's exit-96 contract with the missing dependency named. The
-preference loop is text-only: a record carrying image or video data refuses
-rather than training on its prompt alone.
+preference loop is text-only: a record carrying image, video or audio data
+in an UNDECLARED column refuses rather than training on its prompt alone,
+and a record whose column IS declared still carries no ordinary prompt text
+for audio -- that side is its waveform, entered through
+``AUDIO_PROMPT_SENTINEL``, because any text prompt on an audio row would be
+silently unused.
 
 WHAT THIS MODULE CLAIMS: references are produced in-step from a second,
 frozen model exactly when the bound objective declares itself
@@ -80,7 +84,7 @@ from foundationscale.rl.preference_torch import (
     needs_reference,
     preference_metrics,
 )
-from foundationscale.rl.prompt_surface import resolve_prompt_surface
+from foundationscale.rl.prompt_surface import PromptSurface, resolve_prompt_surface
 from foundationscale.rl.registry import lookup_algorithm
 from foundationscale.rl.trainer import (
     _ADAPTERS,
@@ -99,6 +103,11 @@ from foundationscale.rl.trainer import (
     _refuse_vacuous_run,
     _token_logprobs,
     _trainable_parameters,
+)
+from foundationscale.train.audio import (
+    AUDIO_FEATURES_KEY,
+    resolve_audio_surface,
+    train_transcription_collator_or_refuse,
 )
 from foundationscale.train.conversation import (
     TurnMarkers,
@@ -155,6 +164,7 @@ def _classify_modality_key(
 
 
 __all__ = (
+    "AUDIO_PROMPT_SENTINEL",
     "PreferenceTrainConfig",
     "PreferenceTrainer",
     "load_pairs_jsonl",
@@ -165,11 +175,20 @@ __all__ = (
 # prefixed ``_`` so a caller's ordinary record fields are not shadowed.
 _LINE_KEY = "_line"
 
-# The preference trainer has no processor path: an associated pixel or clip
-# must be named and refused rather than omitted from the prompt. The two
-# singular/plural spellings are the corpus surface used elsewhere in the RL
-# plane; a null value names a permissible absent field rather than a carrier.
-_MODALITY_KEYS: tuple[str, ...] = ("image", "images", "video", "videos")
+# The audio prompt contract: an audio-declared record carries NO text prompt.
+# Its prompt side is the clip ``audio_column`` names, rendered by
+# train/audio.py's transcription request path, so the prompt field is
+# required to hold exactly this sentinel and anything else is refused -- a
+# text prompt would be silently unused, which is the defect this refuses.
+AUDIO_PROMPT_SENTINEL = "<|asr_audio|>"
+
+# Every carrier this trainer refuses when it is carried UNDECLARED: a pixel
+# field, a clip or a waveform must be named by image_column /
+# video_column / audio_column and refused rather than omitted from the
+# prompt. The two singular/plural spellings per modality are the corpus
+# surface used elsewhere in the RL plane; a null value names a permissible
+# absent field rather than a carrier.
+_MODALITY_KEYS: tuple[str, ...] = ("image", "images", "video", "videos", "audio", "audios")
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +331,22 @@ class PreferenceTrainConfig:
     video_sampling: str = "uniform"
     video_max_side: int | None = None
     video_cache_dir: str | None = None
+    # Audio declaration surface (Qwen3-ASR): the SFT audio plane's
+    # FOUNDATIONSCALE_TRAIN_AUDIO_COLUMN / FOUNDATIONSCALE_TRAIN_AUDIO_LANGUAGE
+    # as explicit config fields, the same convention as the media columns
+    # above. Both None by default -- EXACTLY this trainer without audio.
+    # ``audio_column`` names the record field carrying the wav/flac path and
+    # opts that field into train/audio.py's transcription request path (the
+    # record's prompt must then be AUDIO_PROMPT_SENTINEL: the prompt side is
+    # the clip itself, and any text prompt would be silently unused);
+    # ``audio_language`` is its MANDATORY companion -- the request API is
+    # TOLD the language and a default would train one language under
+    # another's label. Audio is mutually exclusive with the image/video
+    # columns: one record cannot render both a conversation and a
+    # transcription request, so a combined declaration is refused in
+    # PreferenceTrainer.__init__ exactly like a partial adapter declaration.
+    audio_column: str | None = None
+    audio_language: str | None = None
 
 
 def _record_kind(record: Mapping[str, Any]) -> tuple[bool, bool]:
@@ -467,6 +502,58 @@ def load_pairs_jsonl(path: str, *, paired: bool) -> list[dict[str, Any]]:
     return records
 
 
+def _load_asr_lm(model_id: str) -> Any:
+    """Load one Qwen3-ASR copy and PROVE its forward consumes the audio features.
+
+    Weights come from ``transformers.Qwen3ASRForConditionalGeneration`` -- the
+    class the SFT speech path's request-API arm trains behind
+    train/audio.py's ``train_transcription_collator_or_refuse``. No loader is
+    reused here because none exists in these files: train/audio.py's public
+    surface stops at ``resolve_audio_surface`` (the processor) and its two
+    collators, and the SFT loop's own model loader lives outside this module.
+    The class is therefore named once, HERE, rather than routed through an
+    auto class: the wrong auto class accepts the load without complaint and
+    absorbs ``input_features`` through ``**kwargs``.
+
+    The consumption proof is a parameter read on ``forward`` -- the audio
+    twin of ``rl.trainer._load_causal_lm``'s pixel-consumption proof. The key
+    checked is train/audio.py's ``AUDIO_FEATURES_KEY``, imported rather than
+    re-typed so this probe cannot drift from the collator's own spelling, and
+    ``**kwargs`` does NOT count as acceptance: a forward that merely forwards
+    keyword arguments is the same silent absorption under another name. This
+    claims the loaded weights and a forward that NAMED its audio input --
+    not that any particular clip decodes correctly, which is the collator's
+    ``load_audio`` claim.
+    """
+    import inspect
+
+    try:
+        from transformers import Qwen3ASRForConditionalGeneration
+    except ImportError as exc:  # noqa: BLE001 -- named dependency refusal
+        _refuse_exit_96(
+            f"1 of 1 required audio model classes absent: "
+            f"transformers.Qwen3ASRForConditionalGeneration ({exc}); an "
+            f"audio-declared Qwen3-ASR run is loaded through that class "
+            f"only, never through a generic loader that can silently absorb "
+            f"its audio features"
+        )
+    try:
+        model: Any = Qwen3ASRForConditionalGeneration.from_pretrained(model_id)
+    except Exception as exc:  # noqa: BLE001 -- named model-load refusal
+        _refuse_exit_96(f"audio model load failed for {model_id!r}: {exc}")
+    accepted = tuple(inspect.signature(model.forward).parameters)
+    if AUDIO_FEATURES_KEY not in accepted:
+        _refuse_exit_96(
+            f"model {model_id!r} loaded as {type(model).__name__}, but its "
+            f"forward() names no {AUDIO_FEATURES_KEY!r} parameter (named "
+            f"parameters: {accepted}); the features a declared audio_column "
+            f"produces would be absorbed by **kwargs or rejected outright, "
+            f"never consumed. A declared audio axis must be an EXECUTED "
+            f"axis (#371/#410, and #422's class)"
+        )
+    return model
+
+
 class PreferenceTrainer:
     """One loop: read preference rows, encode, price and step.
 
@@ -615,7 +702,7 @@ class PreferenceTrainer:
                     "least one target, or pass None to use peft's per-model "
                     "defaults"
                 )
-        for column_field in ("image_column", "video_column"):
+        for column_field in ("image_column", "video_column", "audio_column"):
             column_value = getattr(config, column_field)
             if column_value is not None and (
                 not isinstance(column_value, str) or not column_value.strip()
@@ -625,6 +712,40 @@ class PreferenceTrainer:
                     f"non-empty string is required; an empty column name "
                     f"names no field"
                 )
+        if config.audio_language is not None and (
+            not isinstance(config.audio_language, str) or not config.audio_language.strip()
+        ):
+            raise TrainerRefusal(
+                f"field audio_language={config.audio_language!r}: None or a "
+                f"non-empty string is required; a blank language would label "
+                f"every transcript under no language at all"
+            )
+        if config.audio_column is None and config.audio_language is not None:
+            raise TrainerRefusal(
+                f"field audio_language={config.audio_language!r} is set while "
+                f"audio_column is None: a partial audio specification is "
+                f"refused. Declare audio_column, or clear audio_language"
+            )
+        if config.audio_language is None and config.audio_column is not None:
+            raise TrainerRefusal(
+                f"field audio_column={config.audio_column!r} is set while "
+                f"audio_language is None: the transcription request API must "
+                f"be TOLD the language (train/audio.py refuses language=None "
+                f"for the same reason), and defaulting one would train the "
+                f"clip's transcript under another language's label"
+            )
+        if config.audio_column is not None:
+            for media_field in ("image_column", "video_column"):
+                media_value = getattr(config, media_field)
+                if media_value is not None:
+                    raise TrainerRefusal(
+                        f"field audio_column={config.audio_column!r} is "
+                        f"declared together with {media_field}={media_value!r}: "
+                        f"the audio path renders a transcription request (the "
+                        f"prompt is the waveform) while the media path renders "
+                        f"a multi-turn conversation, and one record cannot "
+                        f"carry both"
+                    )
         if config.video_column is None:
             # Same "partial declaration is refused" doctrine as adapter/
             # adapter_*: a video_* knob set with no video_column is a
@@ -670,9 +791,20 @@ class PreferenceTrainer:
                 ) from exc
         self.config = config
         self._needs_media = config.image_column is not None or config.video_column is not None
+        # The audio path is its own MODE, not a media sub-case: it is entered
+        # only through audio_column (exactly one of the three columns may be
+        # declared, refused above) and renders a transcription request rather
+        # than a conversation.
+        self._needs_audio = config.audio_column is not None
         self._video_budget = video_budget
         self._processor: Any | None = None
         self._turn_markers: TurnMarkers | None = None
+        # The one train/audio.py transcription collator this run collates
+        # audio rows with (built in run(), or rebuilt lazily in
+        # _encode_batch_audio for a directly-set processor -- the same
+        # reachability _encode_batch_media has through self._processor).
+        self._audio_surface: Any | None = None
+        self._audio_collator: Any | None = None
         self._objective = self._resolve_objective()
         self._paired = is_paired(self._objective)
         self._reference_required = needs_reference(self._objective)
@@ -929,15 +1061,18 @@ class PreferenceTrainer:
         restated as a requirement here.
 
         Dispatches to :meth:`_encode_batch_media` when the run declares
-        ``image_column``/``video_column`` -- a distinct method rather than a
-        branch threaded through every line below, because the media path
-        renders through the SFT processor pipeline
+        ``image_column``/``video_column``, and to
+        :meth:`_encode_batch_audio` when it declares ``audio_column`` --
+        distinct methods rather than a branch threaded through every line
+        below, because those paths render through the SFT processor pipeline
         (``_render_conversation_row``/``_conversation_processor_batch_call``/
-        ``assistant_label_mask``) instead of a bare tokenizer, and the two
-        pipelines share no line of tensor-building code. ``tokenizer`` and
-        ``pad_token_id`` are unused on that path (the processor renders and
-        pads its own batch); they stay required parameters because the sole
-        caller, ``_one_step``, passes them unconditionally for both paths.
+        ``assistant_label_mask``, or train/audio.py's transcription request)
+        instead of a bare tokenizer, and those pipelines share no line of
+        tensor-building code with one another or with the text path.
+        ``tokenizer`` and ``pad_token_id`` are unused on those paths (the
+        processor renders and pads its own batch); they stay required
+        parameters because the sole caller, ``_one_step``, passes them
+        unconditionally on every path.
         """
         if not records:  # pragma: no cover -- run() always passes a non-empty chunk
             raise TrainerRefusal(
@@ -946,6 +1081,12 @@ class PreferenceTrainer:
             )
         if self._needs_media:
             return self._encode_batch_media(records=records, device=device)
+        if self._needs_audio:
+            return self._encode_batch_audio(
+                records=records,
+                device=device,
+                pad_token_id=pad_token_id,
+            )
         encoded_rows: list[_EncodedCompletion] = []
         desirable_values: list[bool] = []
         for record in records:
@@ -1230,6 +1371,203 @@ class PreferenceTrainer:
             modality_kwargs=modality_kwargs or None,
             image_counts=image_counts if any(image_counts) else None,
             video_counts=video_counts if any(video_counts) else None,
+        )
+
+    def _encode_batch_audio(
+        self,
+        *,
+        records: Sequence[Mapping[str, Any]],
+        device: str,
+        pad_token_id: int,
+    ) -> _EncodedBatch:
+        """Build one transcription-request batch for an audio-declared run.
+
+        Every OUTPUT row is one side of one record -- chosen then rejected,
+        interleaved exactly as :meth:`_encode_batch_media` interleaves them,
+        or one row per KTO completion -- and carries THE RECORD'S OWN clip
+        beside that side's transcript text. Rendering is delegated whole to
+        train/audio.py's ``train_transcription_collator_or_refuse`` (the SFT
+        audio path's own collator, reused rather than re-derived): its
+        ``apply_transcription_request`` call wraps the typed prompt prefix
+        (the chat template is never consulted), and the training target it
+        appends is ``tokenizer(transcript) + eos`` -- the same tokens SFT
+        supervises on that row shape, so DPO's log-probabilities are priced
+        over exactly what SFT trained.
+
+        The prompt field of each record must be exactly
+        :data:`AUDIO_PROMPT_SENTINEL` (``run()`` refuses the dataset when it
+        is not, and the per-record check here repeats it so rows supplied
+        directly get the same refusal): the prompt TEXT of an audio row would
+        be silently unused, because its prompt side is the waveform. The
+        record's own clip key must carry a non-empty path string -- a record
+        without one would reach the loader as a missing field and leave as an
+        opaque ``unsupported_value`` naming this method's row index, not the
+        dataset line that is actually bad.
+
+        The collator's own discipline is this batch's discipline (see its
+        docstring): strict ``load_audio`` per row (one bad row refuses 96,
+        never a silently shorter batch), NO truncation (a row past
+        ``max_length`` refuses, because truncating audio placeholders drops
+        measured sound), the prompt/target boundary recovered per row off
+        ``attention_mask``, and labels -100 over prompt, padding and every
+        audio placeholder. Only the TRANSLATION happens here:
+        ``completion_mask`` is the collator's own shifted label mask
+        (``labels[:, 1:] != -100``), so supervised positions are exactly the
+        transcript + eos, and ``input_features``/``input_features_mask``
+        travel as ``modality_kwargs`` keys with ONE feature row per TRAINING
+        row (the request API extracts exactly one per clip, every row carries
+        exactly one clip, and the paired sides of one record share theirs).
+        Those keys are therefore training-row-aligned: no
+        ``image_counts``/``video_counts`` are recorded and
+        :func:`_narrow_modality_kwargs_by_row` narrows them by plain rows,
+        unextended, unlike the image/video keys' per-media axis.
+
+        ``pad_token_id`` is required and unused: the collator re-pads RIGHT
+        with the processor's own ``pad_token_id`` (it refuses a processor
+        with none), and the parameter stays because the sole caller,
+        ``_encode_batch``, passes it unconditionally on every path.
+        """
+        import torch
+
+        audio_column = self.config.audio_column
+        if self.config.audio_language is None or audio_column is None:
+            raise TrainerRefusal(  # pragma: no cover -- __init__ refuses this state
+                "0 of 2 required audio declarations (audio_column, "
+                "audio_language) are set but _encode_batch_audio was "
+                "reached; an audio batch cannot be built from a declaration "
+                "that was never made"
+            )
+        rows: list[dict[str, Any]] = []
+        desirable_values: list[bool] = []
+        for record in records:
+            line = int(record[_LINE_KEY])
+            prompt = record.get("prompt")
+            if prompt != AUDIO_PROMPT_SENTINEL:
+                _refuse_exit_96(
+                    f"dataset line {line}, field 'prompt': {prompt!r} is not "
+                    f"the audio sentinel {AUDIO_PROMPT_SENTINEL!r}. An audio "
+                    f"record's prompt is its waveform (the clip named by "
+                    f"{audio_column!r}) and a text prompt would be silently "
+                    f"unused rather than trained; write "
+                    f"{AUDIO_PROMPT_SENTINEL!r} as the prompt of every audio "
+                    f"record, or drop audio_column to train on prompt text"
+                )
+            clip = record.get(audio_column)
+            if not isinstance(clip, str) or not clip.strip():
+                _refuse_exit_96(
+                    f"dataset line {line}, field {audio_column!r}: {clip!r} "
+                    f"is not a non-empty string naming an audio file; an "
+                    f"audio row with no clip would drop the declared "
+                    f"modality between the dataset and the forward"
+                )
+            sides: tuple[tuple[str, str], ...]
+            if self._paired:
+                sides = (
+                    ("chosen", str(record["chosen"])),
+                    ("rejected", str(record["rejected"])),
+                )
+            else:
+                sides = (("completion", str(record["completion"])),)
+            for _side, completion_text in sides:
+                # The collator reads its supervised text from one named cell
+                # ("answer", train_transcription_collator_or_refuse's own
+                # default, so this row shape is the SFT answer/cell shape), so
+                # each side becomes its own row carrying that side's
+                # transcript there and THE SAME clip in audio_column -- the
+                # pair's two sides therefore share one record's audio
+                # features exactly as _encode_batch_media's two sides share
+                # one record's rendered media.
+                rows.append({audio_column: clip, "answer": completion_text})
+                if not self._paired:
+                    label = record["label"]
+                    if not isinstance(label, bool):
+                        raise TrainerRefusal(
+                            f"dataset line {record[_LINE_KEY]}: KTO label "
+                            f"{label!r} was not a bool after validation"
+                        )
+                    desirable_values.append(label)
+
+        collator = self._audio_collator
+        if collator is None:
+            # run() builds the collator before the first step (so its
+            # construction-time refusals fire before one row is decoded); this
+            # rebuild keeps the batch builder usable on its own, with the
+            # processor set directly the way _encode_batch_media is driven.
+            surface = self._audio_surface
+            if surface is None:
+                if self._processor is None:
+                    raise TrainerRefusal(
+                        "0 of 1 audio processors are resolved; run() "
+                        "resolves one through train/audio.py's "
+                        "resolve_audio_surface before any record is encoded"
+                    )
+                surface = PromptSurface(
+                    kind="processor",
+                    surface=self._processor,
+                    reason=(
+                        f"processor path: audio-declared run; the resolved "
+                        f"{type(self._processor).__name__} renders the "
+                        f"transcription request"
+                    ),
+                    supports_images=False,
+                )
+                self._audio_surface = surface
+            collator = train_transcription_collator_or_refuse(
+                surface,
+                audio_column=audio_column,
+                max_length=self.config.max_length,
+                language=self.config.audio_language,
+            )
+            self._audio_collator = collator
+
+        collated = collator(rows)
+        if "input_ids" not in collated or "labels" not in collated:
+            raise TrainerRefusal(  # pragma: no cover -- the collator refuses first
+                "the transcription collator returned a batch without "
+                "input_ids/labels; a row whose prompt/target boundary cannot "
+                "be read cannot enter the preference denominator"
+            )
+        input_ids = collated["input_ids"].to(device)
+        attention_mask = collated["attention_mask"].to(device)
+        labels = collated["labels"].to(device)
+        # The SAME shift the text path derives by hand: target position t
+        # predicts input token t+1, so the collator's label mask moves to
+        # ``completion_mask`` as-is. Supervised positions are exactly the
+        # transcript + eos -- the eos INCLUDED, because SFT supervises it as
+        # the transcript's final token and DPO must price the same span.
+        completion_mask = (labels[:, 1:] != -100).to(torch.float32)
+        target_ids = input_ids[:, 1:]
+        modality_kwargs: dict[str, torch.Tensor] = {
+            key: (value.to(device) if hasattr(value, "to") else value)
+            for key, value in collated.items()
+            if key not in ("input_ids", "attention_mask", "labels")
+        }
+        if AUDIO_FEATURES_KEY not in modality_kwargs:
+            # The audio twin of the pixel drop probe, asked again at the
+            # boundary where THIS trainer takes ownership of the batch:
+            # train/audio.py's collator already refuses 96 if the request
+            # returned no features, so this can only fire when some other
+            # collator is bound to the run. A declared audio axis must be an
+            # EXECUTED axis.
+            _refuse_exit_96(
+                f"audio column {audio_column!r} is DECLARED, but the batch "
+                f"_encode_batch_audio built has modality keys "
+                f"{sorted(modality_kwargs)}: {AUDIO_FEATURES_KEY!r} is "
+                f"absent between the collator and the forward, and the run "
+                f"would train text-only under an audio label"
+            )
+        desirable = (
+            torch.tensor(desirable_values, dtype=torch.bool, device=device)
+            if desirable_values
+            else None
+        )
+        return _EncodedBatch(
+            target_ids=target_ids,
+            completion_mask=completion_mask,
+            attention_mask=attention_mask,
+            input_ids=input_ids,
+            desirable=desirable,
+            modality_kwargs=modality_kwargs,
         )
 
     def _forward_logprobs(
@@ -1693,7 +2031,11 @@ class PreferenceTrainer:
         records = load_pairs_jsonl(self.config.dataset, paired=self._paired)
         declared_columns = {
             column
-            for column in (self.config.image_column, self.config.video_column)
+            for column in (
+                self.config.image_column,
+                self.config.video_column,
+                self.config.audio_column,
+            )
             if column is not None
         }
         carriers = tuple(
@@ -1706,14 +2048,37 @@ class PreferenceTrainer:
             shown = ", ".join(f"line {line} ({key})" for line, key in carriers[:5])
             more = f" and {len(carriers) - 5} more" if len(carriers) > 5 else ""
             _refuse_exit_96(
-                f"{len(carriers)} preference record field(s) carry image or "
-                f"video data in an undeclared column: {shown}{more}. "
+                f"{len(carriers)} preference record field(s) carry image, "
+                f"video or audio data in an undeclared column: {shown}{more}. "
                 f"The offline preference trainer is text-only for any "
-                f"undeclared field; declare image_column/video_column to "
-                f"train on them, or drop the field(s) -- never guessed, and "
-                f"training on the prompt alone would silently drop the "
-                f"modality"
+                f"undeclared field; declare image_column/video_column/"
+                f"audio_column to train on them, or drop the field(s) -- "
+                f"never guessed, and training on the prompt alone would "
+                f"silently drop the modality"
             )
+        if self._needs_audio:
+            # The sentinel is a per-record CLAIM this trainer verifies, not
+            # text it renders: train/audio.py's request path builds the
+            # prompt from the waveform alone, so any other prompt field would
+            # be silently unused -- the sibling of the carrier check above.
+            wrong_prompts = tuple(
+                (record[_LINE_KEY], record["prompt"])
+                for record in records
+                if record["prompt"] != AUDIO_PROMPT_SENTINEL
+            )
+            if wrong_prompts:
+                shown = ", ".join(f"line {line} ({prompt!r})" for line, prompt in wrong_prompts[:5])
+                more = f" and {len(wrong_prompts) - 5} more" if len(wrong_prompts) > 5 else ""
+                _refuse_exit_96(
+                    f"{len(wrong_prompts)} preference record prompt(s) are "
+                    f"not the audio sentinel {AUDIO_PROMPT_SENTINEL!r}: "
+                    f"{shown}{more}. In audio mode the prompt side is the "
+                    f"clip named by audio_column="
+                    f"{self.config.audio_column!r}, and a text prompt would "
+                    f"be silently unused; write {AUDIO_PROMPT_SENTINEL!r} as "
+                    f"the prompt of every audio record, or drop audio_column "
+                    f"to train on prompt text"
+                )
         try:
             import torch
         except ImportError:
@@ -1762,7 +2127,18 @@ class PreferenceTrainer:
         torch.manual_seed(self.config.seed)
 
         try:
-            prompt_surface = resolve_prompt_surface(self.config.model, self._needs_media)
+            if self._needs_audio:
+                # train/audio.py's OWN public surface resolver for a declared
+                # audio column -- CALL that helper rather than re-deriving
+                # it: its AutoProcessor refusal names the AUDIO axis (where
+                # resolve_prompt_surface's messages name image data, and its
+                # no-modality arm would hand back a tokenizer that encodes
+                # the transcript text and drops the waveform without a
+                # signal). Its SystemExit(96) is not an Exception and so is
+                # not absorbed by the handler below.
+                prompt_surface = resolve_audio_surface(self.config.model)
+            else:
+                prompt_surface = resolve_prompt_surface(self.config.model, self._needs_media)
             tokenizer = (
                 prompt_surface.surface
                 if prompt_surface.kind == "tokenizer"
@@ -1777,7 +2153,21 @@ class PreferenceTrainer:
             # always the loaded AutoProcessor here.
             self._processor = prompt_surface.surface
             self._turn_markers = derive_turn_markers(self._processor)
-        if not getattr(tokenizer, "chat_template", None):
+        elif self._needs_audio:
+            # resolve_audio_surface REFUSES (96) rather than returning
+            # kind='tokenizer' (its own docstring), so this is a type
+            # narrowing too. No turn markers are derived here: the audio
+            # path's prompt/target boundary is recovered inside
+            # train/audio.py's collator off attention_mask, over the request
+            # API's own rendering -- this trainer renders no assistant turn
+            # to take markers from.
+            self._processor = prompt_surface.surface
+            self._audio_surface = prompt_surface
+        # An audio-declared run renders NO chat template: its prompt is the
+        # waveform and the request API wraps its own typed prefix, so
+        # demanding a template here would refuse every real Qwen3-ASR
+        # tokenizer for a surface this path never reads.
+        if not self._needs_audio and not getattr(tokenizer, "chat_template", None):
             _refuse_exit_96(
                 f"tokenizer for {self.config.model!r} has no chat "
                 f"template: prompt construction refuses to concatenate "
@@ -1811,8 +2201,40 @@ class PreferenceTrainer:
         if inner_tokenizer is not None:
             inner_tokenizer.padding_side = "right"
 
+        if self._needs_audio:
+            audio_column = self.config.audio_column
+            if self.config.audio_language is None or audio_column is None:
+                raise TrainerRefusal(  # pragma: no cover -- __init__ refuses this
+                    "0 of 2 required audio declarations (audio_column, "
+                    "audio_language) are set; an audio run cannot collate rows"
+                )
+            # Built AFTER the pad/eos fallback above (this collator reads
+            # tokenizer.pad_token_id at construction), so every one of
+            # train/audio.py's construction-time refusals -- a surface that
+            # is not a processor, a null language, a processor with no
+            # pad/eos ids -- fires before one row is decoded.
+            self._audio_collator = train_transcription_collator_or_refuse(
+                prompt_surface,
+                audio_column=audio_column,
+                max_length=self.config.max_length,
+                language=self.config.audio_language,
+            )
+
         policy_model: Any
-        if self._needs_media:
+        if self._needs_audio:
+            # Qwen3-ASR weights come through transformers' own
+            # Qwen3ASRForConditionalGeneration -- the class the SFT speech
+            # path's request-API arm trains. The loader that resolves it in
+            # the SFT plane lives OUTSIDE these files (train/loop.py behind
+            # build_speech_collator), and train/audio.py's own public surface
+            # is resolve_audio_surface plus its collators -- the processor
+            # resolution above CALLS that helper rather than re-deriving it.
+            # _load_asr_lm names the class once and refuses a copy whose
+            # forward does not name input_features (**kwargs does not
+            # count): an auto-class pick would load this checkpoint and
+            # silently absorb the audio features.
+            policy_model = _load_asr_lm(self.config.model)
+        elif self._needs_media:
             # _load_causal_lm picks AutoModelForImageTextToText
             # deterministically BEFORE from_pretrained and PROVES the loaded
             # instance can consume pixels (exit 96, naming the model type,
@@ -1925,7 +2347,12 @@ class PreferenceTrainer:
                 )
             else:
                 loaded_reference: Any
-                if self._needs_media:
+                if self._needs_audio:
+                    # Same audio loader (and the same input_features proof)
+                    # as the policy load above: the reference is one frozen
+                    # second copy of the audio-declared checkpoint.
+                    loaded_reference = _load_asr_lm(self.config.model)
+                elif self._needs_media:
                     # Same defect-closing loader as the policy load above:
                     # a second AutoModelForCausalLM copy of a media-declared
                     # qwen3_5-family checkpoint would load without error and
