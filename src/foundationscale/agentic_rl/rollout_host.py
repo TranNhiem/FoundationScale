@@ -380,7 +380,16 @@ class RolloutHost:
                     step=step,
                 )
             finally:
-                await instance.close()
+                try:
+                    await instance.close()
+                except EnvInfraError as exc:
+                    # The episode's row is already final; a sandbox that failed to delete is
+                    # an operator problem (a leaked container), not a reason to lose the step.
+                    print(
+                        f"[agentic-rl:env] close failed for {session_id}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
     async def _gather_step(self, step: int, tasks: Sequence[EpisodeTask]) -> list[Trajectory]:
         """Build and run EVERY attempt of ``tasks`` for ``step``, returning one

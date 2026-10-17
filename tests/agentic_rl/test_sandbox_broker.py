@@ -6,6 +6,7 @@ import json
 import socket
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -151,3 +152,22 @@ def test_main_serves_until_shutdown(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert broker.main(["--port", "0", "--token-file", str(token_file)]) == 0
     assert started and token_file.exists()
     assert sys.platform  # the CLI ran end to end without binding a public address
+
+
+def test_kill_all_reaches_only_its_own_session(server: tuple[str, int]) -> None:
+    survivor = BrokerRunner(*server, TOKEN)
+    killer = BrokerRunner(*server, TOKEN)
+    results: list[object] = []
+    thread = threading.Thread(
+        target=lambda: results.append(survivor.run(["sh", "-c", "sleep 1; echo alive"]))
+    )
+    thread.start()
+    time.sleep(0.3)
+    killer.kill_all()  # another sandbox stopping must not SIGKILL this one's command
+    thread.join(10)
+    assert [(r.returncode, r.stdout) for r in results] == [(0, "alive\n")]  # type: ignore[attr-defined]
+
+
+def test_a_request_without_a_session_is_refused(server: tuple[str, int]) -> None:
+    reply = _raw(server, json.dumps({"token": TOKEN, "op": "kill_all"}).encode() + b"\n")
+    assert reply == {"error": "bad request: expected a non-empty session id"}

@@ -15,7 +15,8 @@ is its :class:`~foundationscale.agentic_rl.sandbox.enroot.Runner` (the ``enroot`
 The broker executes arbitrary argv as the user running it, so it binds loopback only and every
 request must carry the token stored in a ``0600`` file that only that user can read (other users
 on the node can reach the port, not the token). One request per connection, one JSON line each
-way. One broker serves one trainer: ``kill_all`` kills every run in flight on that broker.
+way. Each ``BrokerRunner`` is its own session on the broker, so ``kill_all`` reaches only the
+runs of the sandbox that issued it, never another episode's.
 
     python -m foundationscale.agentic_rl.sandbox.broker --port 18600 --token-file ~/.fsar-broker
 """
@@ -30,6 +31,7 @@ import secrets
 import socket
 import socketserver
 import stat
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -75,11 +77,30 @@ def ensure_token_file(token_file: str | Path) -> str:
     return read_token(path)
 
 
-def _handle(runner: SubprocessRunner, token: str, request: Mapping[str, Any]) -> dict[str, Any]:
+class _Sessions:
+    """One ``SubprocessRunner`` per client session, so ``kill_all`` reaches only that client's
+    runs: every ``EnrootSandbox`` calls ``kill_all`` when it stops, and on a shared runner one
+    stopping sandbox SIGKILLed the commands of every other episode in flight. An idle session is
+    an empty runner (about a kilobyte), so a run's thousands of sandboxes stay cheap."""
+
+    def __init__(self) -> None:
+        self._runners: dict[str, SubprocessRunner] = {}
+        self._lock = threading.Lock()
+
+    def get(self, session: str) -> SubprocessRunner:
+        with self._lock:
+            return self._runners.setdefault(session, SubprocessRunner())
+
+
+def _handle(sessions: _Sessions, token: str, request: Mapping[str, Any]) -> dict[str, Any]:
     """Execute one authenticated request; every failure is an ``{"error": ...}`` reply."""
     offered = request.get("token")
     if not isinstance(offered, str) or not hmac.compare_digest(offered, token):
         return {"error": "unauthorized"}
+    session = request.get("session")
+    if not isinstance(session, str) or not session:
+        return {"error": "bad request: expected a non-empty session id"}
+    runner = sessions.get(session)
     op = request.get("op")
     try:
         if op == "run":
@@ -120,7 +141,7 @@ def make_server(host: str, port: int, token: str) -> socketserver.ThreadingTCPSe
             f"host: expected a loopback address {_LOOPBACK}, got {host!r}: the broker runs "
             f"arbitrary commands and must not be reachable from other machines"
         )
-    runner = SubprocessRunner()
+    sessions = _Sessions()
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self) -> None:
@@ -131,7 +152,7 @@ def make_server(host: str, port: int, token: str) -> socketserver.ThreadingTCPSe
                 reply: dict[str, Any] = {"error": "bad request: not one JSON line"}
             else:
                 if isinstance(request, dict):
-                    reply = _handle(runner, token, request)
+                    reply = _handle(sessions, token, request)
                 else:
                     reply = {"error": "bad request: not a JSON object"}
             self.wfile.write(json.dumps(reply).encode() + b"\n")
@@ -148,6 +169,7 @@ class BrokerRunner:
     def __init__(self, host: str, port: int, token: str) -> None:
         self._address = (host, port)
         self._token = token
+        self._session = secrets.token_hex(8)  # scopes kill_all to this runner's own runs
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str]) -> BrokerRunner | None:
@@ -166,7 +188,8 @@ class BrokerRunner:
         return cls(host, int(port), read_token(token_file))
 
     def _call(self, op: str, wait_s: float | None, **fields: Any) -> dict[str, Any]:
-        request = json.dumps({"token": self._token, "op": op, **fields}).encode() + b"\n"
+        payload = {"token": self._token, "session": self._session, "op": op, **fields}
+        request = json.dumps(payload).encode() + b"\n"
         wait = None if wait_s is None else wait_s + _REPLY_GRACE_S
         try:
             with socket.create_connection(self._address, timeout=30.0) as conn:

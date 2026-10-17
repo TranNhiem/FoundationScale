@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from foundationscale.agentic_rl import markup
 from foundationscale.agentic_rl.envs.base import (
     EnvInfraError,
@@ -300,3 +302,29 @@ def test_a_verification_infra_error_is_an_abstention_not_a_zero(tmp_path: Path) 
 def test_plain_environments_are_never_verified(tmp_path: Path) -> None:
     host = _host(tmp_path, client_factory=lambda i: SubmitClient(), uids=["taskA"])
     assert all(r is not None for r in host.rollout(0).columns["reward"])
+
+
+class LeakyEnv(VerifyingEnv):
+    """Closes the real environment, then reports the sandbox delete as failed."""
+
+    async def close(self) -> None:
+        await super().close()
+        raise EnvInfraError("stop_failed", "enroot remove failed")
+
+
+def test_a_failing_close_is_logged_and_the_step_survives(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    backend = TaskBackend({"tests": "pass"})
+    local = backend._local
+
+    def create_for_task(spec: EnvSpec, task: Any, *, instance_id: str) -> Any:
+        return LeakyEnv(local.create(spec, instance_id=instance_id), task.uid, {"tests": "pass"})
+
+    backend.create_for_task = create_for_task  # type: ignore[method-assign]
+    host = _host(
+        tmp_path, client_factory=lambda i: SubmitClient(), uids=["taskA"],
+        env_backend=backend, reward=MetadataReward(),
+    )  # fmt: skip
+    assert list(host.rollout(0).columns["reward"]) == [1.0, 1.0]
+    assert capsys.readouterr().err.count("[agentic-rl:env] close failed for taskA#") == 2
