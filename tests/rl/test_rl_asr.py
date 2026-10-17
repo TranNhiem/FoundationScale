@@ -896,3 +896,22 @@ def test_stack_feature_rows_pads_the_frame_axis_keeping_the_mel_axis() -> None:
     assert float(out[0, :, :30].sum()) == 128 * 30  # the clip itself is untouched
     masks = _stack_feature_rows([torch.ones(1, 30), torch.ones(1, 50)], key="mask")
     assert tuple(masks.shape) == (2, 50) and float(masks[0, 30:].sum()) == 0.0
+
+
+def test_wer_reward_floors_the_wer_term_so_one_runaway_cannot_swamp_a_group() -> None:
+    from foundationscale.rl.rewards import WERReward
+
+    gold = "one two three"
+    runaway = " ".join(["noise"] * 200)
+    assert WERReward().score(response=runaway, gold=gold) == WERReward.WER_FLOOR
+    penalised = WERReward(runaway_penalty=1.0, loop_penalty=1.0).score(response=runaway, gold=gold)
+    assert penalised >= WERReward.WER_FLOOR - 2.0
+    assert WERReward().score(response="", gold=gold) == 0.0  # empty: scored, WER 1.0
+
+
+@pytest.mark.parametrize("bad", [-0.5, float("nan"), float("inf"), True, "1"])
+def test_wer_reward_refuses_a_penalty_that_is_not_a_finite_non_negative_number(bad: object) -> None:
+    from foundationscale.rl.rewards import WERReward
+
+    with pytest.raises(ValueError):
+        WERReward(runaway_penalty=bad)  # type: ignore[arg-type]

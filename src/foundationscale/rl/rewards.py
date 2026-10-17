@@ -17,8 +17,10 @@ anything.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
+from typing import ClassVar
 
 from foundationscale.train.speech_metrics import (
     is_runaway,
@@ -152,17 +154,34 @@ class WERReward:
     runaway_penalty: float = 0.0
     loop_penalty: float = 0.0
 
+    # 1 - WER is unbounded below: a runaway transcript of 256 tokens against a
+    # 3-word gold reads about -85, and under group-relative advantages that one
+    # row swamps every other row of its group. The WER term is floored here;
+    # the declared penalties then sit on top, so the worst score is
+    # WER_FLOOR - runaway_penalty - loop_penalty.
+    WER_FLOOR: ClassVar[float] = -1.0
+
+    def __post_init__(self) -> None:
+        for name in ("runaway_penalty", "loop_penalty"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"WERReward.{name}={value!r}: a number >= 0")
+            if not math.isfinite(value) or value < 0:
+                # A negative penalty would REWARD the degeneration it names.
+                raise ValueError(f"WERReward.{name}={value!r}: finite and >= 0")
+
     def score(self, *, response: str, gold: str) -> float | None:
         """Score one generated transcript; ``None`` means abstain, never ``0.0``.
 
         ``gold`` is the record's VERIFIED transcript -- on the audio leg its
-        manifest refuses a blank one with its line number (asr_rollout), so a
-        normที่... an empty NORMALIZED gold is not a gold at all and abstains
-        rather than scoring against nothing.
+        manifest refuses a blank one with its line number (asr_rollout) -- and
+        a gold that normalizes to nothing abstains rather than scoring against
+        nothing. An empty RESPONSE is scored, not abstained: it deletes every
+        gold word, WER 1.0, reward 0.0.
         """
         if not normalize_transcript(gold):
             return None
-        score = 1.0 - word_errors(gold, response).rate()
+        score = max(1.0 - word_errors(gold, response).rate(), self.WER_FLOOR)
         if is_runaway(gold, response):
             score -= self.runaway_penalty
         if loop_words(normalize_transcript(response)) > 0:
