@@ -336,6 +336,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "line-covered by tests/agentic_rl/test_math_reward*.py, but no mutation row yet proves a "
         "flipped equivalence rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/envs/sandbox_task.py": (
+        "per-task Enroot env (enroot_task: hidden-test seal/unseal, pytest -rA report parsing): "
+        "fully line-covered by tests/agentic_rl/test_envs_sandbox_task.py, but no mutation row "
+        "yet proves a flipped parse or lifecycle rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/rewards/swe.py": (
         "test-based SWE reward (fail_to_pass / pass_to_pass verdicts): fully line-covered by "
         "tests/agentic_rl/test_swe_reward.py, but no mutation row yet proves a flipped verdict "

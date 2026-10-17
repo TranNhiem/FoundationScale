@@ -540,3 +540,13 @@ def _make_local_backend() -> EnvBackend:
 
 
 register_env_backend("local", _make_local_backend)
+
+
+def _make_enroot_task_backend() -> EnvBackend:
+    """Build one per-task Enroot backend; imports ``envs.sandbox_task`` lazily (circular import)."""
+    from foundationscale.agentic_rl.envs.sandbox_task import EnrootTaskBackend
+
+    return EnrootTaskBackend()
+
+
+register_env_backend("enroot_task", _make_enroot_task_backend)
