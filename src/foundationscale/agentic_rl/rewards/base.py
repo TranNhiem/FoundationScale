@@ -179,6 +179,9 @@ class MathRewardFn:
             return RewardVerdict(None, "no_assistant_turn")
         reference = task.metadata.get("answer") if task.metadata else None
         math_score = await asyncio.to_thread(
-            self.scorer.score, text, None if reference is None else str(reference)
+            self.scorer.score,
+            text,
+            None if reference is None else str(reference),
+            submitted=outcome.submitted_answer is not None,
         )
         return RewardVerdict(math_score.value, math_score.note)

@@ -152,10 +152,16 @@ class MathScore:
 class MathAnswerReward:
     """Scores a response's final answer against the task's reference answer (1.0 or 0.0)."""
 
-    def score(self, text: str, reference: str | None) -> MathScore:
+    def score(self, text: str, reference: str | None, *, submitted: bool = False) -> MathScore:
+        """``submitted=True`` when ``text`` is the argument of the episode's submit tool: a short
+        one-line submission without ``\\boxed{}`` (e.g. ``"42"``) is then itself the answer.
+        """
         if reference is None or not str(reference).strip():
             return MathScore(0.0, "no_reference")
         answer = extract_final_answer(text)
+        bare = text.strip()
+        if answer is None and submitted and bare and "\n" not in bare:
+            answer = bare if len(bare) <= MAX_ANSWER_CHARS else None
         if answer is None:
             return MathScore(0.0, "no_answer")
         if answers_equivalent(answer, str(reference)):

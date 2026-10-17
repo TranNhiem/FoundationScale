@@ -102,3 +102,7 @@ def test_real_run_builds_the_math_reward_adapter() -> None:
 
     host = cli_module._build_real_run(build_config(_raw({"kind": "math"}), {}))
     assert isinstance(host.reward, MathRewardFn)
+
+
+def test_adapter_accepts_a_bare_submitted_answer() -> None:
+    assert _score(_task({"answer": "1/2"}), _outcome("0.5")) == (1.0, "correct")

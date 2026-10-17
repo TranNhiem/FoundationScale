@@ -100,3 +100,11 @@ def test_garbage_never_raises() -> None:
 def test_scorer_notes(text: str, reference: str | None, value: float, note: str) -> None:
     score = MathAnswerReward().score(text, reference)
     assert (score.value, score.note) == (value, note)
+
+
+def test_a_bare_submitted_answer_counts_only_when_submitted() -> None:
+    reward = MathAnswerReward()
+    assert reward.score("42", "42", submitted=True).note == "correct"
+    assert reward.score("42", "42").note == "no_answer"  # free text needs \\boxed{} or "Answer:"
+    assert reward.score("line one\nline two", "42", submitted=True).note == "no_answer"
+    assert reward.score("9" * (MAX_ANSWER_CHARS + 1), "42", submitted=True).note == "no_answer"
