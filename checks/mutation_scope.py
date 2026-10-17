@@ -120,6 +120,10 @@ PENDING_ENROLMENT: dict[str, str] = {
         "Alpamayo-2 SFT declaration rendering alpamayo-recipes' own launchers, with the README's "
         "published losses: line-covered by tests/vla, no mutation row yet."
     ),
+    "src/foundationscale/vla/adapters/longwam/finetune.py": (
+        "Long-WAM LIBERO fine-tune declaration rendering Long-WAM's scripts/train.py, holding the "
+        "published global batch of 128: line-covered by tests/vla, no mutation row yet."
+    ),
     "src/foundationscale/vla/adapters/longwam/libero.py": (
         "Long-WAM LIBERO client (per-step act, NumPy-version-safe array transport, refusals): "
         "line-covered by tests/vla, no mutation row yet."
