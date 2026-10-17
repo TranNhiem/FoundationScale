@@ -942,6 +942,13 @@ def _narrow_modality_kwargs_by_row(
     return narrowed
 
 
+# Per-clip audio conditioning the processor returns next to input_ids; see
+# _align_modality_keys_to_scored_width.
+_AUDIO_CONDITIONING_KEYS = frozenset(
+    {"input_features", "input_features_mask", "feature_attention_mask"}
+)
+
+
 def _align_modality_keys_to_scored_width(
     modality_kwargs: dict[str, torch.Tensor], *, prompt_width: int, sequence_width: int
 ) -> dict[str, torch.Tensor]:
@@ -985,6 +992,16 @@ def _align_modality_keys_to_scored_width(
     pad_width = sequence_width - prompt_width
     aligned: dict[str, Any] = {}
     for key, value in modality_kwargs.items():
+        if key in _AUDIO_CONDITIONING_KEYS:
+            # Audio features are per-CLIP, never per-token, and their axis 1
+            # (mel bins for input_features, frames for its mask) can EQUAL the
+            # prompt width by coincidence. MEASURED (SP-3 GRPO, Qwen3-ASR-0.6B,
+            # step ~228): a 128-token prompt matched the 128 mel bins, the mel
+            # axis was padded to 168 and the encoder's conv_out raised
+            # (3744x10080 vs 7680x896). The shape test below cannot tell them
+            # apart, so these keys are exempt by name.
+            aligned[key] = value
+            continue
         if value.dim() >= 2 and value.shape[1] == prompt_width:
             pad = value.new_zeros((value.shape[0], pad_width, *value.shape[2:]))
             aligned[key] = torch.cat([value, pad], dim=1)

@@ -915,3 +915,27 @@ def test_wer_reward_refuses_a_penalty_that_is_not_a_finite_non_negative_number(b
 
     with pytest.raises(ValueError):
         WERReward(runaway_penalty=bad)  # type: ignore[arg-type]
+
+
+def test_scored_width_alignment_leaves_audio_features_alone_when_a_width_collides() -> None:
+    """Regression (SP-3 GPU run): a 128-token prompt equals the 128 mel bins.
+
+    The per-token heuristic pads any axis-1 that equals the prompt width; audio
+    features are per-clip and must pass through unchanged, while a genuine
+    per-token key still extends to the scored width.
+    """
+    import torch
+
+    from foundationscale.rl.trainer import _align_modality_keys_to_scored_width
+
+    features = torch.ones(2, 128, 300)
+    mask = torch.ones(2, 128)  # frames == prompt width, also a coincidence
+    token_types = torch.ones(2, 128, dtype=torch.long)
+    out = _align_modality_keys_to_scored_width(
+        {"input_features": features, "input_features_mask": mask, "mm_token_type_ids": token_types},
+        prompt_width=128,
+        sequence_width=168,
+    )
+    assert tuple(out["input_features"].shape) == (2, 128, 300)
+    assert tuple(out["input_features_mask"].shape) == (2, 128)
+    assert tuple(out["mm_token_type_ids"].shape) == (2, 168)
