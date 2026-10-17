@@ -276,6 +276,7 @@ def test_silent_audio_changes_the_loss_real_vs_silence_control(tmp_path: Path) -
         silent_dir=None,
         audio_column=audio_column,
     )
+    (tmp_path / "silent_clips").mkdir(exist_ok=True)
     silent_dataset = _materialise_pairs(
         rows,
         out_path=tmp_path / "pairs_silent.jsonl",
@@ -283,16 +284,6 @@ def test_silent_audio_changes_the_loss_real_vs_silence_control(tmp_path: Path) -
         audio_column=audio_column,
     )
     assert silent_dataset != real_dataset
-    (tmp_path / "silent_clips").mkdir(exist_ok=True)
-    # _materialise_pairs above wrote the silent twins while creating the file;
-    # re-materialise now that the directory exists so the paths it names are
-    # the ones soundfile just wrote.
-    silent_dataset = _materialise_pairs(
-        rows,
-        out_path=tmp_path / "pairs_silent.jsonl",
-        silent_dir=tmp_path / "silent_clips",
-        audio_column=audio_column,
-    )
 
     try:
         losses_real, peak_real = _run_steps(real_dataset, model_dir=model_dir, max_steps=2)
