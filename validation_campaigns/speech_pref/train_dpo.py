@@ -19,7 +19,9 @@ def main() -> None:
     ap.add_argument("--save-dir", required=True)
     ap.add_argument("--algorithm", default="dpo")
     ap.add_argument("--beta", type=float, default=0.1)
-    ap.add_argument("--sft-weight", type=float, default=0.0, help="NLL anchor on the chosen side (RPO)")
+    ap.add_argument(
+        "--sft-weight", type=float, default=0.0, help="NLL anchor on the chosen side (RPO)"
+    )
     ap.add_argument("--learning-rate", type=float, default=1e-6)
     ap.add_argument("--pairs-per-step", type=int, default=16)
     ap.add_argument("--max-steps", type=int, required=True)

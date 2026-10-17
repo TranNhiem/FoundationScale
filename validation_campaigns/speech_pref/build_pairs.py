@@ -140,7 +140,10 @@ def load_audio_prompt_sentinel() -> tuple[str, str]:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Build ASR preference pairs (audio-mode contract records) from an SFT Qwen3-ASR checkpoint."
+        description=(
+            "Build ASR preference pairs (audio-mode contract records) "
+            "from an SFT Qwen3-ASR checkpoint."
+        )
     )
     ap.add_argument("--model", required=True, help="SFT checkpoint dir (weights only)")
     ap.add_argument(
@@ -165,7 +168,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--language",
         default="en",
-        help="transcription request language; none = Qwen3-ASR's own (eval_qwen3_asr.py's eval setting)",
+        help=(
+            "transcription request language; none = Qwen3-ASR's own "
+            "(eval_qwen3_asr.py's eval setting)"
+        ),
     )
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument(
@@ -181,7 +187,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def read_manifest(path: Path) -> list[dict[str, Any]]:
-    """Every non-empty line as a JSON object. A line that is not one is a REFUSAL, not a row lost."""
+    """Every non-empty line as one JSON object; a line that is not one is REFUSED, not lost."""
     rows: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
         for lineno, line in enumerate(handle, 1):
@@ -232,12 +238,12 @@ def step_fields(
 ) -> tuple[dict[str, Any] | None, str | None]:
     """(id / reference / audio path | None, skip reason | None) for one manifest row.
 
-    A field that is not a non-empty string is no field at all -- a JSON null in the transcript column
-    can neither be scored nor paired -- and is counted under its missing reason. The reference that
-    normalizes to nothing is refused here and NOW: ``EditCounts.rate()`` has no rate over zero
-    reference words and 0.0 would turn "nothing measured" into "perfect". The audio path is published
-    ABSOLUTE: a pair set pointing at paths relative to a directory nobody recorded is not portable to
-    the box that reads it next.
+    A field that is not a non-empty string is no field at all -- a JSON null in the transcript
+    column can neither be scored nor paired -- and is counted under its missing reason. The
+    reference that normalizes to nothing is refused here and NOW: ``EditCounts.rate()`` has no
+    rate over zero reference words and 0.0 would turn "nothing measured" into "perfect". The
+    audio path is published ABSOLUTE: a pair set pointing at paths relative to a directory
+    nobody recorded is not portable to the box that reads it next.
     """
     audio_value = row.get(keys["audio"]) if keys["audio"] else None
     text_value = row.get(keys["text"]) if keys["text"] else None
@@ -289,7 +295,7 @@ def step_wave(path: Path, expected_rate: int) -> tuple[Any, str | None, str | No
 
 
 def step_load(args: argparse.Namespace) -> tuple[Any, Any]:
-    """Qwen3-ASR processor + model exactly as eval_qwen3_asr.step_load (the -hf model card recipe)."""
+    """Qwen3-ASR processor + model exactly as eval_qwen3_asr.step_load (the -hf card recipe)."""
     from transformers import AutoModelForMultimodalLM, AutoProcessor
 
     # fine-tuned checkpoints carry weights only; their processor is the base model's
@@ -405,7 +411,8 @@ def run_campaign(
     """Fill ``results`` and write the pairs to ``out_path``; return (exit code, reason)."""
     if args.n_samples < 1:
         raise Refusal(
-            f"--n-samples {args.n_samples} must be >= 1: one sampled transcript minimum, plus the greedy one"
+            f"--n-samples {args.n_samples} must be >= 1: one sampled transcript minimum, "
+            f"plus the greedy one"
         )
     if args.batch_size < 1:
         raise Refusal(f"--batch-size {args.batch_size} must be >= 1")
@@ -566,7 +573,8 @@ def run_campaign(
     if unaccounted != 0:
         return (
             EXIT_COVERAGE_SHORT,
-            f"coverage short: {unaccounted} rows left the run with neither a pair nor a counted reason",
+            f"coverage short: {unaccounted} rows left the run with neither a pair "
+            f"nor a counted reason",
         )
     if available == 0:
         return EXIT_COVERAGE_SHORT, f"coverage short: no pair from {results['rows_seen']} rows"

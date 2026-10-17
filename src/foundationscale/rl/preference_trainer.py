@@ -1427,6 +1427,7 @@ class PreferenceTrainer:
         with none), and the parameter stays because the sole caller,
         ``_encode_batch``, passes it unconditionally on every path.
         """
+        del pad_token_id  # the transcription collator pads; kept for the text path's call shape
         import torch
 
         audio_column = self.config.audio_column
