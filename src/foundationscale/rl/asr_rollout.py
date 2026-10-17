@@ -322,7 +322,9 @@ def _encode_audio_prompts(
         for key, value in produced.items():
             try:
                 tensor = torch.as_tensor(value)
-            except (TypeError, ValueError) as exc:
+            # torch raises RuntimeError ("Could not infer dtype of object") for an
+            # arbitrary object, not only TypeError/ValueError.
+            except (TypeError, ValueError, RuntimeError) as exc:
                 raise TrainerRefusal(
                     f"manifest line {record.line}, key {key!r}: the request "
                     f"answered {type(value).__name__}, which no tensor can be "

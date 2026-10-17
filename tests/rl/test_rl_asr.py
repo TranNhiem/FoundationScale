@@ -939,3 +939,485 @@ def test_scored_width_alignment_leaves_audio_features_alone_when_a_width_collide
     assert tuple(out["input_features"].shape) == (2, 128, 300)
     assert tuple(out["input_features_mask"].shape) == (2, 128)
     assert tuple(out["mm_token_type_ids"].shape) == (2, 168)
+
+
+def _read_manifest_bytes(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def _strict_load_audio_manifest(path: str | None, *, capsys: Any) -> asr_rollout.AudioRow | None:
+    """Run ``load_audio_manifest`` and refuse to let SystemExit leak silently.
+
+    Under the exit-96 contract the refusal is a ``SystemExit`` carrying 96 and
+    prints its message to stderr; under the module's own voice it is a
+    ``TrainerRefusal``. Neither may return without refusing.
+    """
+    try:
+        return load_audio_manifest(path)
+    except SystemExit as exc:
+        assert int(exc.code) == 96, f"exit contract is 96, got {exc.code!r}"
+        raise AssertionError(
+            f"load_audio_manifest refused via SystemExit(96): {capsys.readouterr().err!r}"
+        ) from exc
+    return None  # pragma: no cover -- the call above refuses or returns rows
+
+
+def test_load_audio_manifest_refuses_a_non_string_path_and_names_the_path(capsys: Any) -> None:
+    """Line 109: ``dataset=path!r`` is named, and the refusal is a real one.
+
+    1 of 1 dataset paths must be a non-empty string -- the audio manifest
+    reader's whole file lives behind this one field. ``None``, ``""``, ``"   "``
+    and a ``Path`` (which is not a ``str`` to the reader's own
+    ``isinstance(path, str)`` check) are all refused here.
+    """
+    for path in (None, "", "   ", 5):
+        message = _refusal_message(capsys, lambda p=path: load_audio_manifest(p))
+        assert "dataset" in message, f"the refusal must name the dataset field; got {message!r}"
+        assert (
+            repr(path) in message
+            or (isinstance(path, str) and path in message)
+            or str(path) in message
+        ), f"the refusal must name the offending path {path!r}; got {message!r}"
+
+
+def test_load_audio_manifest_refuses_a_blank_line_and_names_its_line(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 119: a blank line is REFUSED with its line number, not skipped.
+
+    The claim this reader makes is "never silently skips a record", which a
+    blank line is exactly the case where that would happen: the jsonl response
+    names line 2 as blank rather than quietly ignoring it or swallowing an
+    empty record.
+    """
+    path = tmp_path / "blank.jsonl"
+    path.write_bytes(b'{"audio": "a.wav", "text": "one"}\n\n{"audio": "b.wav", "text": "two"}\n')
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(path)))
+    match = _LINE_IN_MESSAGE.search(message)
+    assert match, f"the refusal must name its source line; got {message!r}"
+    assert int(match.group(1)) == 2, f"the refusal must name line 2; got {message!r}"
+    assert "blank" in message.lower(), message
+
+
+def test_load_audio_manifest_refuses_invalid_json_and_names_the_line(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 126-127: ``JSONDecodeError`` is caught and re-raised naming the line.
+
+    A malformed record is a REFUSAL in the same voice as a missing field: the
+    message carries the manifest line, the column it choked at, and the
+    decoder's own reason -- never a raw ``json.JSONDecodeError`` that names
+    only what the parser itself saw.
+    """
+    path = tmp_path / "bad.jsonl"
+    path.write_bytes(b'{"audio": "a.wav", "text": "one"}\n{"audio": "b.wav", "text": ')
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(path)))
+    match = _LINE_IN_MESSAGE.search(message)
+    assert match, f"the refusal must name its source line; got {message!r}"
+    assert int(match.group(1)) == 2, f"the refusal must name line 2; got {message!r}"
+    assert "column" in message.lower(), message
+    assert any(word in message.lower() for word in ("invalid", "json", "expecting")), message
+
+
+def test_load_audio_manifest_refuses_a_non_object_record_and_names_the_line(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 132: a decoded JSON array is refused naming its type and its line.
+
+    A jsonl record is a JSON OBJECT; a bare list decodes fine and would let a
+    record reach the field reader without ``audio``/``text`` keys at all. The
+    refusal names the decoded type (``list``) and the line it came from, in the
+    same voice the field refusals use.
+    """
+    path = tmp_path / "list.jsonl"
+    path.write_bytes(b'["a.wav", "one"]\n')
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(path)))
+    match = _LINE_IN_MESSAGE.search(message)
+    assert match, f"the refusal must name its source line; got {message!r}"
+    assert int(match.group(1)) == 1, f"the refusal must name line 1; got {message!r}"
+    assert "list" in message, f"the refusal must name the decoded type; got {message!r}"
+    assert "object" in message.lower(), message
+
+
+def test_load_audio_manifest_refuses_an_unreadable_file_and_names_the_path(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 153: an ``OSError`` reading the manifest is refused naming the path.
+
+    The file may simply be absent -- the manifest is a PATH, so a typo in the
+    run declaration is exactly what this reader is the first to see. The
+    refusal names the dataset path and says no records are available, rather
+    than letting ``FileNotFoundError`` escape as an unhandled ``OSError``.
+    """
+    missing = tmp_path / "no_such_manifest.jsonl"
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(missing)))
+    assert "dataset" in message, f"the refusal must name the dataset field; got {message!r}"
+    assert str(missing) in message or repr(str(missing)) in message, message
+    assert "could not be read" in message.lower(), message
+
+
+def test_load_audio_manifest_refuses_non_utf8_bytes_and_names_the_path(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 158: bytes outside UTF-8 are refused naming the path, not the line.
+
+    Transcript supervision is attributed to decodable bytes; an unknown
+    encoding means the gold cannot be read reliably at all. The refusal names
+    the dataset path (the source of the whole file) and the decoding failure --
+    precisely so the reader never scores a transcript whose text is unknown.
+    """
+    path = tmp_path / "latin.jsonl"
+    path.write_bytes(b'{"audio": "a.wav", "text": "caf\xe9"}\n')
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(path)))
+    assert "dataset" in message, f"the refusal must name the dataset field; got {message!r}"
+    assert "utf-8" in message.lower(), message
+    assert "unknown" in message.lower() or "decoding" in message.lower(), message
+
+
+def test_load_audio_manifest_refuses_an_empty_file_and_names_the_path(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Line 164: zero records is refused naming the path -- an empty run is refused.
+
+    A manifest with no usable rows has no denominator to measure against, and
+    the refusal says so: 0 of 0 lines and the dataset path it read, rather than
+    returning an empty tuple that would divide by nothing later.
+    """
+    path = tmp_path / "empty.jsonl"
+    path.write_bytes(b"")
+    message = _refusal_message(capsys, lambda: load_audio_manifest(str(path)))
+    assert "dataset" in message, f"the refusal must name the dataset field; got {message!r}"
+    assert "0 of 0" in message or "0 records" in message, message
+    assert "measures nothing" in message.lower(), message
+
+
+class _EmptyDecodeProcessor:
+    """A processor whose batch_decode answers one row per call but always empty.
+
+    The refusal this models is ``decoded`` being falsy AFTER a per-row decode --
+    exactly the case ``_decode_completion`` guards before reading its text,
+    since a completion with no decode has no scoreable text at all.
+    """
+
+    def batch_decode(self, sequences: Any, **kwargs: Any) -> list[str]:
+        return []
+
+
+class _ObjectWithText:
+    """A decoded row carrying ``text`` as an attribute, not a mapping key."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _ObjectWithoutText:
+    """A decoded row carrying neither ``text`` key nor ``text`` attribute."""
+
+    def __init__(self) -> None:
+        pass
+
+    def __repr__(self) -> str:  # pragma: no cover -- only for a message's repr() display
+        return "<no text here>"
+
+
+def _decode_completion(processor: Any, token_ids: Any) -> str:
+    return asr_rollout._decode_completion(processor, token_ids)
+
+
+def test_decode_completion_refuses_an_empty_decode_answer(capsys: Any) -> None:
+    """Line 187: a decode that returns no rows is refused, never read as empty.
+
+    ``_decode_completion`` calls ``batch_decode`` with exactly one row, so any
+    falsy answer means the processor failed to answer at all -- and the
+    transcript that would be scored as "" is instead refused as having no
+    scoreable text. The refusal names the missing count rather than letting a
+    bare ``IndexError`` leak from ``decoded[0]``.
+    """
+    message = _refusal_message(capsys, lambda: _decode_completion(_EmptyDecodeProcessor(), (1, 2)))
+    assert "0 of 1" in message or "no decode" in message.lower(), message
+    assert "refus" in message.lower() or "scoreable" in message.lower(), message
+
+
+def test_decode_completion_reads_a_string_row_directly() -> None:
+    """Line 195 (the ``isinstance(text, str)`` arm): a plain string row is its transcript.
+
+    The most common decode answer is the transcript ITSELF -- a bare string,
+    not a record around one -- and that string is returned verbatim, not wrapped,
+    re-keyed, or silently re-decoded.
+    """  # noqa: E401 -- the line comment below covers 195
+
+    class _StringProcessor:
+        def batch_decode(self, sequences: Any, **kwargs: Any) -> list[str]:
+            rows = _rows(sequences)
+            assert len(rows) == 1, "decode is per row"
+            return ["hello world from the row"]
+
+    assert _decode_completion(_StringProcessor(), (1, 2)) == "hello world from the row"
+
+
+def test_decode_completion_reads_text_off_a_record() -> None:
+    """Line 195-198: a mapping row's ``text`` key and an object's ``text`` attribute both read.
+
+    A record/attribute carrying ``text`` is the natural shape for a structured
+    decode response (the same field name the gold transcript uses). Both an
+    ``{"text": ...}`` mapping and a class carrying ``text`` as an attribute are
+    read here -- the string is returned unchanged, not stringified or wrapped.
+    """
+
+    class _RecordProcessor:
+        def __init__(self, row: Any) -> None:
+            self._row = row
+
+        def batch_decode(self, sequences: Any, **kwargs: Any) -> list[Any]:
+            return [self._row]
+
+    assert (
+        _decode_completion(_RecordProcessor({"text": "from a mapping"}), (1,)) == "from a mapping"
+    )
+    assert (
+        _decode_completion(_RecordProcessor(_ObjectWithText("from an attribute")), (1,))
+        == "from an attribute"
+    )
+
+
+def _refusal_for_stack(capsys: Any, rows: Any, key: str = "input_features") -> str:
+    import torch  # noqa: F401 -- the refusal path guarantees the function-local import runs
+
+    return _refusal_message(capsys, lambda: asr_rollout._stack_feature_rows(rows, key=key))
+
+
+def test_stack_feature_rows_refuses_rows_of_disagreeing_rank(capsys: Any) -> None:
+    """Line 242: rows whose .dim() disagree are refused naming the key and shapes.
+
+    One clip's features are one structured row here, so a 2-D row beside a 3-D
+    row is not something a pad block can fix without guessing which axis is
+    missing. The refusal names ``key`` and the offending shapes rather than
+    letting a torch broadcast or cat error escape.
+    """
+    import torch
+
+    message = _refusal_for_stack(
+        capsys, [torch.ones(1, 128, 50), torch.ones(1, 50)], key="input_features"
+    )
+    assert "'input_features'" in message, f"the refusal must name the key; got {message!r}"
+    assert "rank" in message.lower() or "dimensionality" in message.lower(), message
+    assert "(1, 128, 50)" in message and "(1, 50)" in message, (
+        f"the refusal must name both shapes; got {message!r}"
+    )
+
+
+def test_stack_feature_rows_refuses_more_than_one_varying_axis(capsys: Any) -> None:
+    """Line 255: two axes varying across rows is refused naming the key and shapes.
+
+    Only one axis is the audio frame axis and may be padded; a batch whose rows
+    disagree on mel bins AND frames cannot be stacked without guessing which is
+    which. The refusal names the key, the varying axis count and the shapes --
+    not a silent pad of some chosen axis.
+    """
+    import torch
+
+    message = _refusal_for_stack(
+        capsys, [torch.ones(1, 128, 50), torch.ones(1, 64, 30)], key="input_features"
+    )
+    assert "'input_features'" in message, f"the refusal must name the key; got {message!r}"
+    assert "axes vary" in message or "axes" in message, message
+    assert "(1, 128, 50)" in message and "(1, 64, 30)" in message, (
+        f"the refusal must name both shapes; got {message!r}"
+    )
+
+
+def _refusal_for_encode(capsys: Any, processor: Any, chunk: Any) -> str:
+    return _refusal_message(
+        capsys,
+        lambda: asr_rollout._encode_audio_prompts(
+            processor=processor,
+            chunk=chunk,
+            language="en",
+            pad_token_id=0,
+            device="cpu",
+        ),
+    )
+
+
+def _one_record(line: int = 1) -> asr_rollout.AudioRow:
+    return asr_rollout.AudioRow(line=line, audio="a.wav", text="hello world")
+
+
+class _NonMappingRequestProcessor:
+    """A processor whose request answers a bare list, not a mapping of tensors."""
+
+    def apply_transcription_request(self, audio: Any = None, language: Any = None, **kwargs: Any):
+        return [7, 6, 7]
+
+
+class _NonTensorRequestProcessor:
+    """A processor whose request has one value no tensor can be read from."""
+
+    def apply_transcription_request(self, audio: Any = None, language: Any = None, **kwargs: Any):
+        import torch
+
+        return {
+            "input_ids": torch.tensor([[7, 6, 7]], dtype=torch.long),
+            "input_features": object(),  # no ``tolist``, no tensor constructor
+        }
+
+
+class _MissingInputIdsRequestProcessor:
+    """A request answering only feature keys -- no ``input_ids`` to continue."""
+
+    def apply_transcription_request(self, audio: Any = None, language: Any = None, **kwargs: Any):
+        import torch
+
+        return {
+            "input_features": torch.zeros((1, 7, 8)),
+            "input_features_mask": torch.ones((1, 7), dtype=torch.long),
+        }
+
+
+class _WideRequestProcessor:
+    """A request answering TWO batch rows for ONE clip."""
+
+    def apply_transcription_request(self, audio: Any = None, language: Any = None, **kwargs: Any):
+        import torch
+
+        return {
+            "input_ids": torch.tensor([[7, 6, 7], [7, 6, 7]], dtype=torch.long),
+            "attention_mask": torch.ones((2, 3), dtype=torch.long),
+        }
+
+
+class _DisagreeingKeySetsProcessor:
+    """A processor whose two clips answer DIFFERENT key sets.
+
+    The first clip carries an extra key the second does not -- exactly the case
+    a pad-in would have to drop or invent a conditioning for.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def apply_transcription_request(self, audio: Any = None, language: Any = None, **kwargs: Any):
+        import torch
+
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "input_ids": torch.tensor([[7, 6, 7]], dtype=torch.long),
+                "attention_mask": torch.ones((1, 3), dtype=torch.long),
+                "input_features": torch.zeros((1, 7, 8)),
+            }
+        return {
+            "input_ids": torch.tensor([[7, 6, 7]], dtype=torch.long),
+            "attention_mask": torch.ones((1, 3), dtype=torch.long),
+        }
+
+
+def test_encode_audio_prompts_refuses_a_non_mapping_request(capsys: Any) -> None:
+    """Line 314: a request answering a non-mapping is refused naming the line and clip.
+
+    A transcription request must yield a mapping of prompt tensors (input_ids
+    plus its feature keys); a bare list gives no place to read the prompt from
+    at all. The refusal names the manifest line and the clip audio prompt, and
+    says what the surface must yield -- not a crash reading ``.items()`` on a
+    list.
+    """
+    message = _refusal_for_encode(capsys, _NonMappingRequestProcessor(), [_one_record(line=1)])
+    assert "manifest line 1" in message or _LINE_IN_MESSAGE.search(message), message
+    assert "'a.wav'" in message or "a.wav" in message, message
+    assert "list" in message, f"the refusal must name the decoded type; got {message!r}"
+    assert "mapping" in message.lower(), message
+
+
+def test_encode_audio_prompts_refuses_a_value_no_tensor_can_be_read_from(capsys: Any) -> None:
+    """Line 325-326: a request value no tensor can be read from is refused naming the key.
+
+    ``torch.as_tensor`` on a bare ``object()`` raises before any batching is
+    attempted; the refusal names the manifest line, the offending key and the
+    value's type rather than letting ``TypeError``/``ValueError`` escape from
+    the tensor constructor's own message.
+    """
+    message = _refusal_for_encode(capsys, _NonTensorRequestProcessor(), [_one_record(line=3)])
+    assert "manifest line 3" in message or _LINE_IN_MESSAGE.search(message), message
+    assert "'input_features'" in message or "input_features" in message, message
+    assert "object" in message, f"the refusal must name the decoded type; got {message!r}"
+    assert any(word in message.lower() for word in ("tensor", "read")), message
+
+
+def test_encode_audio_prompts_reads_one_clip_as_one_batch_row() -> None:
+    """Line 333: a 1-D request value is unsqueezed to a single batch row.
+
+    A request made without ``return_tensors`` is entitled to answer plain lists
+    (or a 1-D tensor) rather than a batched one -- and one clip is still 1 batch
+    row by contract. A 1-D ``input_ids`` row of shape ``(3,)`` becomes ``(1, 3)``
+    here rather than being read as three batch rows of nothing.
+    """
+
+    class _ListRequestProcessor:
+        def apply_transcription_request(self, audio=None, language=None, **kwargs: Any):
+            return {"input_ids": [7, 6, 7]}
+
+    batched = asr_rollout._encode_audio_prompts(
+        processor=_ListRequestProcessor(),
+        chunk=[_one_record()],
+        language="en",
+        pad_token_id=0,
+        device="cpu",
+    )
+    assert tuple(int(s) for s in batched["input_ids"].shape) == (1, 3), (
+        f"a 1-D request answer must be read as ONE clip in ONE batch row, got "
+        f"{tuple(int(s) for s in batched['input_ids'].shape)}"
+    )
+    assert [int(v) for v in batched["input_ids"].reshape(-1).tolist()] == [7, 6, 7]
+    assert [int(v) for v in batched["attention_mask"].reshape(-1).tolist()] == [1, 1, 1]
+
+
+def test_encode_audio_prompts_refuses_a_request_wider_than_one_clip(capsys: Any) -> None:
+    """Line 335: a request answering 2 batch rows for ONE clip is refused with its shapes.
+
+    One clip is 1 batch row here; anything wider would have to be cut or
+    re-attributed to another clip silently, which this contract refuses. The
+    message carries the manifest line, the key and the offending shape.
+    """
+    message = _refusal_for_encode(capsys, _WideRequestProcessor(), [_one_record(line=2)])
+    assert "manifest line 2" in message or _LINE_IN_MESSAGE.search(message), message
+    assert "'input_ids'" in message or "input_ids" in message, message
+    assert "(2, 3)" in message, f"the refusal must name the assembled shape; got {message!r}"
+    assert any(word in message.lower() for word in ("cut", "re-attributed", "batch row")), message
+
+
+def test_encode_audio_prompts_refuses_a_request_without_input_ids(capsys: Any) -> None:
+    """Line 343: a request with no ``input_ids`` is refused naming the keys it answered.
+
+    ``generate()`` has no prompt to continue without input ids, so a request
+    answering only feature tensors is refused naming the manifest line, the
+    clip and the keys it DID carry -- not a silent fallback to some other key or
+    an empty prompt.
+    """
+    message = _refusal_for_encode(capsys, _MissingInputIdsRequestProcessor(), [_one_record(line=4)])
+    assert "manifest line 4" in message or _LINE_IN_MESSAGE.search(message), message
+    assert "'a.wav'" in message or "a.wav" in message, message
+    assert "input_ids" in message, f"the refusal must name the missing key; got {message!r}"
+    assert "input_features" in message, f"the refusal must name the answered keys; got {message!r}"
+
+
+def test_encode_audio_prompts_refuses_rows_with_disagreeing_key_sets(capsys: Any) -> None:
+    """Line 359: two rows disagreeing about their key set are refused naming both sets.
+
+    A batch whose rows disagree about what the prompt carries cannot be stacked
+    without dropping or inventing a conditioning key in one of them. The
+    refusal names both sorted key sets -- the exact sets, not just a count --
+    so an unannounced key is visible in the message rather than silently
+    dropped.
+    """
+    records = [
+        asr_rollout.AudioRow(line=1, audio="a.wav", text="one"),
+        asr_rollout.AudioRow(line=2, audio="b.wav", text="two"),
+    ]
+    message = _refusal_for_encode(capsys, _DisagreeingKeySetsProcessor(), records)
+    assert "2 distinct key set" in message or "key set" in message.lower(), message
+    assert "'input_features'" in message or "input_features" in message, message
+    assert "cannot be stacked" in message or "dropping a key" in message.lower(), message
+    # Both distinct sets are named, not just a count.
+    assert any(
+        set_name in message for set_name in ("input_ids", "attention_mask", "input_features")
+    ), message

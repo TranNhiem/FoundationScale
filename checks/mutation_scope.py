@@ -76,6 +76,11 @@ EXIT_REFUSE = 96
 # counted, not a green one being hidden.  OUT_OF_SCOPE is excluded only under a reason no
 # other file could wear; R4 and R5 police the reasons themselves.
 PENDING_ENROLMENT: dict[str, str] = {
+    "src/foundationscale/rl/asr_rollout.py": (
+        "SP-3 audio rollouts for Qwen3-ASR (transcription request per clip, group sampling, "
+        "per-clip feature stacking): line-covered by tests/rl/test_rl_asr.py and GPU-verified, "
+        "no mutation row yet."
+    ),
     "src/foundationscale/upstream/vla_models.py": (
         "VLA model registry (GR00T, openpi SUPPORTED on reproduced LIBERO results) and the "
         "binomial tolerance rule: line-covered by tests/upstream, no mutation row yet."
