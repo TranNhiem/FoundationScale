@@ -341,6 +341,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "line-covered by tests/agentic_rl/test_math_reward*.py, but no mutation row yet proves a "
         "flipped equivalence rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/sandbox/broker.py": (
+        "host exec broker (token auth, loopback-only bind, runner forwarding): fully line-covered "
+        "by tests/agentic_rl/test_sandbox_broker.py, but no mutation row yet proves a flipped "
+        "auth or bind rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/envs/sandbox_task.py": (
         "per-task Enroot env (enroot_task: hidden-test seal/unseal, pytest -rA report parsing): "
         "fully line-covered by tests/agentic_rl/test_envs_sandbox_task.py, but no mutation row "

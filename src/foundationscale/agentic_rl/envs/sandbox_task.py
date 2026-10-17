@@ -31,6 +31,7 @@ from foundationscale.agentic_rl.envs.base import (
     ExecResult,
 )
 from foundationscale.agentic_rl.integrity import IntegrityRefusal
+from foundationscale.agentic_rl.sandbox.broker import BrokerRunner
 from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, SandboxError, SandboxSpec
 from foundationscale.agentic_rl.sandbox.hidden import HiddenSpec, HiddenVault, SandboxLike
 
@@ -579,11 +580,6 @@ def _sandbox_name(instance_id: str) -> str:
     return instance_id.replace("#", "-")
 
 
-def _enroot_sandbox(spec: SandboxSpec) -> SandboxLikeFull:
-    """The default sandbox factory: a real ``EnrootSandbox`` with its subprocess runner."""
-    return EnrootSandbox(spec)
-
-
 def _hidden_vault(sandbox: SandboxLikeFull, spec: HiddenSpec, vault_dir: str) -> VaultLike:
     """The default vault factory: a real ``HiddenVault`` over the episode's sandbox."""
     # hidden.SandboxLike types exec's result with plain attributes; EnrootSandbox satisfies both.
@@ -619,7 +615,7 @@ class EnrootTaskBackend:
         self._roots = roots
         self._environ: Mapping[str, str] = os.environ if environ is None else environ
         self._sandbox_factory: Callable[[SandboxSpec], SandboxLikeFull] = (
-            sandbox_factory if sandbox_factory is not None else _enroot_sandbox
+            sandbox_factory if sandbox_factory is not None else self._enroot_sandbox
         )
         self._vault_factory: Callable[[SandboxLikeFull, HiddenSpec, str], VaultLike] = (
             vault_factory if vault_factory is not None else _hidden_vault
@@ -688,3 +684,11 @@ class EnrootTaskBackend:
             roots = SandboxRoots.from_environ(self._environ)
             self._roots = roots
         return roots
+
+    def _enroot_sandbox(self, spec: SandboxSpec) -> SandboxLikeFull:
+        """The default sandbox factory: a real ``EnrootSandbox``.
+
+        Its runner is a :class:`BrokerRunner` when ``FS_SANDBOX_BROKER`` is set (a trainer inside
+        a container drives sandboxes through a host broker), else the local subprocess runner.
+        """
+        return EnrootSandbox(spec, runner=BrokerRunner.from_environ(self._environ))

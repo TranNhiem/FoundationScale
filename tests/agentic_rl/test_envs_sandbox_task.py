@@ -771,10 +771,13 @@ def test_enroot_task_backend_default_factories(monkeypatch: pytest.MonkeyPatch) 
     sandbox_instances: list[object] = []
     vault_calls: list[tuple[object, HiddenSpec, str]] = []
 
+    runners: list[object] = []
+
     class RecordingSandbox:
-        def __init__(self, spec: SandboxSpec) -> None:
+        def __init__(self, spec: SandboxSpec, *, runner: object = None) -> None:
             sandbox_specs.append(spec)
             sandbox_instances.append(self)
+            runners.append(runner)
 
     class RecordingVault:
         def __init__(self, sandbox: object, spec: HiddenSpec, vault_dir: str) -> None:
@@ -782,10 +785,11 @@ def test_enroot_task_backend_default_factories(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(sandbox_task, "EnrootSandbox", RecordingSandbox)
     monkeypatch.setattr(sandbox_task, "HiddenVault", RecordingVault)
-    backend = EnrootTaskBackend(roots=_ROOTS)
+    backend = EnrootTaskBackend(roots=_ROOTS, environ={})
     env = backend.create_for_task(_spec(), _task(_META), instance_id="t#0")
     assert isinstance(env, TaskSandboxEnvironment)
     assert [spec.name for spec in sandbox_specs] == ["fsar-t-0"]
+    assert runners == [None]  # no FS_SANDBOX_BROKER: EnrootSandbox's own subprocess runner
     assert len(vault_calls) == 1
     assert vault_calls[0][0] is sandbox_instances[0]
     assert vault_calls[0][1] == HiddenSpec(paths=("/tests",))
@@ -803,3 +807,26 @@ def test_get_env_backend_enroot_task_is_task_aware() -> None:
 def test_task_sandbox_environment_is_verifiable() -> None:
     env, _, _ = _env()
     assert isinstance(env, VerifiableEnvironment)
+
+
+def test_default_factory_uses_the_broker_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runners: list[object] = []
+
+    class RecordingSandbox:
+        def __init__(self, spec: SandboxSpec, *, runner: object = None) -> None:
+            del spec
+            runners.append(runner)
+
+    monkeypatch.setattr(sandbox_task, "EnrootSandbox", RecordingSandbox)
+    token_file = tmp_path / "token"
+    token_file.write_text("secret\n")
+    token_file.chmod(0o600)
+    environ = {
+        "FS_SANDBOX_BROKER": "127.0.0.1:18600",
+        "FS_SANDBOX_BROKER_TOKEN_FILE": str(token_file),
+    }
+    backend = EnrootTaskBackend(roots=_ROOTS, environ=environ, vault_factory=_fake_vault_factory)
+    backend.create_for_task(_spec(), _task(_META), instance_id="t#0")
+    assert [type(r).__name__ for r in runners] == ["BrokerRunner"]
