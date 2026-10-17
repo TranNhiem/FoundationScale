@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from foundationscale.agentic_rl.contracts import SegmentKind
 from foundationscale.agentic_rl.harness.base import EpisodeOutcome, EpisodeTask
+from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
 
 __all__ = (
@@ -142,3 +143,42 @@ class MusicRewardFn:
             return RewardVerdict(None, "no_assistant_turn")
         music_score = await asyncio.to_thread(self.scorer.score, text)
         return RewardVerdict(music_score.value, music_score.reason)
+
+
+@dataclass(frozen=True)
+class MathRewardFn:
+    """Adapter wrapping ``rewards.math.MathAnswerReward`` behind ``RewardFn``.
+
+    The reference answer comes from the task: ``task.metadata["answer"]``. Scores
+    ``outcome.submitted_answer`` when the episode submitted one, else the final generated
+    ASSISTANT turn's text. An episode with no assistant turn at all is UNMEASURED (value None),
+    exactly as in ``MusicRewardFn``; a task without a reference scores 0.0 with the note
+    ``no_reference``, so a broken task file shows up in the run log's reward notes.
+    """
+
+    scorer: MathAnswerReward
+    decode: Callable[[Sequence[int]], str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scorer, MathAnswerReward):
+            raise RewardFnRefusal(
+                f"MathRewardFn: field 'scorer' is {_described(self.scorer)}, not a MathAnswerReward"
+            )
+        if not callable(self.decode):
+            raise RewardFnRefusal(
+                f"MathRewardFn: field 'decode' is {_described(self.decode)}: it must be callable"
+            )
+
+    async def score(self, task: EpisodeTask, outcome: EpisodeOutcome) -> RewardVerdict:
+        text: str | None
+        if outcome.submitted_answer is not None:
+            text = outcome.submitted_answer
+        else:
+            text = _final_assistant_text(outcome, decode=self.decode)
+        if text is None:
+            return RewardVerdict(None, "no_assistant_turn")
+        reference = task.metadata.get("answer") if task.metadata else None
+        math_score = await asyncio.to_thread(
+            self.scorer.score, text, None if reference is None else str(reference)
+        )
+        return RewardVerdict(math_score.value, math_score.note)

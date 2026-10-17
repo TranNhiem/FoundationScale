@@ -55,7 +55,8 @@ from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, 
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
 from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
-from foundationscale.agentic_rl.rewards.base import MusicRewardFn
+from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn
+from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
 from foundationscale.agentic_rl.rollout_host import RolloutHost
 from foundationscale.agentic_rl.stability import (
@@ -234,7 +235,15 @@ def _engine_server_spec(config: AgenticRLConfig) -> EngineServerSpec:
 
 
 def _music_reward(config: AgenticRLConfig) -> MusicReward:
+    assert config.reward.abc2midi_bin is not None  # build_config requires it for kind="music"
     return MusicReward(abc2midi_bin=config.reward.abc2midi_bin, timeout_s=config.reward.timeout_s)
+
+
+def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward:
+    """The scorer ``reward.kind`` names (built without a GPU, so ``--dry-run`` checks it)."""
+    if config.reward.kind == "math":
+        return MathAnswerReward()
+    return _music_reward(config)
 
 
 def _task_source(config: AgenticRLConfig) -> TaskSource:
@@ -255,7 +264,7 @@ def _build_non_gpu_objects(config: AgenticRLConfig) -> dict[str, Any]:
     env_spec = _env_spec(config)
     engine_spec = _engine_server_spec(config)
     fleet = EngineFleet(servers=(EngineServer(engine_spec),))
-    reward = _music_reward(config)
+    reward = _reward_scorer(config)
     tasks = _task_source(config)
     return {
         "tools": tools,
@@ -312,7 +321,12 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         advertise_tools=config.harness.tools == "default",
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
-    reward = MusicRewardFn(scorer=_music_reward(config), decode=chat_tokenizer.decode)
+    scorer = _reward_scorer(config)
+    reward: MusicRewardFn | MathRewardFn
+    if isinstance(scorer, MathAnswerReward):
+        reward = MathRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
+    else:
+        reward = MusicRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
     # save_fn stays None: RolloutHost.publish() builds its OWN save around the
     # real model/tokenizer/ctx it receives from RLTrainer.run() (via
     # rl.distributed.save_checkpoint), never through weight_sync.save_fn --

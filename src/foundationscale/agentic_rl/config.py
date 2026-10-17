@@ -376,8 +376,9 @@ class RolloutConfig:
 
 @dataclass(frozen=True)
 class RewardConfig:
-    abc2midi_bin: str
-    kind: Literal["music"] = "music"
+    # Required for kind="music" (the scorer converts ABC with it); unused (None) for kind="math".
+    abc2midi_bin: str | None
+    kind: Literal["music", "math"] = "music"
     timeout_s: float = 60.0
 
 
@@ -1139,20 +1140,25 @@ def _build_reward(
         required=False,
         provenance=provenance,
     )
-    if kind != "music":
+    if kind not in ("music", "math"):
         raise AgenticConfigRefusal(
-            f"reward.kind: is {_described(kind)}, but 'music' is the only reward this plane builds"
+            f"reward.kind: is {_described(kind)}, but this plane builds only 'music' and 'math'"
         )
     abc2midi_bin = _resolve_scalar(
         dotted_key="reward.abc2midi_bin",
         field_name="abc2midi_bin",
         section_raw=section,
         overrides=local_overrides,
-        py_type=str,
+        py_type=str | None,
         default=None,
-        required=True,
+        required=kind == "music",
         provenance=provenance,
     )
+    if kind == "math" and abc2midi_bin is not None:
+        raise AgenticConfigRefusal(
+            "reward.abc2midi_bin: is set, but reward.kind='math' never uses it -- a declared "
+            "setting nothing reads would read as if it mattered"
+        )
     timeout_s = _resolve_scalar(
         dotted_key="reward.timeout_s",
         field_name="timeout_s",
@@ -1163,7 +1169,7 @@ def _build_reward(
         required=False,
         provenance=provenance,
     )
-    return RewardConfig(kind="music", abc2midi_bin=abc2midi_bin, timeout_s=timeout_s)
+    return RewardConfig(kind=kind, abc2midi_bin=abc2midi_bin, timeout_s=timeout_s)
 
 
 def _build_stability(

@@ -212,9 +212,10 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/rl/megatron/onboard.py": 99,  # measured 100.0%
     "src/foundationscale/rl/megatron/resume.py": 96,  # set by --update; measured 96.0%
     "src/foundationscale/train/__main__.py": 0,  # set by --update; measured 0.0%
-    # RATCHET -- 92 module(s) ABOVE the default band. These record what
+    # RATCHET -- 93 module(s) ABOVE the default band. These record what
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
+    "src/foundationscale/agentic_rl/rewards/math.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/capability_manifest.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/sandbox/egress_proxy.py": 100,  # measured 100.0%
     "src/foundationscale/capability_manifest.py": 100,  # set by --update; measured 100.0%
