@@ -48,9 +48,9 @@ Held-out test (2,503 rows), paired bootstrap vs SFT:
 candidates were decoded on the test set (the 1-epoch winner, then the 2-epoch winner), so the second
 result carries one extra look.
 
-## SP-3: GRPO with a WER reward (in progress)
+## SP-3: GRPO with a WER reward
 
-All runs: 4 clips x 8 samples per step, `earnings_train6000`, runaway and loop penalties 1.0.
+All runs: 8 samples per clip, `earnings_train6000`, runaway and loop penalties 1.0; 4 clips per step unless noted.
 
 | run | validation WER per checkpoint | verdict |
 |---|---|---|
@@ -64,5 +64,25 @@ implementation was checked by an overfit test (60 steps on 4 fixed clips, lr 3e-
 0.76 -> 0.98 and its spread shrank 0.13 -> 0.03. The audio rollout, scoring and update are therefore
 correct -- gradients do raise reward on what is trained. On the full data the problem is
 optimization: 4 clips (32 rollouts) per step gives updates that help some clips and hurt others,
-which matches a training reward that falls as the learning rate rises. Next: a larger batch
-(16 clips, 128 rollouts per step) with the KL anchor at lr 1e-6.
+which matches a training reward that falls as the learning rate rises.
+
+**Large batch** (16 clips = 128 rollouts per step, `grpo` with its KL term, lr 1e-6, 200 steps, log-probs
+scored in micro-batches of 16): training reward now rises steadily (0.79 -> 0.83 over 200 steps).
+
+| checkpoint | 50 | 100 | 150 | 200 |
+|---|---|---|---|---|
+| validation WER (SFT 14.09) | **13.85** | 13.92 | 16.47 | 48.82 |
+
+Step 50 wins the fixed rule. Later checkpoints collapse while the training reward keeps rising: at step
+200, deletions jump from 666 to 7,424. The policy learned to stop early under greedy decoding, which the
+per-rollout sampled reward never sees. So the reported checkpoint is the early one, picked on validation.
+
+Held-out test (2,503 rows), paired bootstrap vs SFT: **step 50 = 10.57, [-0.58, -0.15]**. Repetition-loop
+rows: 0. One row is flagged by the runaway detector, where SFT has none: reference "Yeah." (1 word),
+RL "Yeah, the only thing I had to say." (8 words), SFT "Yeah, the only thing I heard." (6 words). Both
+models transcribe the same background speech; 8 words crosses the detector's 2x+5 bound and 6 does
+not. It is not a degenerate loop.
+
+**SP-3 met**: RL with a WER reward improves held-out WER over the SFT model, with no repetition loops
+and one borderline runaway flag (above). The method needs a large batch and early stopping on
+validation. Beyond ~100 steps it learns to truncate.
