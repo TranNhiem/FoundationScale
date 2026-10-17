@@ -377,6 +377,10 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
     from foundationskills.agent.routing_eval import load_index
     from foundationskills.skills.data_engine.llm_backend import LLMOpError, make_backend
 
+    if args.behaviour_command == "round":
+        from foundationskills.agent import writing_round
+
+        return writing_round.run_cli(args)
     if args.behaviour_command == "ab":
         from foundationskills.agent import skill_ab
 
@@ -387,6 +391,19 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as exc:
             print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
             return 96
+        if bool(args.ledger) != bool(args.change_family):
+            print("[fskills:behaviour-eval:refuse] --ledger and --change-family go together",
+                  file=sys.stderr)
+            return 96
+        if args.ledger:
+            import datetime as _dt
+
+            from foundationskills.agent import writing_round
+
+            stamp = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+            row = writing_round.ledger_row(result, after, change_family=args.change_family,
+                                           decision=f"ab:{result['verdict']}", date=stamp)
+            writing_round.append_ledger(Path(args.ledger), [row])
         print(json.dumps(result, indent=2))
         return {"keep": 0, "reject": 5, "unmeasured": 95}[result["verdict"]]
     if args.behaviour_command == "uplift":
@@ -710,7 +727,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_ab.add_argument("--after", required=True, help="report after the writing change")
     p_ab.add_argument("--n-boot", type=int, default=2000)
     p_ab.add_argument("--seed", type=int, default=0)
+    p_ab.add_argument("--ledger", default=None, help="append the result to this writing A/B ledger")
+    p_ab.add_argument("--change-family", default=None, help="ledger change family (with --ledger)")
     p_ab.set_defaults(func=_cmd_behaviour_eval)
+    p_round = behaviour_sub.add_parser("round", help="A2.2 writing round: measure, keep or revert")
+    p_round.add_argument("--package", required=True, help="skill name, e.g. fskills-training")
+    p_round.add_argument("--candidate", required=True, help="candidate SKILL.md (one family)")
+    p_round.add_argument("--change-family", required=True)
+    p_round.add_argument("--before-routing", required=True, help="routing report, current SKILL.md")
+    p_round.add_argument("--before-oracle", required=True, help="oracle report, current SKILL.md")
+    p_round.add_argument("--workdir", required=True, help="where the round's reports are written")
+    p_round.add_argument("--ledger", default=None, help="A/B ledger (default evals/writing-ab.md)")
+    for flag in ("--agent-base-url", "--agent-model", "--judge-base-url", "--judge-model"):
+        p_round.add_argument(flag, required=True)
+    optional = (
+        "--agent-api-key-env", "--judge-api-key-env", "--agent-extra-body", "--judge-extra-body",
+    )
+    for flag in optional:
+        p_round.add_argument(flag, default=None)
+    for flag, default in (("--reps", "3"), ("--workers", "2"), ("--agent-max-tokens", "16384"),
+                          ("--judge-max-tokens", "4096"), ("--timeout", "600")):
+        p_round.add_argument(flag, default=default)
+    p_round.set_defaults(func=_cmd_behaviour_eval)
 
     p = sub.add_parser("oracle-cases", help="build and check the code-grounded oracle behaviour cases")
     oracle_sub = p.add_subparsers(dest="oracle_command", required=True, parser_class=_Parser)
