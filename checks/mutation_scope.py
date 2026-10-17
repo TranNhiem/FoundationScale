@@ -336,6 +336,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "line-covered by tests/agentic_rl/test_math_reward*.py, but no mutation row yet proves a "
         "flipped equivalence rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/rewards/swe.py": (
+        "test-based SWE reward (fail_to_pass / pass_to_pass verdicts): fully line-covered by "
+        "tests/agentic_rl/test_swe_reward.py, but no mutation row yet proves a flipped verdict "
+        "rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/rollout_host.py": (
         "rollout host: concurrent sessions, reward attach, INFRA conversion, publish: line-"
         "covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here would "

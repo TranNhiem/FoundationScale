@@ -15,6 +15,7 @@ from foundationscale.agentic_rl.contracts import Termination
 from foundationscale.agentic_rl.harness.base import EpisodeOutcome, EpisodeTask
 from foundationscale.agentic_rl.rewards.base import MathRewardFn, RewardFnRefusal
 from foundationscale.agentic_rl.rewards.math import MathAnswerReward
+from foundationscale.agentic_rl.rewards.swe import SweReward
 
 REPO = Path(__file__).resolve().parents[2]
 MUSIC_CONFIG = REPO / "examples" / "agentic_rl" / "music_s0.json"
@@ -44,7 +45,7 @@ def test_music_reward_still_requires_abc2midi() -> None:
 
 
 def test_unknown_reward_kind_is_refused() -> None:
-    with pytest.raises(AgenticConfigRefusal, match="only 'music' and 'math'"):
+    with pytest.raises(AgenticConfigRefusal, match="only 'music', 'math'"):
         build_config(_raw({"kind": "code"}), {})
 
 
@@ -106,3 +107,13 @@ def test_real_run_builds_the_math_reward_adapter() -> None:
 
 def test_adapter_accepts_a_bare_submitted_answer() -> None:
     assert _score(_task({"answer": "1/2"}), _outcome("0.5")) == (1.0, "correct")
+
+
+def test_swe_reward_kind_builds_the_swe_reward() -> None:
+    import foundationscale.agentic_rl.cli as cli_module
+
+    config = build_config(_raw({"kind": "swe"}), {})
+    assert config.reward.kind == "swe"
+    assert isinstance(cli_module._build_real_run(config).reward, SweReward)
+    with pytest.raises(AgenticConfigRefusal, match="kind='swe' never uses it"):
+        build_config(_raw({"kind": "swe", "abc2midi_bin": "abc2midi"}), {})

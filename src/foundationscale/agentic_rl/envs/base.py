@@ -9,7 +9,10 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from foundationscale.agentic_rl.harness.base import EpisodeTask
 
 __all__ = [
     "EnvBackend",
@@ -413,6 +416,33 @@ class EnvBackend(Protocol):
 
 
 _REGISTRY: dict[str, Callable[[], EnvBackend]] = {}
+
+
+@runtime_checkable
+class TaskAwareEnvBackend(Protocol):
+    """An ``EnvBackend`` whose environments depend on the task (its image, repo, test command).
+
+    ``RolloutHost`` calls ``create_for_task`` instead of ``create`` when the backend has it, so
+    per-task sandboxes (one container per software-engineering task) need no global spec change.
+    Backends without it -- local, music, math -- are untouched.
+    """
+
+    def create_for_task(
+        self, spec: EnvSpec, task: EpisodeTask, *, instance_id: str
+    ) -> Environment: ...
+
+
+@runtime_checkable
+class VerifiableEnvironment(Protocol):
+    """An ``Environment`` that can check the episode's result after the agent finishes.
+
+    ``RolloutHost`` calls ``verify`` once, after the episode and before reward scoring (never
+    for an INFRA outcome), and merges the returned string mapping into the outcome's metadata,
+    where a reward reads it -- e.g. hidden tests run against the agent's edits. Raising
+    ``EnvInfraError`` makes the attempt an infra abstention, never a scored zero.
+    """
+
+    async def verify(self) -> Mapping[str, str]: ...
 
 
 def register_env_backend(name: str, factory: Callable[[], EnvBackend]) -> None:

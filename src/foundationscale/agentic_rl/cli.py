@@ -58,6 +58,7 @@ from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn
 from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
+from foundationscale.agentic_rl.rewards.swe import SweReward
 from foundationscale.agentic_rl.rollout_host import RolloutHost
 from foundationscale.agentic_rl.stability import (
     CollapseDetected,
@@ -239,10 +240,12 @@ def _music_reward(config: AgenticRLConfig) -> MusicReward:
     return MusicReward(abc2midi_bin=config.reward.abc2midi_bin, timeout_s=config.reward.timeout_s)
 
 
-def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward:
+def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward | SweReward:
     """The scorer ``reward.kind`` names (built without a GPU, so ``--dry-run`` checks it)."""
     if config.reward.kind == "math":
         return MathAnswerReward()
+    if config.reward.kind == "swe":
+        return SweReward()
     return _music_reward(config)
 
 
@@ -322,8 +325,10 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     scorer = _reward_scorer(config)
-    reward: MusicRewardFn | MathRewardFn
-    if isinstance(scorer, MathAnswerReward):
+    reward: MusicRewardFn | MathRewardFn | SweReward
+    if isinstance(scorer, SweReward):
+        reward = scorer  # reads the verify() report in outcome.metadata; needs no decoding
+    elif isinstance(scorer, MathAnswerReward):
         reward = MathRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
     else:
         reward = MusicRewardFn(scorer=scorer, decode=chat_tokenizer.decode)

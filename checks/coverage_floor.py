@@ -216,6 +216,7 @@ FLOORS: dict[str, int] = {
     # the tree already achieves, so a regression to a merely-passing 90% is RED
     # rather than invisible.
     "src/foundationscale/agentic_rl/rewards/math.py": 100,  # measured 100.0%
+    "src/foundationscale/agentic_rl/rewards/swe.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/capability_manifest.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/sandbox/egress_proxy.py": 100,  # measured 100.0%
     "src/foundationscale/capability_manifest.py": 100,  # set by --update; measured 100.0%

@@ -21,13 +21,19 @@ import json
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from foundationscale.agentic_rl.contracts import Termination, Trajectory, flatten
 from foundationscale.agentic_rl.engines import EngineInfraError
 from foundationscale.agentic_rl.engines.fleet import EngineFleet
-from foundationscale.agentic_rl.envs.base import EnvBackend, EnvInfraError, EnvSpec
+from foundationscale.agentic_rl.envs.base import (
+    EnvBackend,
+    EnvInfraError,
+    EnvSpec,
+    TaskAwareEnvBackend,
+    VerifiableEnvironment,
+)
 from foundationscale.agentic_rl.harness.base import (
     EpisodeBudget,
     EpisodeOutcome,
@@ -297,7 +303,12 @@ class RolloutHost:
     ) -> Trajectory:
         async with semaphore:
             client = self._client_for(session_index)
-            instance = self.env_backend.create(self.env_spec, instance_id=session_id)
+            if isinstance(self.env_backend, TaskAwareEnvBackend):
+                instance = self.env_backend.create_for_task(
+                    self.env_spec, task, instance_id=session_id
+                )
+            else:
+                instance = self.env_backend.create(self.env_spec, instance_id=session_id)
             outcome: EpisodeOutcome | None = None
             try:
                 await instance.start()
@@ -310,6 +321,11 @@ class RolloutHost:
                 if outcome.termination is Termination.INFRA:
                     reward_value, abstention = None, outcome.abstention_reason
                 else:
+                    if isinstance(instance, VerifiableEnvironment):
+                        # e.g. hidden tests run against the agent's edits; an EnvInfraError
+                        # here lands in the infra branch below, never as a scored zero.
+                        checked = await instance.verify()
+                        outcome = replace(outcome, metadata={**outcome.metadata, **checked})
                     verdict = await self.reward.score(task, outcome)
                     reward_value = verdict.value
                     if reward_value is None:
