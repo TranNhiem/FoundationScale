@@ -327,6 +327,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "ported band/JS human-likeness scoring: line-covered by tests/agentic_rl, but no "
         "mutation row yet proves a flipped rule here would be caught."
     ),
+    "src/foundationscale/agentic_rl/rewards/math.py": (
+        "math-answer reward (boxed extraction, normalization, sympy equivalence): fully "
+        "line-covered by tests/agentic_rl/test_math_reward*.py, but no mutation row yet proves a "
+        "flipped equivalence rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/rollout_host.py": (
         "rollout host: concurrent sessions, reward attach, INFRA conversion, publish: line-"
         "covered by tests/agentic_rl, but no mutation row yet proves a flipped rule here would "
