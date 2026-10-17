@@ -116,6 +116,7 @@ def _audio_column() -> str:
         raise AssertionError(f"{pairs}: the first pair record has no non-empty 'audio' path")
     return "audio"
 
+
 def _audio_language() -> str:
     for name in LANGUAGE_ENVS:
         value = os.environ.get(name)
