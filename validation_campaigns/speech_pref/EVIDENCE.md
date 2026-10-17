@@ -57,6 +57,12 @@ All runs: 4 clips x 8 samples per step, `earnings_train6000`, runaway and loop p
 | dr_grpo, lr 1e-6, 400 steps | 14.59 / 14.10 / 14.16 / 14.16 | no change: policy ratio stayed 1.0 |
 | dr_grpo, lr 5e-6, 800 steps | 18.71 / 41.16 / 31.51 / 23.78 | collapse; training reward fell |
 | dr_grpo, lr 2e-6, 800 steps | 14.66 / 15.31 / 16.33 / 15.61 | worse than SFT |
+| grpo (KL to reference), lr 3e-6, 800 steps | 17.25 / 16.19 / 18.18 / 17.85 | worse; training reward fell 0.79 -> 0.76 |
 
-No GRPO run has beaten the SFT model yet. `dr_grpo` is reference-free, so nothing anchors the policy
-once updates are large enough to matter; a `grpo` run with its KL-to-reference term (lr 3e-6) is next.
+No GRPO run has beaten the SFT model. Falling training reward made a bug the first suspect, so the
+implementation was checked by an overfit test (60 steps on 4 fixed clips, lr 3e-6): reward rose
+0.76 -> 0.98 and its spread shrank 0.13 -> 0.03. The audio rollout, scoring and update are therefore
+correct -- gradients do raise reward on what is trained. On the full data the problem is
+optimization: 4 clips (32 rollouts) per step gives updates that help some clips and hurt others,
+which matches a training reward that falls as the learning rate rises. Next: a larger batch
+(16 clips, 128 rollouts per step) with the KL anchor at lr 1e-6.
