@@ -55,3 +55,43 @@ def test_drop_trace_trains_on_the_answer_only_and_says_so() -> None:
 def test_an_unknown_policy_is_refused() -> None:
     with pytest.raises(ValueError, match="reasoning_unsupported"):
         run("guess")
+
+
+def _explicit_request(tmp_path, **extra) -> dict:
+    import json
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    src = tmp_path / "chat.jsonl"
+    src.write_text("".join(json.dumps({"id": f"r{i}", "messages": MSGS}) + "\n" for i in range(3)))
+    return {
+        "target_format": "sft",
+        "tokenizer": "no-think",
+        "chat_template_family": "gemma3",
+        "sources": [{"uri": str(src), "kind": "jsonl"}],
+        "pipeline": {
+            "target_format": "sft",
+            "seed": 0,
+            "rationale": [],
+            "ops": [
+                {"op": "ingest", "config": {"sources": [{"uri": str(src), "kind": "jsonl"}]}},
+                {"op": "format", "config": {"target_format": "sft", "tokenizer": "no-think"}},
+            ],
+        },
+        **extra,
+    }
+
+
+def test_an_explicit_pipeline_takes_the_request_policy(tmp_path, monkeypatch) -> None:
+    # measured on de_llm (medgemma): the request key was silently ignored for an explicit pipeline
+    import foundationskills.skills.data_engine.ops  # noqa: F401 - register real ops
+    from foundationskills.core.contract import SkillContext
+    from foundationskills.skills.data_engine.ops import format as fmt
+    from foundationskills.skills.data_engine.skill import DataEngineSkill
+
+    monkeypatch.setattr(fmt, "_load_tokenizer", lambda _spec: (_NoThinkTok(), None))
+    lost = DataEngineSkill().execute(_explicit_request(tmp_path / "a"), SkillContext(workdir=tmp_path / "a"))
+    assert any("reasoning trace the chat template drops" in f.message for f in lost.findings)
+    kept = DataEngineSkill().execute(
+        _explicit_request(tmp_path / "b", reasoning_unsupported="drop_trace"), SkillContext(workdir=tmp_path / "b")
+    )
+    assert not any("zero records" in f.message for f in kept.findings)

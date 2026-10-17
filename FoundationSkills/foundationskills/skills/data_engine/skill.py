@@ -229,6 +229,12 @@ class DataEngineSkill(BaseSkill):
             spec = dict(explicit)
             spec.setdefault("tokenizer", request.get("tokenizer"))
             spec.setdefault("chat_template_family", request.get("chat_template_family"))
+            if request.get("reasoning_unsupported"):  # measured: was silently ignored for an explicit pipeline
+                spec["ops"] = [
+                    {**op, "config": {"reasoning_unsupported": request["reasoning_unsupported"], **(op.get("config") or {})}}
+                    if op.get("op") == "format" else op
+                    for op in spec.get("ops") or []
+                ]
         else:
             spec = recommend_pipeline(
                 target_format=target,
