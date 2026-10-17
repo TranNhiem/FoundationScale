@@ -8,3 +8,5 @@ Append-only: one row per case set per A2.2 writing round (kept AND rejected). Th
 | 2026-10-17 | a22-anti-rationalizations | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | 27844c4aba64 | e04724b8c8ec | 0.859 | 0.892 | 0.034 | [0.007, 0.067] | 33 | keep | keep |
 | 2026-10-17 | a22-red-flags | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | cd6d47d3f274 | 0.951 | 0.976 | 0.023 | [-0.007, 0.062] | 17 | reject | reject |
 | 2026-10-17 | a22-red-flags | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | cd6d47d3f274 | 0.892 | 0.872 | -0.020 | [-0.074, 0.017] | 33 | reject | reject |
+| 2026-10-17 | a22-process | fskills-training | routing | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | dd6803f3efb8 | 0.951 | 0.943 | -0.003 | [-0.039, 0.039] | 17 | reject | reject |
+| 2026-10-17 | a22-process | fskills-training | oracle | 3 | mimo-v2.6-flash | mimo-v2.6-pro | e04724b8c8ec | dd6803f3efb8 | 0.892 | 0.882 | -0.010 | [-0.044, 0.020] | 33 | reject | reject |
