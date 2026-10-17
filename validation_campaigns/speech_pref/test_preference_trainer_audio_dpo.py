@@ -108,24 +108,13 @@ requires_gpu_model = pytest.mark.skipif(
 
 
 def _audio_column() -> str:
-    """The pair record's audio carrier column, derived from the first record."""
+    """The pair record's audio column: build_pairs.py writes it as ``audio`` (the SP-2 contract)."""
     pairs = _pairs_file()
     assert pairs is not None
     first = json.loads(pairs.read_text(encoding="utf-8").splitlines()[0])
-    carriers = [
-        key
-        for key, value in first.items()
-        if key not in _RESERVED_PAIR_FIELDS and isinstance(value, str) and value.strip()
-    ]
-    if len(carriers) != 1:
-        raise AssertionError(
-            f"{pairs}: expected exactly 1 audio carrier field on the first pair "
-            f"record (everything outside {_RESERVED_PAIR_FIELDS} that is a "
-            f"non-empty string), got {carriers!r}; the SP-2 pair format names "
-            f"one clip path per record"
-        )
-    return carriers[0]
-
+    if not isinstance(first.get("audio"), str) or not first["audio"].strip():
+        raise AssertionError(f"{pairs}: the first pair record has no non-empty 'audio' path")
+    return "audio"
 
 def _audio_language() -> str:
     for name in LANGUAGE_ENVS:
