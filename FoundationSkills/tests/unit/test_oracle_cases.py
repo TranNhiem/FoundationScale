@@ -236,7 +236,13 @@ def test_build_cases_writes_one_question_per_case() -> None:
     built = build_cases(backend, workers=1)
     flat = [case for package in sorted(built) for case in built[package]]
     assert [case["id"] for case in flat] == [case["id"] for _, case in jobs]
-    assert all(case["question"].startswith(GOOD_QUESTION) for case in flat)
+    # a user-invoked skill's question invokes it first ("/<name> ..."), A3.2; every other question is the generated text
+    for case in flat:
+        text = case["question"]
+        if text.startswith("/"):
+            assert text.split(" ", 1)[0] == "/" + case["id"].split("-oracle-", 1)[0], case["id"]
+            text = text.split(" ", 1)[1]
+        assert text.startswith(GOOD_QUESTION), case["id"]
     assert all(case["question_model"] == "fake/question-model" for case in flat)
     assert len(backend.calls) == len(jobs)
     assert all(call["seed"] == 0 for call in backend.calls)

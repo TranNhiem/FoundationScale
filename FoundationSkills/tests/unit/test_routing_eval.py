@@ -21,6 +21,7 @@ from foundationskills.agent.routing_eval import (
     ARMS,
     GATED_ARM,
     RoutingEvalRefused,
+    build_messages,
     load_index,
     render_benchmark_md,
     render_index,
@@ -31,8 +32,22 @@ from foundationskills.agent.routing_eval import (
 from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 CREATED = "2026-10-02T00:00:00Z"
-PACKAGE_NAMES = ("fskills-auto-research", "fskills-confirm-before-launch", "fskills-data-engine", "fskills-evaluation",
-                 "fskills-measured-or-unmeasured", "fskills-probe-first", "fskills-refusal-surface", "fskills-training")
+PACKAGE_NAMES = (
+    "fs-data",
+    "fs-eval",
+    "fs-launch",
+    "fs-plan",
+    "fs-status",
+    "fskills-auto-research",
+    "fskills-confirm-before-launch",
+    "fskills-data-engine",
+    "fskills-evaluation",
+    "fskills-measured-or-unmeasured",
+    "fskills-probe-first",
+    "fskills-refusal-surface",
+    "fskills-training",
+    "using-foundationskills",
+)
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -390,3 +405,33 @@ def test_cli_render_refuses_an_unmeasured_report(tmp_path: Path, index: list[dic
     path = tmp_path / "routing.json"
     write_report(report, path)
     assert cli.main(["routing-eval", "render", "--report", str(path)]) == 96
+
+
+def test_resume_reasks_only_the_unmeasured_calls(index: list[dict], answers: dict[str, object]) -> None:
+    # measured 2026-10-18: 4 of 1,746 calls unmeasured forced a full 25-minute rerun before --resume existed
+    flaky_question = index[0]["evals"][0]["question"]
+    first = FakeBackend(ground_truth_router(answers), fail_when=lambda q, call: "empty response content" if q == flaky_question else None)
+    report = run_routing_eval(index, first, arms=("full",), reps=1, workers=1)
+    assert report["verdict"] == "unmeasured"
+    second = FakeBackend(ground_truth_router(answers))
+    resumed = run_routing_eval(index, second, arms=("full",), reps=1, workers=1, resume=report)
+    assert [c["question"] for c in second.calls] == [flaky_question]  # only the unmeasured call is asked again
+    assert resumed["verdict"] != "unmeasured" and all(c["measured"] for c in resumed["calls"])
+
+
+def test_resume_refuses_a_report_of_a_different_run(index: list[dict], answers: dict[str, object]) -> None:
+    report = run_routing_eval(index, FakeBackend(ground_truth_router(answers)), arms=("full",), reps=1, workers=1)
+    with pytest.raises(RoutingEvalRefused, match="reps"):
+        run_routing_eval(index, FakeBackend(ground_truth_router(answers)), arms=("full",), reps=2, workers=1, resume=report)
+    with pytest.raises(RoutingEvalRefused, match="index_sha256"):
+        run_routing_eval(index, FakeBackend(ground_truth_router(answers)), arms=("full",), reps=1, workers=1,
+                         resume={**report, "index_sha256": "0" * 64})
+
+
+def test_a_user_skill_is_offered_only_when_the_question_invokes_it(index: list[dict]) -> None:
+    user = [entry["name"] for entry in index if entry["invocation"] == "user"]
+    assert user
+    natural = build_messages(index, "full", "Evaluate my checkpoint on arc_easy.")[0]["content"]
+    assert all(f"- {name}" not in natural for name in user)
+    invoked = build_messages(index, "full", f"/{user[0]} please")[0]["content"]
+    assert f"- {user[0]}" in invoked and all(f"- {n} " not in invoked for n in user[1:])

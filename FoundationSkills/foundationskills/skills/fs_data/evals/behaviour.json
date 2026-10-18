@@ -1,0 +1,129 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-data-oracle-FD-HO-001",
+      "skill": "fs_data",
+      "rule_id": "FD-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "data_engine came back RED (e.g. zero records, readiness RED)",
+      "fixture": {
+        "expected": "RED 5 naming FD-HO-001 (data_engine came back RED)",
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "/data/raw/chat_corpus.jsonl"
+            }
+          ],
+          "target_format": "sft"
+        },
+        "simulated_step": "data_engine wrote zero records"
+      },
+      "fixture_sha256": "ecd05c4cffe2bbde2ebca1d76cdfe916d4d83da3e590745b262d2e75e3d89f7f",
+      "expected_behavior": [
+        "Identifies the problem: data_engine came back RED (e.g. zero records, readiness RED)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FD-HO-001"
+      ],
+      "ground_truth": "fs_data: rule FD-HO-001 (BLOCK, handoff phase) fires: data_engine came back RED (e.g. zero records, readiness RED).",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "data_engine wrote zero records"
+        }
+      ],
+      "question": "/fs-data I ran /fs-data with sources = [{\"kind\": \"jsonl\", \"uri\": \"/data/raw/chat_corpus.jsonl\"}] and target_format = \"sft\". The simulated_step I observed was \"data_engine wrote zero records\". What is the outcome of this run — which step ran, what artifacts it produced, and what is the verdict?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-data-oracle-FD-HO-002",
+      "skill": "fs_data",
+      "rule_id": "FD-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "data_engine came back UNMEASURED (readiness checks not run)",
+      "fixture": {
+        "expected": "UNMEASURED 95 with FD-HO-002 WARN finding (data_engine came back UNMEASURED)",
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "/data/raw/chat_corpus.jsonl"
+            }
+          ],
+          "target_format": "sft"
+        },
+        "simulated_step": "readiness checks were not run"
+      },
+      "fixture_sha256": "d852158386d5e1abfc6053834a2fc8d31ba13ddd03c42cf65e1cda12d51b90b5",
+      "expected_behavior": [
+        "Identifies the problem: data_engine came back UNMEASURED (readiness checks not run)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FD-HO-002"
+      ],
+      "ground_truth": "fs_data: rule FD-HO-002 (WARN, handoff phase) fires: data_engine came back UNMEASURED (readiness checks not run).",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "readiness checks were not run"
+        }
+      ],
+      "question": "/fs-data I'm running /fs-data on /data/raw/chat_corpus.jsonl (kind: jsonl) with target_format \"sft\" to produce a dataset, data_pipeline_spec, and readiness_report. I can see that simulated_step = \"readiness checks were not run\", so no readiness verdict has been recorded for this run. What is the actual outcome of the workflow — which step completed, what artifacts it produced, and what the verdict is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-data-oracle-FD-IN-001",
+      "skill": "fs_data",
+      "rule_id": "FD-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no \"sources\" and no explicit \"pipeline\" is given",
+      "fixture": {
+        "expected": "REFUSED 96 naming FD-IN-001 (no \"sources\" and no explicit \"pipeline\" is given)",
+        "request": {}
+      },
+      "fixture_sha256": "50adea286e6f6aa05c6cf86a153aaeca1e3b0c82dc659157ff49b3713449d640",
+      "expected_behavior": [
+        "Identifies the problem: no \"sources\" and no explicit \"pipeline\" is given",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FD-IN-001"
+      ],
+      "ground_truth": "fs_data: rule FD-IN-001 (BLOCK, input phase) fires: no \"sources\" and no explicit \"pipeline\" is given.",
+      "trigger_facts": [],
+      "question": "/fs-data I want to kick off the /fs-data workflow — please run it with the request passed through exactly as given (an empty set of fields, no goal_spec) and show me the workflow record it generates. I'd like to see which step ran, what artifacts it produced along with their paths, and what the final verdict came back as.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-data-oracle-FD-IN-002",
+      "skill": "fs_data",
+      "rule_id": "FD-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the composed data_engine refused",
+      "fixture": {
+        "expected": "REFUSED 96 naming FD-IN-002 (the composed data_engine refused)",
+        "request": {
+          "sources": [
+            {
+              "kind": "jsonl",
+              "uri": "/data/raw/missing_corpus.jsonl"
+            }
+          ],
+          "target_format": "sft"
+        }
+      },
+      "fixture_sha256": "3945369810f3478582cec328d55b2d92905650913e8dddb03f2286d41b341ae7",
+      "expected_behavior": [
+        "Identifies the problem: the composed data_engine refused",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FD-IN-002"
+      ],
+      "ground_truth": "fs_data: rule FD-IN-002 (BLOCK, input phase) fires: the composed data_engine refused.",
+      "trigger_facts": [],
+      "question": "/fs-data Run /fs-data on my raw corpus at /data/raw/missing_corpus.jsonl (kind: jsonl) and convert it to target_format \"sft\". Please produce the dataset, data_pipeline_spec, and readiness_report in out_dir and give me the workflow record showing which step ran and the verdict.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

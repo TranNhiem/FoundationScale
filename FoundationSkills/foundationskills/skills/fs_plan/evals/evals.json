@@ -1,0 +1,148 @@
+[
+  {
+    "id": "fp-positive-001",
+    "question": "/fs-plan plan this training run end to end: the goal_spec is at goal_spec.q27.json, the probe report is probe.q27.json, dataset at dataset.json, model /models/mistral-7b, 2 nodes x 8 GPUs on gb200. Go.",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan (/fs-plan, the user-invoked planning workflow), composes training.planner -> probe_first -> training.emit in that order and stops at the first step that is not PASS, writes one workflow_record {workflow, steps, outputs {training_plan, probe_report, launch_specs}, verdict, show_user} and, on PASS, SHOWS each emitted fs_launch_spec's plan hash for the user to type back to /fs-launch; it never launches and never fills a hash into a launch.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent composed exactly training.planner -> probe_first -> training.emit and no other user skill",
+      "The agent wrote one workflow_record and showed each launch_specs row's plan_hash to the user",
+      "The agent never launched anything and never filled a plan hash into any launch field"
+    ]
+  },
+  {
+    "id": "fp-positive-002",
+    "question": "/fs-plan I only have the goal: goal_spec.sft.json plus dataset.json and model /models/m. Build the plan and the launch specs from those.",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan and FP-IN-002 fires before any work: no probe_report is given (probe first: plan only against what the installed FoundationScale measurably runs). It returns REFUSED 96 naming FP-IN-002, nothing is written, and it tells the user to run `fskills probe --deep --json > probe.json`, pass it as probe_report and re-run /fs-plan.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent refused with REFUSED 96 naming FP-IN-002 instead of planning without a probe report",
+      "The agent told the user to run fskills probe --deep --json first and pass the probe_report",
+      "Nothing was planned or composed (no planner, probe_first or emit step ran)"
+    ]
+  },
+  {
+    "id": "fp-positive-003",
+    "question": "/fs-plan probe report is probe.deep.json, dataset is dataset.json, hardware gb200 — just plan and emit whatever I should train next.",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan and FP-IN-001 fires: no goal (a goal_spec path) is given, nothing can be planned. It returns REFUSED 96 naming FP-IN-001 and asks the user to pass `goal` (a goal_spec artifact path), then re-run /fs-plan. Nothing is written.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent refused with REFUSED 96 naming FP-IN-001 and named the missing `goal` input",
+      "The agent did not invent a goal_spec or guess what to train",
+      "Nothing was written and no composed step ran"
+    ]
+  },
+  {
+    "id": "fp-positive-004",
+    "question": "/fs-plan with goal_spec.json and probe.json: the planner step already came back REFUSED because the goal names a model the knowledge base does not have and gives no size_b. What does /fs-plan report?",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan and composes training.planner first; the planner refuses (the goal names no known model) so the step's outcome maps to FP-IN-003: REFUSED 96 naming FP-IN-003 with the composed training.planner's findings as evidence steps. The workflow stops there (first non-PASS) and nothing is written; fix what the planner's findings name and re-run /fs-plan.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent stopped at the first non-PASS step and did not run probe_first or training.emit",
+      "The agent reported REFUSED 96 naming FP-IN-003 with the planner's findings as evidence",
+      "The agent fixed nothing and launched nothing"
+    ]
+  },
+  {
+    "id": "fp-positive-005",
+    "question": "/fs-plan for goal_spec.q27.json (probe.q27.json, dataset.json, model /models/m, 1 node x 4 GPUs): the planner and probe steps passed, but the emitted preference spec came back with executable false and missing 'reward model checkpoint'. What does /fs-plan report?",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan; planner and probe_first PASS but training.emit returns a spec with executable false and a named missing item (e.g. preference objective). FP-HO-001 fires as RED 5: the workflow_record carries verdict RED and red_step {reason: 'not executable', specs}, naming the spec's missing item. No plan hash is shown for /fs-launch; fix the missing item and re-run /fs-plan.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent reported RED 5 naming FP-HO-001 and pointed at the spec's `missing` item",
+      "The agent showed no plan hash for a non-executable spec and launched nothing",
+      "The agent said to fix the missing item and re-run /fs-plan"
+    ]
+  },
+  {
+    "id": "fp-positive-006",
+    "question": "/fs-plan with goal_spec.cpt.json, dataset.json and probe_shallow.json: the probe_first step came back UNMEASURED because the probe was not run with --deep. What does /fs-plan report?",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan; training.planner passes but probe_first comes back UNMEASURED (the probe was not --deep). FP-HO-002 fires: UNMEASURED 95 with the finding attached and verdict UNMEASURED in the workflow_record — never PASS. The agent resolves nothing itself: it tells the user the plan is not a pass and to re-probe deeply and re-run /fs-plan.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent reported UNMEASURED 95 naming FP-HO-002 and never called it a pass",
+      "The agent stopped at the probe_first step and did not run training.emit",
+      "The agent told the user to measure what the shallow probe could not and re-run /fs-plan"
+    ]
+  },
+  {
+    "id": "fp-positive-007",
+    "question": "/fs-plan for goal_spec.rl.json (probe.deep.json, dataset.json, model /models/m, 4 nodes x 8 GPUs on dgx-h100): all three steps passed and every emitted spec is executable. What does it show me, and what do I do with it?",
+    "expected_skill": "fs-plan",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-plan and, on a fully PASS run, shows each emitted fs_launch_spec's plan_hash with the show_user message: 'Read each plan_hash below and type it back to /fs-launch with its launch_spec; no hash is ever filled in for you.' It never fills a hash into a launch and never launches; the user is directed to type the hashes back to /fs-launch.",
+    "expected_behavior": [
+      "The agent read fs_plan/SKILL.md before acting",
+      "The agent listed each launch_specs row's path, stage and plan_hash from the workflow_record",
+      "The agent said the hashes must be typed back to /fs-launch by the user and never pre-filled one",
+      "The agent launched nothing and composed no user skill other than the three model skills"
+    ]
+  },
+  {
+    "id": "fp-natural-001",
+    "question": "Please work out a two-day LoRA preference stage for the GB200 partition from my goal spec and probe report, and give me the training plan and launch specs.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "No skill is chosen on the agent's own initiative: fs-plan is user-invoked and runs only when the user types /fs-plan. The request is planning work, so the agent answers directly or routes/explains via fskills-training (the training planner / emit skill) and suggests typing /fs-plan for the composed workflow.",
+    "expected_behavior": [
+      "Does not invoke /fs-plan on its own initiative",
+      "Routes the planning request to fskills-training or suggests the user type /fs-plan"
+    ]
+  },
+  {
+    "id": "fp-natural-002",
+    "question": "I want the training plan and an fs_launch_spec for a three-day QLoRA SFT run on two DGX-H100 nodes — plan and emit only, leave the scheduler out of it.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Planning and emitting is fskills-training's job; fs-plan is user-invoked and a user-invoked skill runs only when the user types it. The agent uses fskills-training and does not activate fs_plan/SKILL.md as the working skill.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-training",
+      "Does not invoke /fs-plan on its own initiative and did not read fs_plan/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "fp-launch-001",
+    "question": "The confirmation is sealed and I typed back plan hash 3f2a91c0b7de4410 for launch/fs_launch_spec.q27.json — submit that job now.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No model skill launches a job: launching is the user-invoked /fs-launch (or `fskills launch`), so the agent does not route to a skill and tells the user to run /fs-launch with the spec and the hash.",
+    "expected_behavior": [
+      "Does not launch or route to a model skill",
+      "Tells the user to run /fs-launch with the spec and their hash"
+    ]
+  },
+  {
+    "id": "fp-misc-001",
+    "question": "Rewrite this onboarding email so it sounds friendlier but still professional — keep it under 120 words.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Editing an onboarding email is an ordinary non-ML request: it matches no FoundationSkills skill, and certainly not the user-invoked planning workflow fs-plan.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_plan/SKILL.md"
+    ]
+  },
+  {
+    "id": "fp-misc-002",
+    "question": "My ZZ plant's lower leaves are yellowing and the soil stays wet for days — what should I change?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Houseplant care is not planning a training run from a goal_spec and probe_report, so no FoundationSkills skill is triggered, including fs-plan.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_plan/SKILL.md"
+    ]
+  }
+]

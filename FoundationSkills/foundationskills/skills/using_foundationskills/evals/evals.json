@@ -1,0 +1,133 @@
+[
+  {
+    "id": "uf-positive-001",
+    "question": "/using-foundationskills Which FoundationSkills skill should I use to turn a directory of raw pdf docs into an instruction dataset with a manifest?",
+    "expected_skill": "using-foundationskills",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the using-foundationskills entry point and routes the intent to fskills-data-engine (consumes raw_data_ref, produces data_pipeline_spec/dataset/readiness_report), stating that building datasets is data_engine's job and reporting exit codes 0/5/95/96.",
+    "expected_behavior": [
+      "The agent read using_foundationskills/SKILL.md before acting",
+      "The agent routed the intent to fskills-data-engine (or data_engine) instead of improvising",
+      "The agent listed what the chosen skill consumes and produces",
+      "The agent reported the PASS/RED/UNMEASURED/REFUSED exit codes (0/5/95/96)"
+    ]
+  },
+  {
+    "id": "uf-positive-002",
+    "question": "/using-foundationskills How do I start with FoundationSkills? What is the workflow, and what is verboten?",
+    "expected_skill": "using-foundationskills",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the using-foundationskills entry point and states the workflow (goal_spec, probe, plan, data, emit, confirm-then-launch, monitor) and the non-negotiable rules: statuses PASS/RED/UNMEASURED/REFUSED with a refusal naming what is missing and UNMEASURED never PASS, no launch without the user confirming the plan hash, no unmeasured capability claimed and no plan gap hidden, and the GB200 sbatch preamble (--time, --exclude, IMEX fabric, measured NCCL env) must not be removed.",
+    "expected_behavior": [
+      "The agent read using_foundationskills/SKILL.md before acting",
+      "The agent stated the workflow steps from goal_spec to monitor/iterate",
+      "The_agent stated launch only with the user's confirmed plan hash (never auto-filled)",
+      "The agent kept every non-negotiable rule, including the GB200 sbatch additions that must not be removed"
+    ]
+  },
+  {
+    "id": "uf-positive-003",
+    "question": "/using-foundationskills I have raw_data_ref and goal_spec ready and want an fs_launch_spec at the end. What chain runs, and which statuses can it return?",
+    "expected_skill": "using-foundationskills",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the using-foundationskills entry point and answers with the measured chain from SkillRegistry.plan_chain({raw_data_ref, goal_spec}, fs_launch_spec): data_engine → training.planner → training.emit, and restates the only statuses PASS/RED/UNMEASURED/REFUSED (exit 0/5/95/96) with a check that did not run being UNMEASURED, never PASS.",
+    "expected_behavior": [
+      "The agent read using_foundationskills/SKILL.md before acting",
+      "The agent gave the chain data_engine → training.planner → training.emit (via SkillRegistry.plan_chain)",
+      "The agent named the artifacts each step consumes and produces",
+      "The agent stated the four statuses and their exit codes 0/5/95/96"
+    ]
+  },
+  {
+    "id": "uf-positive-004",
+    "question": "/using-foundationskills I want an artifact anyway: produce me a 'unverified_recipe_book'. Which chain gets me there?",
+    "expected_skill": "using-foundationskills",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the using-foundationskills entry point and cites UF-IN-001: when the requested 'want' names an artifact type no registered skill produces, the run REFUSES (exit 96) naming what is missing and nothing is written; the fix is to name a want the registered skills produce (see SKILLS.md).",
+    "expected_behavior": [
+      "The agent read using_foundationskills/SKILL.md before acting",
+      "The agent cited UF-IN-001 (want names an artifact type no registered skill produces)",
+      "The agent stated the outcome is REFUSED with exit 96 and no artifact is written",
+      "The agent suggested a want the registered skills do produce (dataset, training_plan, fs_launch_spec, eval_report)"
+    ]
+  },
+  {
+    "id": "uf-positive-005",
+    "question": "/using-foundationskills Are the FoundationSkills skills picked by the model or run as slash commands? What is /fs-launch and can it call other slash commands?",
+    "expected_skill": "using-foundationskills",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the using-foundationskills entry point and explains the two skill types (A3.2): model-invoked skills picked by the agent from their description, and user-invoked workflow skills (/fs-goal, /fs-data, /fs-plan, /fs-launch, /fs-eval, /fs-research, /fs-status, /fs-handoff) that run only when the user invokes them; a user skill may compose model skills (declared in `invokes`) but never another user skill. The agent notes the slash skills are being added in A3.2 and does not claim they all exist yet.",
+    "expected_behavior": [
+      "The agent read using_foundationskills/SKILL.md before acting",
+      "The agent distinguished model-invoked skills from user-invoked slash commands",
+      "The agent said a user skill may compose model skills but never another user skill",
+      "The agent said the slash skills are being added (A3.2) and did not claim they all already exist"
+    ]
+  },
+  {
+    "id": "uf-negative-001",
+    "question": "We wrote the plan draft at drafts/plans/q27.json before probing. Check it against artifacts/probe.json and tell me if it stands.",
+    "expected_skill": "fskills-probe-first",
+    "should_trigger": false,
+    "ground_truth": "Vetting an existing plan draft against a measured probe JSON is fskills-probe-first's job; using-foundationskills only routes intents and states the workflow, and its SKILL.md says do not use it for probe vetting.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-probe-first",
+      "The agent did not read or activate using_foundationskills/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "uf-negative-002",
+    "question": "Turn my goal_spec for continued pretraining of the 8B VLM into an auditable training_plan.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Authoring a training_plan from a goal_spec is fskills-training's (training.planner) job; using-foundationskills routes and documents but writes no training plan itself.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-training",
+      "The agent did not read or activate using_foundationskills/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "uf-misc-001",
+    "question": "Translate this paragraph about Taipei's night markets into Japanese.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Meeting summarization is not plan-draft vetting, dataset building, training launching or checkpoint scoring, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate using_foundationskills/SKILL.md"
+    ]
+  },
+  {
+    "id": "uf-misc-002",
+    "question": "My React form loses its state when I switch tabs; how do I keep it?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A routine bug fix in a non-ML-training Python service is out of scope for every FoundationSkills skill, including the routing entry point.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate using_foundationskills/SKILL.md"
+    ]
+  },
+  {
+    "id": "uf-misc-003",
+    "question": "Suggest three names for a cooking podcast about street food.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Writing a status email is an ordinary non-ML-training request and matches no FoundationSkills skill's scope, so nothing should trigger.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate using_foundationskills/SKILL.md"
+    ]
+  },
+  {
+    "id": "uf-natural-001",
+    "question": "Which FoundationSkills skill should I use to turn a directory of raw pdf docs into an instruction dataset with a manifest?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No skill is chosen: the request does not invoke /using-foundationskills, and a user-invoked skill runs only when the user types it. The agent answers directly or suggests typing /using-foundationskills.",
+    "expected_behavior": [
+      "Does not invoke /using-foundationskills on its own initiative",
+      "Answers directly or suggests the user type /using-foundationskills"
+    ]
+  }
+]

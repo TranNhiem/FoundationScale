@@ -30,6 +30,10 @@ class ArtifactType(str, Enum):
     CLAIM_SET = "claim_set"
     CONFIRMATION_RECORD = "confirmation_record"
     FINDING_SET = "finding_set"
+    SKILL_ROUTE = "skill_route"
+    STATUS_EXPLANATION = "status_explanation"
+    LAUNCH_RECORD = "launch_record"
+    WORKFLOW_RECORD = "workflow_record"
 
     def __str__(self) -> str:
         return self.value

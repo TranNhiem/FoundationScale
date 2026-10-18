@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": [
+    "skills",
+    "candidates",
+    "chain"
+  ],
+  "properties": {
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "invocation",
+          "invokes",
+          "consumes",
+          "produces"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "score"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "chain": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}

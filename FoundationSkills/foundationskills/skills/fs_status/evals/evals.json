@@ -1,0 +1,134 @@
+[
+  {
+    "id": "st-positive-001",
+    "question": "/fs-status What does exit code 95 mean in a FoundationSkills run, and what should I do about it?",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-status and explains that 95 is UNMEASURED: something that matters was not measured, so it is not a pass; the next step is to fix what the findings name and re-run that skill, never to treat UNMEASURED as PASS. The doctrine is PASS 0, RED 5, UNMEASURED 95, REFUSED 96.",
+    "expected_behavior": [
+      "The agent read fs_status/SKILL.md before acting",
+      "The agent said 95 is UNMEASURED and restated the doctrine (PASS 0, RED 5, UNMEASURED 95, REFUSED 96)",
+      "The agent said what to do next (fix what the findings name, then re-run that skill)",
+      "The agent said UNMEASURED must never be treated as PASS"
+    ]
+  },
+  {
+    "id": "st-positive-002",
+    "question": "/fs-status Why did my run come back REFUSED? Explain this fskills result: {\"status\": \"REFUSED\", \"refusal\": \"UF-IN-001: want 'unverified_recipe_book' is not produced by any registered skill\"}.",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-status and explains the REFUSED 96 meaning (nothing ran; an input or precondition was missing) and the recorded refusal (UF-IN-001: the want names an artifact type no registered skill produces): the fix is to name a want the skills produce and re-run, not to patch anything here.",
+    "expected_behavior": [
+      "The agent read fs_status/SKILL.md before acting",
+      "The agent explained REFUSED 96 (nothing ran; a missing input or precondition) in plain English",
+      "The agent copied the refusal text and named the next step (add the missing input, then re-run)",
+      "The agent did not attempt to fix or re-run anything itself"
+    ]
+  },
+  {
+    "id": "st-positive-003",
+    "question": "/fs-status Explain this journal record from my orchestrator run: {\"step_index\": 1, \"skill\": \"training.planner\", \"status\": \"RED\", \"exit_code\": 5, \"artifact_ids\": [\"trainplan-1\"], \"refusal\": null}. What does it mean and what next?",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-status and explains the record: status RED (exit 5) means the work ran but a check failed, so the training_plan output (training_plan-1) must not be used; the next step is to fix what the findings name and re-run training.planner.",
+    "expected_behavior": [
+      "The agent read fs_status/SKILL.md before acting",
+      "The agent explained RED (the work ran but a check failed, the output must not be used)",
+      "The agent reported the artifact_ids from the record and flagged they must not be used",
+      "The agent named the next step (fix what the findings name, re-run that skill)"
+    ]
+  },
+  {
+    "id": "st-positive-004",
+    "question": "/fs-status Here is the result my fskills CLI printed: {\"skill\": \"data_engine\", \"status\": \"PASS\", \"exit_code\": 0, \"findings\": [{\"rule_id\": \"DE-IN-005\", \"severity\": \"WARN\", \"message\": \"sft target without a chat_template_family or tokenizer\", \"recovery\": \"set chat_template_family or tokenizer\"}]}. Explain the status and the next step.",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-status and explains PASS (exit 0: the work ran and every check passed), echoes the findings ({DE-IN-005, WARN, sft target without a chat_template_family or tokenizer, recovery set chat_template_family or tokenizer}) and says the next step is to hand the artifacts on to the next skill in the chain.",
+    "expected_behavior": [
+      "The agent read fs_status/SKILL.md before acting",
+      "The agent explained PASS (the work ran and every check passed)",
+      "The agent copied the findings rows including recovery",
+      "The agent said the next step is to hand the artifacts on"
+    ]
+  },
+  {
+    "id": "st-positive-005",
+    "question": "/fs-status My journal.jsonl came back with status UNMEASURED and exit 95 on the emit step. Is that a pass, and what happens to the fs_launch_spec?",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-status and answers: UNMEASURED 95 is NOT a pass — something that matters was not measured — and any fs_launch_spec from that step must not be treated as ready; fix what the findings name and re-run that skill.",
+    "expected_behavior": [
+      "The agent read fs_status/SKILL.md before acting",
+      "The agent said UNMEASURED is not a pass (something that matters was not measured)",
+      "The agent said the output must not be treated as ready/used",
+      "The agent named the next step (resolve the named gap, re-run that skill)"
+    ]
+  },
+  {
+    "id": "st-sibling-001",
+    "question": "Audit these findings before I hand the result on: one of them cites a rule id that no skill declares. Which findings carry an undeclared rule id?",
+    "expected_skill": "fskills-refusal-surface",
+    "should_trigger": false,
+    "ground_truth": "fskills-refusal-surface: it audits RED/REFUSED findings and flags any finding citing an undeclared rule id.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-refusal-surface",
+      "The agent did not read or activate fs_status/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "st-sibling-002",
+    "question": "Rewrite this claim set so nothing unmeasured is reported as a pass: 'loss went down', 'the eval improved' (no eval ran), 'throughput is 12k tok/s' (UNMEASURED in the manifest).",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "fskills-measured-or-unmeasured: it rewrites the claims so every claim without measured evidence is UNMEASURED.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-measured-or-unmeasured",
+      "The agent did not read or activate fs_status/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "st-misc-001",
+    "question": "Convert this CSV of monthly expenses into a pie chart description.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Meeting summarization is not result explanation, refusals handling or measurement discipline, so no FoundationSkills skill should be triggered.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_status/SKILL.md"
+    ]
+  },
+  {
+    "id": "st-misc-002",
+    "question": "Write a haiku about debugging late at night.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Writing a status email is an ordinary non-ML-training request and matches no FoundationSkills skill's scope, including the status explainer.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_status/SKILL.md"
+    ]
+  },
+  {
+    "id": "st-positive-extra-001",
+    "question": "/fs-status My training step finished with status RED and exit code 5 in journal.jsonl. What does that mean in plain words?",
+    "expected_skill": "fs-status",
+    "should_trigger": true,
+    "ground_truth": "RED (exit 5): the work ran but a check failed, so the output must not be used; fix what the findings name and re-run that skill.",
+    "expected_behavior": [
+      "Explains RED as: the work ran but a check failed, so the output must not be used",
+      "Gives exit code 5 as RED's code under the PASS/RED/UNMEASURED/REFUSED doctrine",
+      "Says the next step is to fix what the findings name and re-run that skill"
+    ]
+  },
+  {
+    "id": "st-natural-001",
+    "question": "What does exit code 95 mean in a FoundationSkills run, and what should I do about it?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No skill is chosen: the request does not invoke /fs-status, and a user-invoked skill runs only when the user types it. The agent answers directly or suggests typing /fs-status.",
+    "expected_behavior": [
+      "Does not invoke /fs-status on its own initiative",
+      "Answers directly or suggests the user type /fs-status"
+    ]
+  }
+]

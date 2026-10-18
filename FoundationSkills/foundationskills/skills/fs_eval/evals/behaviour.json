@@ -1,0 +1,174 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-eval-oracle-FE-HO-001",
+      "skill": "fs_eval",
+      "rule_id": "FE-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "the composed evaluation is RED (a regression beyond the policy band, a broken report)",
+      "fixture": {
+        "expected": "RED 5 naming FE-HO-001 (the composed evaluation is RED) after check_handoff reads payload[\"red_step\"]; the workflow_record verdict is \"RED\"",
+        "request": {
+          "checkpoint": "/models/q3",
+          "eval_cache": "/eval/cache",
+          "out": "/out/q3"
+        },
+        "simulated_step": {
+          "exit_code": 5,
+          "rule": "EV-HO-001",
+          "skill": "evaluation",
+          "status": "RED"
+        }
+      },
+      "fixture_sha256": "7b48ac9206fbeb657fdaba521d88227aebf346e6ac462685e3a31338204deb79",
+      "expected_behavior": [
+        "Identifies the problem: the composed evaluation is RED (a regression beyond the policy band, a broken report)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FE-HO-001"
+      ],
+      "ground_truth": "fs_eval: rule FE-HO-001 (BLOCK, handoff phase) fires: the composed evaluation is RED (a regression beyond the policy band, a broken report).",
+      "trigger_facts": [
+        {
+          "path": "simulated_step.exit_code",
+          "value": 5
+        },
+        {
+          "path": "simulated_step.rule",
+          "value": "EV-HO-001"
+        },
+        {
+          "path": "simulated_step.skill",
+          "value": "evaluation"
+        },
+        {
+          "path": "simulated_step.status",
+          "value": "RED"
+        }
+      ],
+      "question": "/fs-eval I ran /fs-eval with checkpoint \"/models/q3\", eval_cache \"/eval/cache\", and out \"/out/q3\", and the simulated step came back with exit_code = 5, rule \"EV-HO-001\", skill \"evaluation\", and status \"RED\". I forwarded the request unchanged to the composed evaluation skill and the inner result was RED rather than PASS. What is the outcome of this run and what does the workflow_record verdict end up being?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-eval-oracle-FE-HO-002",
+      "skill": "fs_eval",
+      "rule_id": "FE-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "the composed evaluation is UNMEASURED",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming FE-HO-002 (the composed evaluation is UNMEASURED) — the WARN finding travels with the result and the verdict is never \"PASS\"",
+        "request": {
+          "checkpoint": "/models/q3",
+          "eval_cache": "/eval/cache",
+          "out": "/out/q3"
+        },
+        "simulated_step": {
+          "exit_code": 95,
+          "rule": "EV-HO-003",
+          "skill": "evaluation",
+          "status": "UNMEASURED"
+        }
+      },
+      "fixture_sha256": "622e4af29d6e8ae299a74b90dfcd25bedf4381a0264237a728bf76144311a988",
+      "expected_behavior": [
+        "Identifies the problem: the composed evaluation is UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FE-HO-002"
+      ],
+      "ground_truth": "fs_eval: rule FE-HO-002 (WARN, handoff phase) fires: the composed evaluation is UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step.exit_code",
+          "value": 95
+        },
+        {
+          "path": "simulated_step.rule",
+          "value": "EV-HO-003"
+        },
+        {
+          "path": "simulated_step.skill",
+          "value": "evaluation"
+        },
+        {
+          "path": "simulated_step.status",
+          "value": "UNMEASURED"
+        }
+      ],
+      "question": "/fs-eval Run /fs-eval on checkpoint `/models/q3` with eval_cache `/eval/cache` and out `/out/q3`, forwarding the request unchanged to the composed `evaluation` skill. From my simulated step I observed: exit_code = 95, rule = \"EV-HO-003\", skill = \"evaluation\", and status = \"UNMEASURED\". Given that inner result, what workflow_record outcome and verdict do I get back, and where does it name the eval_report?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-eval-oracle-FE-IN-001",
+      "skill": "fs_eval",
+      "rule_id": "FE-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "neither \"checkpoint\" nor \"run_manifest\" is given",
+      "fixture": {
+        "expected": "REFUSED 96 naming FE-IN-001 (neither \"checkpoint\" nor \"run_manifest\" is given) — fires from the request alone, nothing is written",
+        "request": {}
+      },
+      "fixture_sha256": "11c4aa5c9d9ea9456bb3d1f0ed9f2623906c21c72583951646b8f654b6c3c905",
+      "expected_behavior": [
+        "Identifies the problem: neither \"checkpoint\" nor \"run_manifest\" is given",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FE-IN-001"
+      ],
+      "ground_truth": "fs_eval: rule FE-IN-001 (BLOCK, input phase) fires: neither \"checkpoint\" nor \"run_manifest\" is given.",
+      "trigger_facts": [],
+      "question": "/fs-eval I want to run /fs-eval for an evaluation pass — can you tell me exactly which inputs you need from me (checkpoint, run_manifest, base, benchmarks, policy, eval_cache, out, baseline_cache) and in what form? Once I know, I'll hand you the exact paths and values and we can see what the workflow_record comes back with.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-eval-oracle-FE-IN-002",
+      "skill": "fs_eval",
+      "rule_id": "FE-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the composed evaluation REFUSED",
+      "fixture": {
+        "expected": "REFUSED 96 naming FE-IN-002 (the composed evaluation REFUSED) with the step row in evidence['steps'] — no workflow_record is written",
+        "request": {
+          "checkpoint": "/models/q3",
+          "eval_cache": "/eval/cache",
+          "out": "/out/q3"
+        },
+        "simulated_step": {
+          "exit_code": 96,
+          "refusal": "EV-IN-003: eval cache /eval/cache is missing",
+          "skill": "evaluation",
+          "status": "REFUSED"
+        }
+      },
+      "fixture_sha256": "7b799af04057b94f3ec041c7ed2bbf0c463337ef82ba2f605b9d152b649e0cc6",
+      "expected_behavior": [
+        "Identifies the problem: the composed evaluation REFUSED",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FE-IN-002"
+      ],
+      "ground_truth": "fs_eval: rule FE-IN-002 (BLOCK, input phase) fires: the composed evaluation REFUSED.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step.exit_code",
+          "value": 96
+        },
+        {
+          "path": "simulated_step.refusal",
+          "value": "EV-IN-003: eval cache /eval/cache is missing"
+        },
+        {
+          "path": "simulated_step.skill",
+          "value": "evaluation"
+        },
+        {
+          "path": "simulated_step.status",
+          "value": "REFUSED"
+        }
+      ],
+      "question": "/fs-eval Run /fs-eval with checkpoint /models/q3, eval_cache /eval/cache, and out /out/q3. The inner evaluation step I observed came back with exit_code = 96, skill = \"evaluation\", status = \"REFUSED\", and refusal = \"EV-IN-003: eval cache /eval/cache is missing\". What is the resulting verdict and what does the workflow_record contain?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

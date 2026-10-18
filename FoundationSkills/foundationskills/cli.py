@@ -316,7 +316,9 @@ def _cmd_routing_eval(args: argparse.Namespace) -> int:
         backend = make_backend(cfg, "routing_eval")
         report = re_.run_routing_eval(index, backend, arms=tuple(args.arms.split(",")), reps=args.reps,
                                       workers=args.workers, temperature=args.temperature,
-                                      max_tokens=args.max_tokens, threshold=args.threshold)
+                                      max_tokens=args.max_tokens, threshold=args.threshold,
+                                      resume=(json.loads(Path(args.resume).read_text(encoding="utf-8"))
+                                              if getattr(args, "resume", None) else None))
     except (re_.RoutingEvalRefused, LLMOpError, OSError, json.JSONDecodeError) as exc:
         print(f"[fskills:routing-eval:refuse] {exc}", file=sys.stderr)
         return 96
@@ -679,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--threshold", type=float, default=0.9)
     p_run.add_argument("--timeout", type=float, default=300.0)
     p_run.add_argument("--out", required=True)
+    p_run.add_argument("--resume", default=None, help="earlier report of the SAME run: re-ask only its unmeasured calls")
     p_run.add_argument("--write-benchmarks", action="store_true",
                        help="write BENCHMARK.md per package unless unmeasured")
     p_run.set_defaults(func=_cmd_routing_eval)

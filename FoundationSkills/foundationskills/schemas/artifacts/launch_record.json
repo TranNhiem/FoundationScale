@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "launch_record",
+  "description": "Payload of the single launch_record artifact written by fs_launch (/fs-launch, THE ONLY launch path): what was confirmed, what was launched and what came back.",
+  "type": "object",
+  "required": ["launch_spec", "plan_hash", "submitted"],
+  "additionalProperties": true,
+  "properties": {
+    "launch_spec": {
+      "type": "string",
+      "minLength": 1,
+      "description": "path of the fs_launch_spec artifact that was confirmed and launched"
+    },
+    "plan_hash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "plan_hash(spec_payload) recomputed exactly as confirm_before_launch computes it (first 16 hex of the canonical plan hash); it equals the hash the USER typed back — it is never auto-filled"
+    },
+    "confirmation": {
+      "type": ["string", "null"],
+      "description": "the composed confirm_before_launch confirmation_record's artifact id or path (the only confirmation this launch path accepts)"
+    },
+    "submitted": {
+      "type": "boolean",
+      "description": "true when the request asked to submit to the scheduler (submit: true, default); false when the launcher ran here and waited (submit: false, local)"
+    },
+    "returncode": {
+      "type": ["integer", "null"],
+      "description": "the launcher's return code (null for an sbatch submission); non-zero on a local run is FL-HO-001 / RED 5 — the run itself failed"
+    },
+    "result": {
+      "type": "object",
+      "description": "interfaces.fs.launch.launch's returned dict, JSON-safe: {job_id, pid, command, dry_run_rc, returncode, log?, tail?, fs_verdict?, returncode_raw?}"
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-launch-oracle-FL-HO-001",
+      "skill": "fs_launch",
+      "rule_id": "FL-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a LOCAL launch (submit false) returned a non-zero returncode (the run itself failed)",
+      "fixture": {
+        "expected": "RED 5 naming FL-HO-001 (the run itself failed: the local launch returned 5); the launch_record is written but must not be used",
+        "hash_check": "typed hash matches spec",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json",
+          "submit": false,
+          "user_plan_hash": "3b543c4f2ad0e91f"
+        },
+        "simulated_launch": "the local launch ran and returned returncode 5"
+      },
+      "fixture_sha256": "3dfbeae91ee0ae902c677011dca70d751fad6b418bbba294554b703dc3e6e8e1",
+      "expected_behavior": [
+        "Identifies the problem: a LOCAL launch (submit false) returned a non-zero returncode (the run itself failed)",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FL-HO-001"
+      ],
+      "ground_truth": "fs_launch: rule FL-HO-001 (BLOCK, handoff phase) fires: a LOCAL launch (submit false) returned a non-zero returncode (the run itself failed).",
+      "trigger_facts": [
+        {
+          "path": "hash_check",
+          "value": "typed hash matches spec"
+        },
+        {
+          "path": "simulated_launch",
+          "value": "the local launch ran and returned returncode 5"
+        }
+      ],
+      "question": "/fs-launch I'm ready to go ahead with the launch: spec at `launch/fs_launch_spec.q27.json`, `submit` false (so it runs locally and waits), and I typed back `user_plan_hash` = `3b543c4f2ad0e91f`. I've observed that `hash_check` = \"typed hash matches spec\", and `simulated_launch` = \"the local launch ran and returned returncode 5\". Can you tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-launch-oracle-FL-IN-001",
+      "skill": "fs_launch",
+      "rule_id": "FL-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "user_plan_hash absent or empty (the user reads the hash from `fskills hash`; never echoed or filled in)",
+      "fixture": {
+        "expected": "REFUSED 96 naming FL-IN-001 and the `fskills hash --spec` command for the user, the hash itself never echoed (the user must type it back; it is never filled in); nothing launched and no launch_record written",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json"
+        }
+      },
+      "fixture_sha256": "06c9cf81045516a7f576b2d77b4ec13761bb80db0a6bfd7be023cee5b7b77c01",
+      "expected_behavior": [
+        "Identifies the problem: user_plan_hash absent or empty (the user reads the hash from `fskills hash`; never echoed or filled in)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FL-IN-001"
+      ],
+      "ground_truth": "fs_launch: rule FL-IN-001 (BLOCK, input phase) fires: user_plan_hash absent or empty (the user reads the hash from `fskills hash`; never echoed or filled in).",
+      "trigger_facts": [],
+      "question": "/fs-launch I've got the spec path `launch/fs_launch_spec.q27.json`, and I don't see a `user_plan_hash` alongside it. Before I compose the confirmation and launch, please run `fskills hash --spec launch/fs_launch_spec.q27.json` and type the plan hash back to me exactly as it prints — I won't derive or fill that in myself. Once you give me the hash, I'll confirm with you and then launch via `interfaces.fs.launch.launch`; just tell me whether `submit` should be `true` (goes to the scheduler) or `false` (runs here and waits).",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-launch-oracle-FL-IN-002",
+      "skill": "fs_launch",
+      "rule_id": "FL-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the composed confirm_before_launch skill did not PASS (wrong hash, unreadable or non-fs_launch_spec spec)",
+      "fixture": {
+        "expected": "REFUSED 96 naming FL-IN-002 with confirm_before_launch's findings as {rule_id, severity, message} rows in evidence[\"confirm_before_launch\"] (never as findings)",
+        "request": {
+          "launch_spec": "/nonexistent/spec.json",
+          "user_plan_hash": "deadbeef"
+        }
+      },
+      "fixture_sha256": "9023e8be84099561a5309d2a19880ed3c893742c2dc57cd848e5f80bdb6449fa",
+      "expected_behavior": [
+        "Identifies the problem: the composed confirm_before_launch skill did not PASS (wrong hash, unreadable or non-fs_launch_spec spec)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FL-IN-002"
+      ],
+      "ground_truth": "fs_launch: rule FL-IN-002 (BLOCK, input phase) fires: the composed confirm_before_launch skill did not PASS (wrong hash, unreadable or non-fs_launch_spec spec).",
+      "trigger_facts": [],
+      "question": "/fs-launch I want to run the /fs-launch gate with `launch_spec` set to `/nonexistent/spec.json` and `user_plan_hash` set to `deadbeef` (the hash I typed back). Have it name `fskills hash --spec` for me to supply the plan hash if needed, compose `confirm_before_launch`, and then launch through `interfaces.fs.launch.launch` with `submit` true so it goes to the scheduler. Please write the single `launch_record` with `launch_spec`, `plan_hash`, `confirmation`, `submitted`, `returncode`, and `result` — what's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-launch-oracle-FL-IN-003",
+      "skill": "fs_launch",
+      "rule_id": "FL-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the launcher refused (interfaces.fs.launch raised ConfirmationRequired or LaunchRefused)",
+      "fixture": {
+        "expected": "REFUSED 96 naming FL-IN-003 with the launcher's message verbatim; no launch_record written",
+        "hash_check": "typed hash matches spec",
+        "request": {
+          "launch_spec": "launch/fs_launch_spec.q27.json",
+          "submit": false,
+          "user_plan_hash": "3b543c4f2ad0e91f"
+        },
+        "simulated_launch": "the launcher raises LaunchRefused (e.g. the spec is not executable)"
+      },
+      "fixture_sha256": "1e14179c9c98292db46084ec9df2922cb345584941274d29861ea9d55ea78f44",
+      "expected_behavior": [
+        "Identifies the problem: the launcher refused (interfaces.fs.launch raised ConfirmationRequired or LaunchRefused)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FL-IN-003"
+      ],
+      "ground_truth": "fs_launch: rule FL-IN-003 (BLOCK, input phase) fires: the launcher refused (interfaces.fs.launch raised ConfirmationRequired or LaunchRefused).",
+      "trigger_facts": [
+        {
+          "path": "hash_check",
+          "value": "typed hash matches spec"
+        },
+        {
+          "path": "simulated_launch",
+          "value": "the launcher raises LaunchRefused (e.g. the spec is not executable)"
+        }
+      ],
+      "question": "/fs-launch I want to run the launch gate on `launch/fs_launch_spec.q27.json` with `submit: false` (run locally and wait) and the plan hash I typed back, `3b543c4f2ad0e91f`. I observed `hash_check` = \"typed hash matches spec\" and `simulated_launch` = \"the launcher raises LaunchRefused (e.g. the spec is not executable)\". Given those, what does the launch record end up looking like — what's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

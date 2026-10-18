@@ -120,3 +120,31 @@ def load_entry_points(group: str = "foundationskills.skills") -> list[tuple[str,
         except Exception as exc:
             failures.append((ep.name, f"{type(exc).__name__}: {exc}"))
     return failures
+
+
+INVOCATIONS = ("model", "user")
+
+
+def call_hierarchy_problems(skills: dict[str, BaseSkill]) -> list[str]:
+    """A3.2 call hierarchy over registered skills: ``invocation`` is "model" or "user"; every name a skill
+    ``invokes`` is registered, is not itself, and is a model skill (only the user starts a user skill); a
+    model skill declares no composition (composing is the job of a user workflow skill)."""
+    problems: list[str] = []
+    for name, skill in sorted(skills.items()):
+        invocation = getattr(skill, "invocation", "model")
+        invokes = getattr(skill, "invokes", ())
+        if invocation not in INVOCATIONS:
+            problems.append(f"{name}: invocation {invocation!r} not in {INVOCATIONS}")
+        if not isinstance(invokes, tuple):
+            problems.append(f"{name}: invokes must be a tuple, got {type(invokes).__name__}")
+            continue
+        if invocation == "model" and invokes:
+            problems.append(f"{name}: a model-invoked skill declares invokes={invokes}")
+        for target in invokes:
+            if target == name:
+                problems.append(f"{name} invokes itself")
+            elif target not in skills:
+                problems.append(f"{name} invokes {target!r}, which is not a registered skill")
+            elif getattr(skills[target], "invocation", "model") != "model":
+                problems.append(f"{name} invokes {target!r}, a user-invoked skill: only the user starts a user skill")
+    return problems

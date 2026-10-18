@@ -1,0 +1,56 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-status-oracle-ST-IN-001",
+      "skill": "fs_status",
+      "rule_id": "ST-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "neither a readable journal record nor a \"result\" object is given",
+      "fixture": {
+        "expected": "REFUSED 96 naming ST-IN-001 (neither a readable journal record nor a result object is given)",
+        "request": {
+          "journal": "/nonexistent/journal.jsonl"
+        }
+      },
+      "fixture_sha256": "657c146a5522c3eac2597008a93eb42005a9fa8471510b3f9eec226be53a7b9d",
+      "expected_behavior": [
+        "Identifies the problem: neither a readable journal record nor a \"result\" object is given",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ST-IN-001"
+      ],
+      "ground_truth": "fs_status: rule ST-IN-001 (BLOCK, input phase) fires: neither a readable journal record nor a \"result\" object is given.",
+      "trigger_facts": [],
+      "question": "/fs-status I want to run /fs-status against my FoundationSkills journal at `/nonexistent/journal.jsonl`, reading the last record in it. Can you tell me what the outcome is and what my `status_explanation` comes back as?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-status-oracle-ST-IN-002",
+      "skill": "fs_status",
+      "rule_id": "ST-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the record's status and exit_code disagree with the doctrine",
+      "fixture": {
+        "expected": "REFUSED 96 naming ST-IN-002 (the record's status and exit_code disagree with the doctrine)",
+        "request": {
+          "result": {
+            "exit_code": 5,
+            "status": "PASS"
+          }
+        }
+      },
+      "fixture_sha256": "5ad2e96c1462a96a980b91d908fe90aab58b724dc94a65c66dff22157fbbf8ff",
+      "expected_behavior": [
+        "Identifies the problem: the record's status and exit_code disagree with the doctrine",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ST-IN-002"
+      ],
+      "ground_truth": "fs_status: rule ST-IN-002 (BLOCK, input phase) fires: the record's status and exit_code disagree with the doctrine.",
+      "trigger_facts": [],
+      "question": "/fs-status I've got a skill result object with `exit_code: 5` and `status: \"PASS\"` that I want explained. Can you run `/fs-status` on it and give me the `status_explanation`? I just want to know what this status means and what I should do next.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}
