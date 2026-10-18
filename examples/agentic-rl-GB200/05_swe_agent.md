@@ -78,7 +78,7 @@ Settings in `configs/swe_mimo9b_2gpu.json`, all from the measured run:
 - Up to 20 tool turns, 2,048 tokens per turn and 12,000 per episode; 4 tasks x 8 attempts per
   step, at most 16 sandboxes at once. A step takes about 25 minutes (about 5 rollout, the rest
   training), so 100 steps take about 40 hours.
-- `VLLM_USE_FLASHINFER_SAMPLER=0` and `rollout.engine_recovery_retries: 1`: see the note on
+- `VLLM_USE_FLASHINFER_SAMPLER=0` and `rollout.engine_recovery_retries: 3`: see the note on
   engine hangs below.
 
 If the trainer runs inside a container that has no enroot (as on our GB200 nodes), run the
@@ -103,10 +103,16 @@ comparison row.
 
 ## Engine hangs
 
-On our GB200 nodes vLLM 0.21 sometimes stops producing tokens mid-step (GPU at 100%, 0 tokens/s,
-requests stuck). FoundationScale recovers from it: with `engine_recovery_retries: 1` a step where
-engine failures exceed `max_infra_rate` restarts the engine, pushes the current checkpoint and
-re-runs the step, and a weight push that meets a hung engine is retried the same way. Turning off
-the FlashInfer sampler did not stop the hangs; in our tests the FLASH_ATTN attention backend
-(`--attention-backend FLASH_ATTN` in `engine.command`) and eager mode each ran a full eval without
-one, which is weak evidence (one run each).
+On our GB200 nodes vLLM 0.21 sometimes stops producing tokens mid-step: the requests in flight time
+out and those episodes come back as infra failures. FoundationScale recovers from it with
+`rollout.engine_recovery_retries`: a step whose engine failures exceed `max_infra_rate` restarts
+the engine, pushes the current checkpoint and re-runs the step, and a weight push that meets a
+hung engine is retried the same way. Use 3 retries rather than 1; a stall can recur on the retry.
+
+What we measured with the engine settings (keep the defaults in `configs/swe_mimo9b_2gpu.json`):
+
+- Turning off the FlashInfer sampler (`VLLM_USE_FLASHINFER_SAMPLER=0`) did not prevent stalls, but
+  the run that used it with the default attention backend went 65+ steps without one.
+- Do not switch to `--attention-backend FLASH_ATTN`. A single 96-episode eval ran clean with it,
+  but every training run that used it lost about 19 of 32 episodes to timeouts within a few
+  steps, and the retries timed out on the same count again, so the runs ended.
