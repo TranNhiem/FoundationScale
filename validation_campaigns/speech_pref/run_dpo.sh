@@ -11,7 +11,7 @@ CT="env ENROOT_DATA_PATH=$HOME/.local/share/enroot enroot start -e PYTHONNOUSERS
 P=${PAIRS_PER_STEP:-16}; N=$(wc -l < $O/pairs.jsonl); STEPS=$(( ${EPOCHS:-1} * N / P )); EVERY=$(( STEPS / 4 )); D=$O/dpo${RUN:+_$RUN}
 echo "pairs $N -> $STEPS steps, save every $EVERY"
 [ -d $D/final ] || $CT $HOME/envs/hf-cand-519/bin/python $R/validation_campaigns/speech_pref/train_dpo.py --model $SFT --pairs $O/pairs.jsonl \
-  --save-dir $D --beta ${BETA:-0.1} --sft-weight ${SFTW:-0.0} --learning-rate ${LR:-1e-6} --pairs-per-step $P --max-steps $STEPS --save-every $EVERY < /dev/null > $D.log 2>&1 || { echo "dpo failed"; tail -5 $D.log; exit 1; }
+  --save-dir $D --beta ${BETA:-0.1} --sft-weight ${SFTW:-0.0} --learning-rate ${LR:-1e-6} --pairs-per-step $P --max-steps $STEPS --save-every $EVERY --seed ${SEED:-0} < /dev/null > $D.log 2>&1 || { echo "dpo failed"; tail -5 $D.log; exit 1; }
 for ck in $(ls -d $D/step_* $D/final 2>/dev/null); do
   n=$(basename $ck); [ -s $D/val_$n/eval.json ] || PROC=$W/Qwen3-ASR-0.6B-hf FS_TREE=$R bash $R/validation_campaigns/speech_q3asr/decode.sh $G $ck earnings_validation1000.jsonl $D/val_$n
 done
