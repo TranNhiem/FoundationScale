@@ -27,6 +27,24 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _LETTER_RE = re.compile(r"[A-Z]")
 
 
+def strip_think(text: str) -> str:
+    """Remove reasoning from a completion before an answer is read from it.
+
+    Complete ``<think>...</think>`` blocks are removed. A closing tag with no
+    opening tag before it means the chat template opened the block in the
+    GENERATION PROMPT, so everything up to the last such tag is reasoning.
+    Measured 2026-10-18 on Qwen3.5-4B (generation prompt ends ``<think>\n``):
+    completions ending in a correct bare letter carried only ``</think>``,
+    the block was never stripped, the reasoning's own letters made every
+    completion ambiguous, and 32/32 GRPO steps abstained. An unclosed block
+    (a completion truncated mid-reasoning) is left as is.
+    """
+    stripped = _THINK_BLOCK_RE.sub(" ", text)
+    if "</think>" in stripped:
+        stripped = stripped.rsplit("</think>", 1)[1]
+    return stripped
+
+
 def _parse_letter(response: str, pattern: re.Pattern[str] | None = None) -> str | None:
     """Parse the single answer letter from a completion, or abstain.
 
@@ -50,7 +68,7 @@ def _parse_letter(response: str, pattern: re.Pattern[str] | None = None) -> str 
     completion that answers twice, differently, is unreadable exactly as
     before. The pattern removes false candidates, never a real disagreement.
     """
-    stripped = _THINK_BLOCK_RE.sub(" ", response)
+    stripped = strip_think(response)
     if pattern is None:
         candidates: tuple[str, ...] = tuple(_LETTER_RE.findall(stripped.upper()))
     else:
