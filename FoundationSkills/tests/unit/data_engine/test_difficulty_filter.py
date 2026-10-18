@@ -321,3 +321,10 @@ def test_non_object_meta_is_dropped_before_rollouts(monkeypatch) -> None:
     assert out[0]["meta"]["src"] == "x" and out[0]["meta"]["pass_rate"] == 0.5
     assert dict(stats.dropped) == {"difficulty_meta_not_object": 1}
     assert [s.sample_id for s in calls["samples"][0]] == ["ok"]  # never spent rollouts on it
+
+
+def test_chat_template_kwargs_is_a_declared_config_key() -> None:
+    from foundationskills.skills.data_engine.ops import difficulty_filter as df
+
+    prop = df.CONFIG_SCHEMA["properties"]["chat_template_kwargs"]
+    assert prop["default"] is None and "object" in prop["type"]

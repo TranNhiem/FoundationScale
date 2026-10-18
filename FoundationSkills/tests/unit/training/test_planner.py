@@ -450,3 +450,18 @@ def test_emit_rl_passes_the_memory_knobs() -> None:
 
     assert emit_rl._HPARAM_TO_RL["logprob_micro_batch"] == "logprob_micro_batch"
     assert emit_rl._HPARAM_TO_RL["gradient_checkpointing"] == "gradient_checkpointing"
+
+
+def test_rl_chat_template_kwargs_are_declared_never_inferred(patched) -> None:
+    plain = planner.plan(_goal(), caps=_fake_caps())
+    assert all("chat_template_kwargs" not in s["hparams"] for s in plain["stages"])
+    declared = planner.plan(_goal(rl_chat_template_kwargs={"enable_thinking": False}), caps=_fake_caps())
+    by_stage = {s["stage"]: s for s in declared["stages"]}
+    assert by_stage["rl"]["hparams"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "chat_template_kwargs" not in by_stage["sft"]["hparams"]
+
+
+def test_emit_rl_passes_chat_template_kwargs() -> None:
+    from foundationskills.interfaces.fs import emit_rl
+
+    assert emit_rl._HPARAM_TO_RL["chat_template_kwargs"] == "chat_template_kwargs"

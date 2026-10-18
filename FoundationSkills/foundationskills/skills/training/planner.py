@@ -1178,6 +1178,12 @@ def plan(
                                ("gradient_checkpointing", grad_ckpt), ("sharding_strategy", sharding)):
                 if not any(hparams.get(k) is not None for k in (key, *_HP_ALIASES.get(key, ()))):
                     hparams[key] = value
+        if stage == "rl" and goal.get("rl_chat_template_kwargs") is not None and hparams.get("chat_template_kwargs") is None:
+            # An operator declaration, never inferred: e.g. {"enable_thinking": False} for a thinking model whose
+            # pass rates are bimodal with thinking on (measured 2026-10-18, Qwen3.5-4B on ARC-Challenge).
+            hparams["chat_template_kwargs"] = dict(goal["rl_chat_template_kwargs"])
+            decide("hparams", f"{stage}: chat_template_kwargs {hparams['chat_template_kwargs']}",
+                   "declared by goal.rl_chat_template_kwargs; the difficulty filter must use the same value")
         if (stage == "rl" and goal.get("rl_min_measured_fraction") is not None
                 and hparams.get("min_measured_fraction") is None):  # an operator stage value wins
             # An operator-declared verdict floor, never a planner guess: the RL driver

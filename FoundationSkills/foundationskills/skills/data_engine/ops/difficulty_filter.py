@@ -86,6 +86,9 @@ CONFIG_SCHEMA: dict[str, Any] = {
         "dtype": {"enum": ["bfloat16", "float16", "float32"], "default": "bfloat16"},
         "gold_key": {"type": "string", "default": "answer"},
         "answer_pattern": {"type": ["string", "null"], "default": None},
+        # Declared template options for the sampled prompt (e.g. {"enable_thinking": false}); pass the SAME
+        # value the RL stage declares, or the measured pass rate is not the one RL trains on.
+        "chat_template_kwargs": {"type": ["object", "null"], "default": None},
     },
 }
 
@@ -161,6 +164,7 @@ def _load_rollout(cfg: dict) -> Callable[[list], list[list[str]]]:
     temperature = float(cfg.get("temperature", 1.0))
     top_p = float(cfg.get("top_p", 1.0))
     device = str(cfg.get("device", "auto"))
+    template_kwargs = dict(cfg.get("chat_template_kwargs") or {})
     if device == "auto":
         if not torch.cuda.is_available():
             raise OpUnavailable(
@@ -206,7 +210,7 @@ def _load_rollout(cfg: dict) -> Callable[[list], list[list[str]]]:
             chunk = samples[start:start + batch_size]
             try:
                 with torch.no_grad():
-                    ids = encode_prompts(surface, chunk, device)
+                    ids = encode_prompts(surface, chunk, device, template_kwargs)
                     out = model.generate(
                         **ids,
                         max_new_tokens=max_new_tokens,

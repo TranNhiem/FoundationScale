@@ -1139,6 +1139,12 @@ class RLTrainConfig:
     # of those three price a group-relative advantage over externally supplied
     # rows yet.
     rollout_source: Any | None = None
+    # Declared chat-template options for the rollout prompt, forwarded verbatim to
+    # apply_chat_template (e.g. {"enable_thinking": False}). None keeps the template's
+    # own default. Measured 2026-10-18 (Qwen3.5-4B, thinking on by default, ARC-Challenge,
+    # k=8 at 2048 tokens): pass rates were bimodal (220 always right, 5 always wrong,
+    # 54 never finishing), so no GRPO group carried reward variance.
+    chat_template_kwargs: dict[str, Any] | None = None
     # Video as a DECLARED frame budget (foundationscale.video): 0 keeps video
     # refused; N >= 1 turns each clip into N centred-uniform frames, routed as
     # images. Frames are cached under video_cache_dir (default: a
@@ -1923,7 +1929,9 @@ class RLTrainer:
         # that emits pixel_values. Everything downstream is unchanged --
         # prompt_width still comes from the encoded tensor, and the extra
         # modality keys are group-expanded and forwarded to the scorer below.
-        prompt_ids = encode_prompts(surface, chunk, device)
+        # the declared template options travel only when declared, so the call is unchanged otherwise
+        template_kw = {"chat_template_kwargs": self.config.chat_template_kwargs} if self.config.chat_template_kwargs else {}
+        prompt_ids = encode_prompts(surface, chunk, device, **template_kw)
         with torch.no_grad(), _generation_mode(model) as gen_model:
             # Under DDP the generative path bypasses the wrapper (no_grad --
             # no grad sharing is wanted during rollout); under fsdp the
