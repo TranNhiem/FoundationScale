@@ -35,8 +35,11 @@ CREATED = "2026-10-02T00:00:00Z"
 PACKAGE_NAMES = (
     "fs-data",
     "fs-eval",
+    "fs-goal",
+    "fs-handoff",
     "fs-launch",
     "fs-plan",
+    "fs-research",
     "fs-status",
     "fskills-auto-research",
     "fskills-confirm-before-launch",

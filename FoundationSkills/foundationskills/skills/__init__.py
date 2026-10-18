@@ -136,6 +136,30 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
     except ImportError:
         pass
 
+    try:
+        from foundationskills.skills.fs_goal.skill import FsGoalSkill
+
+        if FsGoalSkill.name not in registry.names():
+            registry.register(FsGoalSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_research.skill import FsResearchSkill
+
+        if FsResearchSkill.name not in registry.names():
+            registry.register(FsResearchSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_handoff.skill import FsHandoffSkill
+
+        if FsHandoffSkill.name not in registry.names():
+            registry.register(FsHandoffSkill())
+    except ImportError:
+        pass
+
     return sorted(set(registry.names()) - before)
 
 

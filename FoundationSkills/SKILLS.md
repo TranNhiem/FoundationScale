@@ -14,8 +14,11 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | `evaluation` | model | `checkpoint` | `eval_report` | `foundationskills/skills/evaluation/SKILL.md` |
 | `fs_data` | user | `raw_data_ref` | `workflow_record` | `foundationskills/skills/fs_data/SKILL.md` |
 | `fs_eval` | user | `checkpoint` | `workflow_record` | `foundationskills/skills/fs_eval/SKILL.md` |
+| `fs_goal` | user | - | `goal_spec` | `foundationskills/skills/fs_goal/SKILL.md` |
+| `fs_handoff` | user | - | `handoff` | `foundationskills/skills/fs_handoff/SKILL.md` |
 | `fs_launch` | user | `fs_launch_spec` | `launch_record` | `foundationskills/skills/fs_launch/SKILL.md` |
 | `fs_plan` | user | `goal_spec`, `readiness_report`, `dataset`, `probe_report` | `workflow_record` | `foundationskills/skills/fs_plan/SKILL.md` |
+| `fs_research` | user | `goal_spec`, `claim_set` | `research_findings` | `foundationskills/skills/fs_research/SKILL.md` |
 | `fs_status` | user | - | `status_explanation` | `foundationskills/skills/fs_status/SKILL.md` |
 | `measured_or_unmeasured` | model | `claim_set` | `claim_set` | `foundationskills/skills/measured_or_unmeasured/SKILL.md` |
 | `probe_first` | model | `training_plan` | `probe_report` | `foundationskills/skills/probe_first/SKILL.md` |

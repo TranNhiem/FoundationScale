@@ -1,0 +1,83 @@
+{
+  "$id": "foundationskills/skills/fs_handoff/handoff.schema.json",
+  "title": "handoff",
+  "description": "Payload of the ONE `handoff` artifact fs_handoff writes (/fs-handoff). Every session artifact is referenced BY PATH with {path, type, id, sha256} pinning the file's bytes; no artifact payload is ever copied. `notes` and `next_steps` arrive already redacted and `redactions` counts what was removed (kinds with count 0 are omitted).",
+  "type": "object",
+  "required": [
+    "artifacts",
+    "notes",
+    "next_steps",
+    "redactions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "description": "one row per artifact JSON path from the session, reference only \u2014 the payload stays in its own file",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "id",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "path of the artifact JSON file, exactly as the caller gave it: the handoff carries the path, never the payload"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "the envelope's artifact type (e.g. probe_report, data_report, launch_record)"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "the envelope's artifact id (the file's stem when the envelope holds no id)"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "sha256 of the artifact FILE's bytes, pinning what was handed off"
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "free text for the next session, already redacted of secrets and PII"
+    },
+    "next_steps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "what the next session should do first, each entry redacted exactly like `notes`"
+    },
+    "redactions": {
+      "type": "object",
+      "description": "kind -> count of redactions applied (kinds with count 0 are omitted): secrets env_value, sk_token, ghp_token, akia_key, bearer_token and PII email, phone, credit_card, ssn, national_id",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "how many occurrences of that kind were replaced with [REDACTED:<kind>]"
+      },
+      "examples": [
+        {},
+        {
+          "env_value": 2
+        },
+        {
+          "secret_sk": 1,
+          "email": 2,
+          "phone": 1
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "$id": "fs_research.research_findings",
+  "title": "research_findings",
+  "description": "The claim-measurement research record FsResearchSkill writes through write_artifact to request record_dir or ctx.artifacts_dir.",
+  "type": "object",
+  "required": [
+    "goal_spec",
+    "claims",
+    "verdict",
+    "steps"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "goal_spec": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "path to the goal spec this research answers to, or null when none was given (recorded only)"
+    },
+    "claims": {
+      "type": "array",
+      "description": "the composed measured_or_unmeasured step's corrected claims, read from its claim_set artifact through _workflow.load_payload (falls back to the claims as given when it wrote none)",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "claim"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1
+          },
+          "asserted_status": {
+            "enum": [
+              "PASS",
+              "RED",
+              "UNMEASURED",
+              "REFUSED"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measured": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "PASS",
+        "UNMEASURED"
+      ],
+      "description": "PASS only when every corrected claim is measured (and the composed step is not UNMEASURED); anything unmeasured makes it UNNEVER, never a pass"
+    },
+    "steps": {
+      "type": "array",
+      "description": "one row per composed model-skill run (_workflow.Step.as_row); the composed findings travel here as EVIDENCE, never as this skill's findings",
+      "items": {
+        "type": "object",
+        "required": [
+          "skill",
+          "status",
+          "exit_code"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "skill": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "PASS",
+              "RED",
+              "UNMEASURED",
+              "REFUSED"
+            ]
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "refusal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "artifacts": {
+            "type": "array"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "rule_id",
+                "severity",
+                "message"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "rule_id": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "recovery": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "composed_status": {
+      "enum": [
+        "PASS",
+        "RED",
+        "UNMEASURED",
+        "REFUSED"
+      ],
+      "description": "the composed measured_or_unmeasured step's status (mapped by _workflow.outcome_class)"
+    },
+    "composed_red": {
+      "type": "boolean",
+      "description": "true exactly when the composed step came back RED: the payload flag check_handoff reads to fire FR-HO-002 -> RED 5 (run() never returns RED)"
+    }
+  }
+}

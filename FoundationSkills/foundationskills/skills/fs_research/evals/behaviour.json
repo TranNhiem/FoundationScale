@@ -1,0 +1,143 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-research-oracle-FR-HO-001",
+      "skill": "fs_research",
+      "rule_id": "FR-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "some corrected claims are UNMEASURED",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming FR-HO-001 (some corrected claims are UNMEASURED) with one research_findings artifact whose verdict is \"UNMEASURED\"",
+        "request": {
+          "claims": [
+            {
+              "claim": "the reward rose",
+              "id": "c2",
+              "measured": false
+            }
+          ],
+          "goal_spec": "goals/rl.goal.json",
+          "record_dir": "out/research"
+        },
+        "simulated_step": "claims checker found unmeasured claims"
+      },
+      "fixture_sha256": "74d3bfaddcc40f394d3fce2eb616b9deb765ae34613b4bc3efb000613e927027",
+      "expected_behavior": [
+        "Identifies the problem: some corrected claims are UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FR-HO-001"
+      ],
+      "ground_truth": "fs_research: rule FR-HO-001 (WARN, handoff phase) fires: some corrected claims are UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "claims checker found unmeasured claims"
+        }
+      ],
+      "question": "/fs-research I want to run /fs-research with goal_spec `goals/rl.goal.json` and record_dir `out/research`, using a claims list of one entry: `{id: \"c2\", claim: \"the reward rose\", measured: false}`. I already observed that simulated_step = \"claims checker found unmeasured claims\" on this input. What is the resulting verdict and what gets written into the research_findings artifact for this run?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-research-oracle-FR-HO-002",
+      "skill": "fs_research",
+      "rule_id": "FR-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "the composed measured_or_unmeasured step came back RED",
+      "fixture": {
+        "expected": "RED 5 naming FR-HO-002 from check_handoff on the PASS run whose payload flag composed_red is set (run() never returns RED)",
+        "request": {
+          "claims": [
+            {
+              "claim": "the loss fell",
+              "id": "c1",
+              "measured": true
+            }
+          ],
+          "goal_spec": "goals/q2.goal.json",
+          "record_dir": "out/research"
+        },
+        "simulated_step": "measured_or_unmeasured went RED"
+      },
+      "fixture_sha256": "52c1ca80da1073f9356c6eefb43eeb33dfe15c48fb1d02f3713632594a0eb514",
+      "expected_behavior": [
+        "Identifies the problem: the composed measured_or_unmeasured step came back RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FR-HO-002"
+      ],
+      "ground_truth": "fs_research: rule FR-HO-002 (BLOCK, handoff phase) fires: the composed measured_or_unmeasured step came back RED.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "measured_or_unmeasured went RED"
+        }
+      ],
+      "question": "/fs-research I want to run /fs-research with goal_spec \"goals/q2.goal.json\", record_dir \"out/research\", and one claim: id \"c1\", claim \"the loss fell\", measured true. I observed that simulated_step = \"measured_or_unmeasured went RED\". What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-research-oracle-FR-IN-001",
+      "skill": "fs_research",
+      "rule_id": "FR-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no \"claims\" list is given, or the list is empty",
+      "fixture": {
+        "expected": "REFUSED 96 naming FR-IN-001 (no \"claims\" list is given, or the list is empty); nothing is written",
+        "request": {
+          "goal_spec": "goals/measure_loss.goal.json",
+          "record_dir": "out/research"
+        }
+      },
+      "fixture_sha256": "678a8fbc697e4f1f7643d443e3ef2f7c727a7d451a7d632a0f591edf66559612",
+      "expected_behavior": [
+        "Identifies the problem: no \"claims\" list is given, or the list is empty",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FR-IN-001"
+      ],
+      "ground_truth": "fs_research: rule FR-IN-001 (BLOCK, input phase) fires: no \"claims\" list is given, or the list is empty.",
+      "trigger_facts": [],
+      "question": "/fs-research I want to run /fs-research against my goal spec at goals/measure_loss.goal.json and have the findings written to out/research. Use the claims I've staged with this request as the input list, including their ids, claim text, any asserted_status, evidence, and measured fields as given. Compose the measured_or_unmeasured step so every claim gets checked, and produce the single research_findings artifact with the goal_spec, the corrected claims, the verdict, and the steps. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-research-oracle-FR-IN-002",
+      "skill": "fs_research",
+      "rule_id": "FR-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the composed measured_or_unmeasured step refused",
+      "fixture": {
+        "expected": "REFUSED 96 naming FR-IN-002 (the composed measured_or_unmeasured step was refused); its findings travel in evidence[\"steps\"] and nothing is written",
+        "request": {
+          "claims": [
+            {
+              "claim": "the loss fell",
+              "id": "c1",
+              "measured": true
+            }
+          ],
+          "record_dir": "out/research"
+        },
+        "simulated_step": "measured_or_unmeasured refused its input"
+      },
+      "fixture_sha256": "d448d8d3c54ab3bb34fff0afed51bda2a9dd7c728de4333aa9fbf857597c0dbf",
+      "expected_behavior": [
+        "Identifies the problem: the composed measured_or_unmeasured step refused",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FR-IN-002"
+      ],
+      "ground_truth": "fs_research: rule FR-IN-002 (BLOCK, input phase) fires: the composed measured_or_unmeasured step refused.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "measured_or_unmeasured refused its input"
+        }
+      ],
+      "question": "/fs-research I'm running /fs-research with a single claim c1 (\"the loss fell\", measured: true) and record_dir set to out/research. I observed that simulated_step came back as \"measured_or_unmeasured refused its input\". What is the resulting outcome and verdict for this run?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

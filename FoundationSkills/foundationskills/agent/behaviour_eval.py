@@ -304,7 +304,13 @@ def run_behaviour_eval(
             reply = "\n\n".join(parts)
             messages = [*messages, {"role": "assistant", "content": response.content or ""},
                         {"role": "user", "content": reply}]
+        agent_budget = _escalated_budget(response, int(agent_max_tokens), _AGENT_BUDGET_CAP)
+        if agent_budget is not None:  # re-ask once with a larger budget, recorded on the row
+            response = agent.complete(messages, temperature=float(agent_temperature), max_tokens=agent_budget,
+                                      seed=rep, json_mode=False)
         row = _record_call(response, arm, entry, case, rep, judge, int(judge_max_tokens))
+        if agent_budget is not None:
+            row["agent_budget_escalated"] = agent_budget
         row["agent_retried"] = retried
         if references:
             row["references_read"] = reads
@@ -442,15 +448,18 @@ def _complete_retrying(backend: LLMBackend, messages: list[dict], *, seed: int, 
 
 
 _JUDGE_BUDGET_CAP = 16384
+# The agent arm runs at temperature 0, so an answer that exhausts its budget comes back empty on every retry and
+# resume. Measured 2026-10-18 (A3.2, /fs-goal routing): one with-skill call stayed empty through a resume.
+_AGENT_BUDGET_CAP = 32768
 
 
-def _escalated_budget(response: LLMResponse, max_tokens: int) -> int | None:
-    """The larger judge budget to re-ask with when an empty reply hit the token limit, else None."""
+def _escalated_budget(response: LLMResponse, max_tokens: int, cap: int = _JUDGE_BUDGET_CAP) -> int | None:
+    """The larger budget to re-ask with when an empty reply hit the token limit (capped at ``cap``), else None."""
     if response.content or response.error and "empty" not in str(response.error):
         return None
     used = int(response.completion_tokens or 0)
     truncated = response.finish_reason == "length" or used >= int(max_tokens)
-    budget = min(int(max_tokens) * 2, _JUDGE_BUDGET_CAP)
+    budget = min(int(max_tokens) * 2, int(cap))
     return budget if truncated and budget > int(max_tokens) else None
 
 

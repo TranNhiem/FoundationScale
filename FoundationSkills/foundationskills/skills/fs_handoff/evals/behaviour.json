@@ -1,0 +1,98 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-handoff-oracle-FH-HO-001",
+      "skill": "fs_handoff",
+      "rule_id": "FH-HO-001",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "redactions were applied to notes and next_steps: report the counts; never blocks",
+      "fixture": {
+        "expected": "PASS 0 writing one handoff artifact with FH-HO-001 INFO naming the counts (secret_sk 1, email 1); it reports and never blocks",
+        "request": {
+          "artifacts": [
+            "job/artifacts/probe.json"
+          ],
+          "next_steps": [
+            "resume the trainer at step 3"
+          ],
+          "notes": "the curator is a.chen@example.com and the key is sk-live-9f2c44ab77",
+          "record_dir": "job/records"
+        },
+        "simulated_setup": "one artifact envelope at job/artifacts/probe.json"
+      },
+      "fixture_sha256": "298d08fac04e9914652a57c68aab13fbf4c8209de29fed3eb852408361a2c64b",
+      "expected_behavior": [
+        "Identifies the problem: redactions were applied to notes and next_steps: report the counts; never blocks",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule FH-HO-001"
+      ],
+      "ground_truth": "fs_handoff: rule FH-HO-001 (INFO, handoff phase) fires: redactions were applied to notes and next_steps: report the counts; never blocks.",
+      "trigger_facts": [
+        {
+          "path": "simulated_setup",
+          "value": "one artifact envelope at job/artifacts/probe.json"
+        }
+      ],
+      "question": "/fs-handoff My simulated setup is exactly one artifact envelope at `job/artifacts/probe.json`. I want a single handoff artifact written to `job/records` that references `job/artifacts/probe.json` by path with its `{path, type, id, sha256}`, along with `next_steps` = [\"resume the trainer at step 3\"] and `notes` = \"the curator is a.chen@example.com and the key is sk-live-9f2c44ab77\", with any secrets and PII in those strings redacted. Nothing else should be composed, invoked, or written. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-handoff-oracle-FH-IN-001",
+      "skill": "fs_handoff",
+      "rule_id": "FH-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no \"artifacts\" list is given, so there is nothing to hand off",
+      "fixture": {
+        "expected": "REFUSED 96 naming FH-IN-001 (no `artifacts` list is given, so there is nothing to hand off); nothing is written",
+        "request": {
+          "artifacts": [],
+          "next_steps": [
+            "resume the trainer at step 3"
+          ],
+          "notes": "carry on where we stopped"
+        }
+      },
+      "fixture_sha256": "0006665a84f334dd31af6104afcf1c475f8f020059918e8dc688b398890d533c",
+      "expected_behavior": [
+        "Identifies the problem: no \"artifacts\" list is given, so there is nothing to hand off",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FH-IN-001"
+      ],
+      "ground_truth": "fs_handoff: rule FH-IN-001 (BLOCK, input phase) fires: no \"artifacts\" list is given, so there is nothing to hand off.",
+      "trigger_facts": [],
+      "question": "/fs-handoff Hold off on /fs-handoff for now — I'll send it through once I have the session's artifact JSON paths to pass in. Keep my notes `carry on where we stopped` and the next step `resume the trainer at step 3` ready for when I do.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-handoff-oracle-FH-IN-002",
+      "skill": "fs_handoff",
+      "rule_id": "FH-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "an artifact path is missing or is not an artifact envelope (no type/payload)",
+      "fixture": {
+        "expected": "REFUSED 96 naming FH-IN-002 (job/scratch/raw.json is not an artifact envelope with type and payload); nothing is written",
+        "request": {
+          "artifacts": [
+            "job/artifacts/probe.json",
+            "job/scratch/raw.json"
+          ],
+          "notes": "carry on"
+        }
+      },
+      "fixture_sha256": "4d458dc43a5c0177271605ed7f4a82bcac5b7d3268d6b1493d8ec21a6c51098f",
+      "expected_behavior": [
+        "Identifies the problem: an artifact path is missing or is not an artifact envelope (no type/payload)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FH-IN-002"
+      ],
+      "ground_truth": "fs_handoff: rule FH-IN-002 (BLOCK, input phase) fires: an artifact path is missing or is not an artifact envelope (no type/payload).",
+      "trigger_facts": [],
+      "question": "/fs-handoff Please run /fs-handoff with the artifacts `job/artifacts/probe.json` and `job/scratch/raw.json`, and notes \"carry on\".",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

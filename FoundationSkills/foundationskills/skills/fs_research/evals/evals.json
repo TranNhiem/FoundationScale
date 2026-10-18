@@ -1,0 +1,181 @@
+[
+  {
+    "id": "fr-positive-001",
+    "question": "/fs-research research the claims for goal_spec goals/measure_loss.goal.json and record into out/research: c1 'the train loss fell after step 2k' measured true evidence 'runs/m18/train_loss.json', c2 'the eval set was deduplicated' measured false.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research (/fs-research) and composes measured_or_unmeasured through foundationskills.skills._workflow.run_step with exactly {claims: [...]}, reads the corrected claims back from the composed step's claim_set artifact via _workflow.load_payload and writes ONE research_findings into request.record_dir (out/research) with {goal_spec, claims, verdict, steps}. c2 was never measured, so the agent reports FR-HO-001 as UNMEASURED 95 with verdict \"UNMEASURED\", still writes the research_findings artifact and never calls it a pass.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent composed measured_or_unmeasured through foundationskills.skills._workflow.run_step with only the claims",
+      "The agent took the corrected claims from the composed claim_set artifact via _workflow.load_payload",
+      "The agent said FR-HO-001 is UNMEASURED 95 with verdict UNMEASURED and never treated it as PASS"
+    ]
+  },
+  {
+    "id": "fr-positive-002",
+    "question": "/fs-research goal_spec goals/rl_goal.json and record into out/research — claims: [] (nothing to check yet). Go.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research and refuses FR-IN-001: no \"claims\" list is given or the list is empty, so nothing is composed and no research_findings artifact is written (REFUSED 96).",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent refused with FR-IN-001 and exit 96 naming the empty claims list",
+      "The agent composed measured_or_unmeasured never (the input phase refused first)",
+      "The agent wrote no artifact and asked for a non-empty claim list instead of inventing claims"
+    ]
+  },
+  {
+    "id": "fr-positive-003",
+    "question": "/fs-research I have goal_spec goals/sft.goal.json and record_dir out/sft but I forgot the claims again.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research and refuses FR-IN-001 (no \"claims\" list is given) with REFUSED 96, writing nothing, and names the missing input so the user can supply the claim objects.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent reported FR-IN-001 as REFUSED 96 naming the missing claims list",
+      "The agent wrote nothing on the refusal",
+      "The agent asked the user for the claim objects {id, claim, asserted_status?, evidence?, measured?}"
+    ]
+  },
+  {
+    "id": "fr-positive-004",
+    "question": "/fs-research measured_or_unmeasured refused its input and my run at out/research (goal_spec goals/probe.goal.json, c1 'the probe loss matched the baseline' measured true evidence 'runs/procure') came back REFUSED 96 FR-IN-002. What exactly must I supply?",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research and explains FR-IN-002: the composed measured_or_unmeasured step refused, so this skill refuses too (REFUSED 96) with the checker's own findings copied into evidence[\"steps\"] and as this skill's findings. It names the input the checker's refusal asks for and tells the user to supply it and re-run /fs-research rather than improvising a verdict.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent said FR-IN-002 means the composed measured_or_unmeasured step refused and that its findings travel in evidence[\"steps\"]",
+      "The agent returned REFUSED 96 and wrote no research_findings artifact",
+      "The agent asked for the input the checker's refusal names and then re-ran /fs-research"
+    ]
+  },
+  {
+    "id": "fr-positive-005",
+    "question": "/fs-research check these two claims for goal_spec goals/cpt.goal.json and record into out/research: c1 'the CPT loss matched the pretrain baseline' measured true evidence 'runs/cpt/loss.json', c2 'the harness was pinned at v3' measured true evidence 'runs/cpt/harness.lock'.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research, composes measured_or_unmeasured with exactly those two claims, copies the corrected claims into research_findings {goal_spec: 'goals/cpt.goal.json', claims, verdict, steps} written to out/research, and returns PASS 0 with verdict \"PASS\" because every corrected claim is measured (FR-HO-001 does not fire).",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent composed measured_or_unmeasured via foundationskills.skills._workflow.run_step with only the claims",
+      "The agent wrote one research_findings artifact to request.record_dir out/research",
+      "The agent reported PASS 0 with verdict PASS and no FR-HO-001 finding"
+    ]
+  },
+  {
+    "id": "fr-positive-006",
+    "question": "/fs-research it came back UNMEASURED 95 FR-HO-001 over c3 'the reward model improved' in research_findings at out/research (goal_spec goals/rl.goal.json, other claim c1 'the KL stayed under 0.1' measured true evidence 'runs/rl/kl.json'). Re-run it and tell me the verdict.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent re-runs fs-research over the same claim list, re-reads the corrected claims from the composed claim_set artifact and writes one fresh research_findings to out/research; while c3 is still UNMEASURED the verdict is \"UNMEASURED\" and FR-HO-001 is UNMEASURED 95 naming c3 — never a pass. The verdict never hides the unmeasured claim.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent re-ran the workflow instead of re-explaining by hand",
+      "The agent said FR-HO-001 keeps the result at UNMEASURED 95 and names c3 while any claim stays unmeasured",
+      "The agent wrote one research_findings artifact with verdict UNMEASURED and said to measure c3 and re-run"
+    ]
+  },
+  {
+    "id": "fr-positive-007",
+    "question": "/fs-research measured_or_unmeasured came back RED on my claims (c1 'the loss fell' measured true) recorded in out/research with goal_spec goals/q2.goal.json; FR-HO-002 fired as RED 5. Re-run the research and report what the steps say.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research and explains FR-HO-002: the composed measured_or_unmeasured step came back RED, so repair composes nothing else and returns RED 5 through check_handoff on a PASS run whose payload flag composed_red is set (run() never returns RED). research_findings.steps carries the composed findings as evidence and the artifact must not be used; the agent says to fix what the composed findings name and re-run /fs-research.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent said FR-HO-002 is a handoff-phase BLOCK rule fired only from check_handoff on a PASS result",
+      "The agent kept the composed findings inside evidence[\"steps\"] / research_findings.steps and never as this skill's findings",
+      "The agent said RED 5 means the research_findings must not be used and to fix the composed findings and re-run"
+    ]
+  },
+  {
+    "id": "fr-positive-008",
+    "question": "/fs-research goal_spec goals/pretrain.goal.json, record_dir out/research: c1 claim 'the tokenizer changed mid-run' asserted_status PASS evidence 'logs/tok.json' measured true, c2 claim 'the data mix was 70/30' asserted_status PASS measured false.",
+    "expected_skill": "fs-research",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-research and lets measured_or_unmeasured correct the claims: c2 claims PASS but was never measured, so the corrected claim is UNMEASURED. research_findings carries the corrected claims and verdict \"UNMEASURED\", and FR-HO-001 is UNMEASURED 95 naming c2 — a claim nobody measured is never a pass.",
+    "expected_behavior": [
+      "The agent read fs_research/SKILL.md before acting",
+      "The agent passed the claims exactly as authored and kept the disagreement between asserted_status and measured for the composed step to correct",
+      "The agent wrote one research_findings artifact with the corrected c2 marked UNMEASURED",
+      "The agent reported FR-HO-001 / UNMEASURED 95 naming c2 and never called the verdict PASS"
+    ]
+  },
+  {
+    "id": "fr-null-001",
+    "question": "Can you read the CPU temperature logs from last night's brownout and tell me which run host overheated first?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill is invoked: the question is about run-host hardware forensics, not about checking claims, explaining a result or orchestrating a run (expected_skill null).",
+    "expected_behavior": [
+      "The agent did not load fs_research/SKILL.md",
+      "The agent did not trigger /fs-research or any claim-measurement workflow",
+      "The agent answered as a general assistant or asked for the logs"
+    ]
+  },
+  {
+    "id": "fr-null-002",
+    "question": "Draft a polite email to the data vendor asking whether the licence covers preference-tuning data.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill is invoked: the question is writing an email, not auditing claims or orchestrating a run (expected_skill null).",
+    "expected_behavior": [
+      "The agent did not load fs_research/SKILL.md",
+      "The agent did not compose measured_or_unmeasured or write a research_findings artifact",
+      "The agent drafted the email"
+    ]
+  },
+  {
+    "id": "fr-null-003",
+    "question": "Which Slack channel should I use to ask for two more GB200 nodes next month?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill is invoked: the question is about team logistics and hardware access, not about claim measurement (expected_skill null).",
+    "expected_behavior": [
+      "The agent did not load fs_research/SKILL.md",
+      "The agent did not treat this as a /fs-research request",
+      "The agent answered about channels or asked which org it means"
+    ]
+  },
+  {
+    "id": "fr-sibling-001",
+    "question": "Check whether these two claims were actually measured: c1 'the eval loss fell after dedup' with no evidence given, c2 'the preference labels are gold' measured false. No workflow, just the claim check.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "The request has no slash, so the router must NOT load fs-research (/fs-research is user-invoked only): it goes to the sibling model skill fskills-measured-or-unmeasured, which checks the two claims directly. FsResearchSkill is never composed and no research_findings artifact is produced.",
+    "expected_behavior": [
+      "The agent did not load fs_research/SKILL.md",
+      "The agent routed to fskills-measured-or-unmeasured rather than the /fs-research workflow",
+      "The agent checked the claims directly and marked the unmeasured ones UNMEASURED",
+      "The agent never wrote a research_findings artifact"
+    ]
+  },
+  {
+    "id": "fr-sibling-002",
+    "question": "I only need to know which of these four claims are UNNEVER before the review meeting — c1 'the loss fell' measured true, c2 'the data mix was 70/30', c3 'the eval set was deduplicated', c4 'the harness was pinned' measured true. Just the claim check, no audit record.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "No slash command is typed, so the router must not pick fs-research (invocation is user): the claim check goes to the sibling model skill fsills... to the sibling model skill fskills-measured-or-unmeasured, which lists c2 and c3 as UNMEASURED because nothing measured them.",
+    "expected_behavior": [
+      "The agent did not pick fs-research on its own",
+      "The agent routed to fskills-measured-or-unmeasured",
+      "The agent said c2 and c3 are UNNEVER (nothing measured them) while c1 and c4 are measured",
+      "The agent wrote no research_findings artifact"
+    ]
+  },
+  {
+    "id": "fr-sibling-003",
+    "question": "Mark claim c7 'the reward scale is stable' as UNNEVER since I have no evidence for it yet, then tell me the status that comes with it.",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "Without a slash the router must not load fs-research: the request is a single claim check routed to the sibling model skill fskills-measured-or-unmeasured, which returns UNNEVER for c7 (nothing measured the reward-scale claim) in line with the doctrine (UNNEVER is not a pass).",
+    "expected_behavior": [
+      "The agent did not load fs_research/SKILL.md",
+      "The agent routed to fskills-measured-or-unmeasured for the single claim",
+      "The agent reported the claim as UNNEVER and never as PASS",
+      "The agent did not create a research_findings artifact or invoke /fs-research"
+    ]
+  }
+]

@@ -34,6 +34,8 @@ class ArtifactType(str, Enum):
     STATUS_EXPLANATION = "status_explanation"
     LAUNCH_RECORD = "launch_record"
     WORKFLOW_RECORD = "workflow_record"
+    RESEARCH_FINDINGS = "research_findings"
+    HANDOFF = "handoff"
 
     def __str__(self) -> str:
         return self.value

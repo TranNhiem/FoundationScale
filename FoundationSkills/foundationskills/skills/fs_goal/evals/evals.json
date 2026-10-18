@@ -1,0 +1,166 @@
+[
+  {
+    "id": "fg-positive-001",
+    "question": "/fs-goal start the intake for me. My answers so far: objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine'. That is all I know yet.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-goal (/fs-goal), measures the frontier with foundationskills.agent.intake.missing_facts over the answers so far for skills ['training.planner','data_engine'], and returns UNMEASURED 95 with FG-HO-001 and payload {phase 'questions', questions: [{key, question, recommended}]}: one entry per missing fact (base_model.name_or_path, base_model.size_b, base_model.arch, data.sources, hardware.gpu, hardware.nodes, hardware.gpus_per_node, data_facts.has_verifiable_answers, data_facts.has_pairs, data_facts.has_instructions, preserve_general, rl_algorithm). Nothing is written and nothing is invented, so the status is never a PASS.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent asked only for facts intake.missing_facts still names and never invented a base model, sources or hardware",
+      "The agent worded each question so a 'yes' accepts the recommended value and, with no recommended value, asked for the value",
+      "The agent returned UNMEASURED 95 / FG-HO-001 and wrote no goal_spec while facts are missing"
+    ]
+  },
+  {
+    "id": "fg-positive-002",
+    "question": "/fs-goal these are ALL my answers for skills ['training.planner','data_engine']: objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine', base_model {name_or_path 'hf/Qwen2.5-7B', size_b 7, arch 'dense'}, sources [{uri 's3://data/med-qa-tr.jsonl', kind 'qa', approx_tokens 120000000}], hardware {gpu 'gb200', gpus_per_node 8, nodes 2}, data_facts {has_verifiable_answers true, has_pairs false, has_instructions true}, preserve_general true, rl_algorithm 'dr_grpo'. I have NOT confirmed anything.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "The frontier is empty (missing_facts returns []) but confirmed is false, so the agent returns UNMEASURED 95 with FG-HO-002 and payload {phase 'confirm', goal_spec_preview: goal_from_answers(answers), questions: [{key 'confirm', question 'Is this goal correct? Answer yes to confirm.', recommended 'yes'}]} and writes nothing: the grilling ends only when the frontier is empty AND the user confirms.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent refused to write the goal_spec because the user confirmed nothing (FG-HO-002, never PASS)",
+      "The agent showed the goal_spec_preview built by intake.goal_from_answers and one confirm question",
+      "The agent wrote no artifact and never re-ran or auto-confirmed on the user's behalf"
+    ]
+  },
+  {
+    "id": "fg-positive-003",
+    "question": "/fs-goal confirmed: true, record_dir run/records. Answers: objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine', base_model {name_or_path 'hf/Qwen2.5-7B', size_b 7, arch 'dense'}, sources [{uri 's3://data/med-qa-tr.jsonl', kind 'qa', approx_tokens 120000000}], hardware {gpu 'gb200', gpus_per_node 8, nodes 2}, data_facts {has_verifiable_answers true, has_pairs false, has_instructions true}, preserve_general true, rl_algorithm 'dr_grpo'. Write the goal spec.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "Frontier empty and confirmed true: the agent calls intake.goal_from_answers(answers), validates the assembled goal_spec and writes exactly one goal_spec artifact (Artifact('goal_spec', 'goal_spec', goal, provenance, 1)) to run/records (the request's record_dir), returning PASS 0 with phase 'complete' in the payload. That is the only exit that writes anything.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent built the goal_spec with intake.goal_from_answers and never hand-rolled one",
+      "The agent wrote the goal_spec artifact to record_dir run/records and nowhere else",
+      "The agent returned PASS 0 only because the frontier was empty AND the user confirmed"
+    ]
+  },
+  {
+    "id": "fg-positive-004",
+    "question": "/fs-goal it came back UNMEASURED 95 FG-HO-001 asking for hardware.gpu, hardware.nodes, hardware.gpus_per_node and data_facts.has_verifiable_answers. Answers: gpu 'gb200', nodes 2, gpus_per_node 8, has_verifiable_answers true. The rest of my answers is unchanged (objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine') but I still owe you base_model and sources.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "The agent merges the new values into the same answers object and re-measures the frontier with intake.missing_facts; base_model.name_or_path, base_model.size_b, base_model.arch, data.sources, data_facts.has_pairs, data_facts.has_instructions, preserve_general and rl_algorithm are still missing, so it stays UNMEASURED 95 with FG-HO-001 and the next questions and writes nothing: a partially answered grilling is never a pass and never a written goal_spec.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent merged the new answers into the previous ones instead of replacing them",
+      "The agent asked only what intake.missing_facts still names (and never the facts it was already given)",
+      "The agent stayed UNMEASURED 95 / FG-HO-001 and wrote no goal_spec while facts are open"
+    ]
+  },
+  {
+    "id": "fg-positive-005",
+    "question": "/fs-goal yes, I confirm the goal preview you showed; write the goal_spec to run/records. My answers are unchanged: objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine', base_model hf/Qwen2.5-7B (7B, dense), sources s3://data/med-qa-tr.jsonl (kind qa), hardware gb200 2 nodes x 8 GPUs, verifiable answers yes, pairs no, instructions yes, preserve_general yes, rl_algorithm dr_grpo.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "With the frontier empty and the user's confirmation (confirmed true answers the FG-HO-002 confirm question) the agent rebuilds intake.goal_from_answers(answers) and writes one goal_spec artifact to run/records, returning PASS 0 with the goal_spec in the payload and no findings.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent took the user's confirmation literally and did not re-ask or auto-confirm anything",
+      "The agent wrote one goal_spec artifact to run/records with provenance",
+      "The agent returned PASS 0 with the goal_spec payload and no findings"
+    ]
+  },
+  {
+    "id": "fg-positive-006",
+    "question": "/fs-goal it came back RED 5 FG-HO-003: goal_from_answers raised 'every source needs uri and kind'. My one source had uri 's3://data/med-qa-tr.jsonl' and no kind. I corrected it to kind 'qa'. Re-run with confirmed true and the same answers otherwise (objective 'answer Turkish medical board questions with short explanations', goal 'domain_expert', domain 'medicine', base_model 'hf/Qwen2.5-7B' 7B dense, hardware gb200 2x8, data_facts has_verifiable_answers true, has_pairs false, has_instructions true, preserve_general true, rl_algorithm 'dr_grpo'), record_dir run/records.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "The agent explains FG-HO-003 (goal_from_answers raised or the assembled goal_spec is invalid, fired by check_handoff on the PASS result whose payload flagged goal_spec_valid false) and re-runs /fs-goal with the corrected answers: goal_from_answers now builds a valid goal_spec, so the agent writes it once to run/records and returns PASS 0 instead of RED 5. It never hand-patches the spec or suppresses the flag.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent said FG-HO-003 is the handoff BLOCK that turns an invalid goal into RED 5 and names the bad answer",
+      "The agent re-ran /fs-goal with the corrected source {uri, kind} and did not patch the goal_spec by hand",
+      "The agent wrote one goal_spec artifact and reported PASS 0 only after goal_from_answers succeeded"
+    ]
+  },
+  {
+    "id": "fg-positive-007",
+    "question": "/fs-goal grill me ONLY for skills ['training.planner'] — the data_engine facts are out of scope. answers: objective 'a support-ticket reply helper', goal 'general_chat', base_model {name_or_path 'hf/Llama-3.1-8B', size_b 8, arch 'dense'}, sources [{uri 's3://data/tickets.jsonl', kind 'chat'}], hardware {gpu 'dgx-h100', gpus_per_node 8, nodes 1}, data_facts {has_verifiable_answers false, has_pairs false, has_instructions true}, preserve_general true, rl_algorithm 'none'. confirmed false.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "With skills ['training.planner'] the data_engine fact 'domain' is out of scope, and every training.planner fact is answered, so intake.missing_facts returns [] and the agent moves to the confirmation: UNMEASURED 95 with FG-HO-002, payload {goal_spec_preview, questions: [{'key':'confirm', 'question':'Is this goal correct? Answer yes to confirm.', 'recommended':'yes'}]}, nothing written until the user confirms.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent scoped the frontier to skills ['training.planner'] and did not demand the data_engine facts",
+      "The agent found nothing missing and asked only the confirm question (FG-HO-002)",
+      "The agent wrote no goal_spec while confirmed is false"
+    ]
+  },
+  {
+    "id": "fg-positive-008",
+    "question": "/fs-goal that came back REFUSED 96 FG-IN-001 saying 'no answers object was given'. I had only sent skills and confirmed before. My answers object is {objective 'reply to support tickets politely', base_model {name_or_path 'hf/Llama-3.1-8B'}} — start the grilling again with that.",
+    "expected_skill": "fs-goal",
+    "should_trigger": true,
+    "ground_truth": "The agent explains FG-IN-001 (no answers object at all: fs_goal grills what the user said and never invents an objective, a base model or data sources) and re-runs /fs-goal with the answers object now present: the grilling restarts at UNMEASURED 95 with FG-HO-001 asking for the remaining facts (base_model.size_b, base_model.arch, data.sources, hardware.gpu, hardware.nodes, hardware.gpus_per_node, data_facts.*, preserve_general, rl_algorithm, goal, domain) and nothing is written.",
+    "expected_behavior": [
+      "The agent read fs_goal/SKILL.md before acting",
+      "The agent said FG-IN-001 is the input BLOCK meaning there was no answers object and that it invents nothing",
+      "The agent re-ran /fs-goal with the answers object the user now supplied",
+      "The agent grills FG-HO-001 questions and writes no goal_spec"
+    ]
+  },
+  {
+    "id": "fg-null-001",
+    "question": "How much does the boiling point of water drop at 2000 m altitude, and is that enough to ruin a french press?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No skill is loaded and fs-goal stays closed (it is user-invoked on /fs-goal only): this is a general-knowledge question with no intake answers and no slash command, so the assistant answers it in conversation.",
+    "expected_behavior": [
+      "The agent did not load fs_goal or any FoundationSkills skill",
+      "The agent did not ask intake questions or look for an answers object",
+      "The agent answered the question directly without writing any artifact"
+    ]
+  },
+  {
+    "id": "fg-null-002",
+    "question": "Rewrite this as one polite sentence for a customer: 'Your ticket is still open because you never sent the logs.'",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No skill triggers and fs-goal is never chosen on its own: the request is a copy-editing task with no /fs-goal and no goal intake behind it, so the assistant rewrites the sentence directly.",
+    "expected_behavior": [
+      "The agent did not load fs_goal or any FoundationSkills skill",
+      "The agent did not turn the request into a goal intake or ask for hardware or data sources",
+      "The agent produced the rewritten sentence and nothing else"
+    ]
+  },
+  {
+    "id": "fg-routed-001",
+    "question": "I want to turn our Turkish medical board questions into an expert assistant on hf/Qwen2.5-7B with about 120M tokens of QA data and two 8-GPU GB200 nodes — plan the training for me.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "No /fs-goal was typed so fs-goal does not trigger (it is user-invoked on /fs-goal only): the agent routes the natural-language request to the sibling model skill fskills-training and emits the training plan there.",
+    "expected_behavior": [
+      "The agent did not load fs_goal (fs-goal runs only on /fs-goal)",
+      "The agent routed the request to fskills-training",
+      "The agent produced a training plan and wrote no fs_goal artifact"
+    ]
+  },
+  {
+    "id": "fg-routed-002",
+    "question": "Given a 14B dense base model, about 30B tokens of case-law text and 2x8 DGX-H100 GPUs, what should the CPT-then-SFT training run look like?",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "No fs-goal invocation is present (no /fs-goal, no intake grilling requested): the agent routes the planning request to the sibling model skill fskills-training and stages the CPT-then-SFT run there.",
+    "expected_behavior": [
+      "The agent did not load fs_goal (fs-goal runs only on /fs-goal)",
+      "The agent routed the request to fskills-training",
+      "The agent described the CPT-then-SFT run instead of asking intake questions"
+    ]
+  },
+  {
+    "id": "fg-routed-003",
+    "question": "Our plan says CPT with replay, then SFT, then an RL stage with dr_grpo — where should the training run start and what should I watch out for?",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "This is a planning question without a slash command, so fs-goal (user-invoked on /fs-goal only) does not trigger: the agent routes it to the sibling model skill fskills-training and answers it as a training-plan question.",
+    "expected_behavior": [
+      "The agent did not load fs_goal (fs-goal runs only on /fs-goal)",
+      "The agent routed the request to fskills-training",
+      "The agent answered with the staged run and its risks and wrote no artifact"
+    ]
+  }
+]

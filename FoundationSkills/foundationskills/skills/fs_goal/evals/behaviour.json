@@ -1,0 +1,168 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-goal-oracle-FG-HO-001",
+      "skill": "fs_goal",
+      "rule_id": "FG-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "load-bearing facts are missing from the answers so far (the grilling frontier is not empty)",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming FG-HO-001 with one {key, question, recommended} entry per missing fact and no goal_spec written",
+        "request": {
+          "answers": {
+            "objective": "answer Turkish medical board questions"
+          }
+        }
+      },
+      "fixture_sha256": "6e749ca36be251eed3022d6d66732d2315e88c7d59d4cc4036d8687e47eacd1d",
+      "expected_behavior": [
+        "Identifies the problem: load-bearing facts are missing from the answers so far (the grilling frontier is not empty)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FG-HO-001"
+      ],
+      "ground_truth": "fs_goal: rule FG-HO-001 (WARN, handoff phase) fires: load-bearing facts are missing from the answers so far (the grilling frontier is not empty).",
+      "trigger_facts": [],
+      "question": "/fs-goal /fs-goal — here's my intake so far: objective is \"answer Turkish medical board questions\". Ask me only for the remaining intake facts you still need (base model name_or_path/size_b/arch, sources, hardware with gpu/gpus_per_node/nodes, the data_facts has_verifiable_answers/has_pairs/has_instructions, plus goal, domain, preserve_general, rl_algorithm), then ask me the one confirm question. Write the goal_spec only when the frontier is empty and I've confirmed.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-goal-oracle-FG-HO-002",
+      "skill": "fs_goal",
+      "rule_id": "FG-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "the assembled goal is complete but the user has not confirmed it",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming FG-HO-002 with goal_spec_preview and the confirm question (recommended 'yes') and no goal_spec written",
+        "request": {
+          "answers": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "hf/Qwen2.5-7B",
+              "size_b": 7
+            },
+            "capabilities": [
+              "medical QA in Turkish"
+            ],
+            "data_facts": {
+              "has_instructions": true,
+              "has_pairs": false,
+              "has_verifiable_answers": true
+            },
+            "domain": "medicine",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "gb200",
+              "gpus_per_node": 8,
+              "nodes": 2
+            },
+            "objective": "answer Turkish medical board questions with short explanations",
+            "preserve_general": true,
+            "rl_algorithm": "dr_grpo",
+            "sources": [
+              {
+                "approx_tokens": 120000000,
+                "kind": "qa",
+                "uri": "s3://data/med-qa-tr.jsonl"
+              }
+            ]
+          }
+        }
+      },
+      "fixture_sha256": "272277a42e358434cc98b3651b99fee3982986647939c5c511ddabb35a4cb4e5",
+      "expected_behavior": [
+        "Identifies the problem: the assembled goal is complete but the user has not confirmed it",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FG-HO-002"
+      ],
+      "ground_truth": "fs_goal: rule FG-HO-002 (WARN, handoff phase) fires: the assembled goal is complete but the user has not confirmed it.",
+      "trigger_facts": [],
+      "question": "/fs-goal /fs-goal — here are my intake answers: objective is to answer Turkish medical board questions with short explanations, goal is domain_expert in the medicine domain, and I want to preserve general capabilities. My base model is hf/Qwen2.5-7B, 7B parameters, dense architecture. Sources: s3://data/med-qa-tr.jsonl, kind qa, roughly 120M tokens. Hardware is 2 nodes of 8 GB200 GPUs each (16 GPUs total). Data facts: has_instructions true, has_pairs false, has_verifiable_answers true, and the capability target is medical QA in Turkish; my preferred RL algorithm is dr_grpo. If that's everything you need, please confirm and write the one goal_spec artifact.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-goal-oracle-FG-HO-003",
+      "skill": "fs_goal",
+      "rule_id": "FG-HO-003",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "goal_from_answers raised or the assembled goal_spec is invalid",
+      "fixture": {
+        "expected": "RED 5 naming FG-HO-003 (goal_from_answers raised: the one source has no `kind`), fired by check_handoff on the PASS result and no goal_spec written",
+        "request": {
+          "answers": {
+            "base_model": {
+              "arch": "dense",
+              "name_or_path": "hf/Qwen2.5-7B",
+              "size_b": 7
+            },
+            "capabilities": [
+              "medical QA in Turkish"
+            ],
+            "data_facts": {
+              "has_instructions": true,
+              "has_pairs": false,
+              "has_verifiable_answers": true
+            },
+            "domain": "medicine",
+            "goal": "domain_expert",
+            "hardware": {
+              "gpu": "gb200",
+              "gpus_per_node": 8,
+              "nodes": 2
+            },
+            "objective": "answer Turkish medical board questions with short explanations",
+            "preserve_general": true,
+            "rl_algorithm": "dr_grpo",
+            "sources": [
+              {
+                "approx_tokens": 120000000,
+                "uri": "s3://data/med-qa-tr.jsonl"
+              }
+            ]
+          },
+          "confirmed": true
+        }
+      },
+      "fixture_sha256": "8558bc7a3327e23c1f47da58575d3f57d9ebe7c0d8c0f9668ce6c8061894be62",
+      "expected_behavior": [
+        "Identifies the problem: goal_from_answers raised or the assembled goal_spec is invalid",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FG-HO-003"
+      ],
+      "ground_truth": "fs_goal: rule FG-HO-003 (BLOCK, handoff phase) fires: goal_from_answers raised or the assembled goal_spec is invalid.",
+      "trigger_facts": [],
+      "question": "/fs-goal I'm invoking /fs-goal to finish one FoundationSkills goal_spec with these intake answers: objective is \"answer Turkish medical board questions with short explanations\", goal is domain_expert, domain is medicine, and preserve_general is true. The base model is hf/Qwen2.5-7B, 7B parameters, dense arch; sources are s3://data/med-qa-tr.jsonl at roughly 120,000,000 tokens; hardware is gb200 GPUs, 8 per node, across 2 nodes. Data facts: has_instructions true, has_pairs false, has_verifiable_answers true; the rl_algorithm is dr_grpo, and the capability is medical QA in Turkish. I've already confirmed these answers, so if nothing is still missing from intake, what is the outcome — is the goal_spec written?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-goal-oracle-FG-IN-001",
+      "skill": "fs_goal",
+      "rule_id": "FG-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no \"answers\" object was given, so fs_goal has nothing to grill and invents nothing",
+      "fixture": {
+        "expected": "REFUSED 96 naming FG-IN-001 (no \"answers\" object was given: nothing written, refusal names the missing input)",
+        "request": {
+          "confirmed": true,
+          "skills": [
+            "training.planner"
+          ]
+        }
+      },
+      "fixture_sha256": "fd81641addf08d41466fa181fa8b421db1a0553fafc192fd83faae5dab805b40",
+      "expected_behavior": [
+        "Identifies the problem: no \"answers\" object was given, so fs_goal has nothing to grill and invents nothing",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FG-IN-001"
+      ],
+      "ground_truth": "fs_goal: rule FG-IN-001 (BLOCK, input phase) fires: no \"answers\" object was given, so fs_goal has nothing to grill and invents nothing.",
+      "trigger_facts": [],
+      "question": "/fs-goal I'm ready to lock in my FoundationSkills goal spec — my intake has confirmed: true, and the only skill I want enabled is [\"training.planner\"]. Please take that as my final answer set and write out the goal_spec artifact for me.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}
