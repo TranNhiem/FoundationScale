@@ -66,6 +66,12 @@ __all__ = [
 ]
 
 GB = 1e9
+# FS RLTrainer's log-prob scorer holds more per resident row than the SFT-fitted activation model.
+# Measured 2026-10-18 on one GB200 (gemma-4-E4B-it, GRPO, seq 1280 = 256 prompt + 1024 completion, no grad ckpt,
+# one backward step per probe; torch peak allocated): logprob_micro_batch 1 / 2 / 4 = 64.1 / 81.5 / 115.9 GB,
+# 8 = OOM. Linear fit 46.9 + 17.25 GB/row. The estimator's fixed part matched (47.0 GB); its per-row term
+# was 9.4 GB, so the RL activation factor is 17.25 / 9.4 = 1.84. Evidence: ~/.fskfan/fs_next/verify/rl_mem_probe.
+RL_ACTIVATION_FACTOR = 1.84
 _CUDA_CONTEXT_GB = 1.5
 _FRAGMENTATION = 0.10
 
@@ -139,6 +145,7 @@ def estimate_memory(
     lora_rank: int = 16,
     attn: str = "sdpa",
     reference_copy: bool = False,
+    activation_factor: float = 1.0,
 ) -> MemoryEstimate:
     """Per-GPU memory estimate for one training configuration."""
     if method not in {"full", "lora", "qlora"}:
@@ -219,6 +226,9 @@ def estimate_memory(
         assumptions.append(f"logits: s*b*V*14 bytes (bf16 logits + fp32 upcast, loss buffer, grad), V={vocab:,}")
     else:
         assumptions.append("logits term omitted: variant vocab unknown (underestimates large-vocab models)")
+    if activation_factor != 1.0:
+        act_bytes *= activation_factor
+        assumptions.append(f"activations x{activation_factor:g} (measured calibration for this trainer)")
     activations_gb = act_bytes / GB  # per-GPU micro-batch; not divided by world/tp (conservative)
 
     subtotal = weights_gb + grads_gb + optimizer_gb + activations_gb

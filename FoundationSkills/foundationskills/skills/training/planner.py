@@ -28,7 +28,7 @@ from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.skills.training.cpt import cpt_policy
-from foundationskills.skills.training.estimate import estimate_memory, estimate_time
+from foundationskills.skills.training.estimate import RL_ACTIVATION_FACTOR, estimate_memory, estimate_time
 from foundationskills.skills.training.feasibility import INFEASIBLE_FRACTION, check_feasibility
 from foundationskills.skills.training.knowledge import find_variant, load_algorithm_cards, load_hardware, load_stage_rules
 from foundationskills.skills.training.method import select_method
@@ -1141,7 +1141,7 @@ def plan(
                 return estimate_memory(
                     variant, method=method, seq_len=seq_len, micro_batch=rows_resident, sharding="ddp",
                     grad_ckpt=ckpt, world=1, lora_rank=int(_first("lora_rank", "lora_r", default=16)),
-                    reference_copy=False, optimizer="host_adamw",
+                    reference_copy=False, optimizer="host_adamw", activation_factor=RL_ACTIVATION_FACTOR,
                 ).total_per_gpu_gb
 
             micro_batch, grad_ckpt = rows, False
@@ -1198,6 +1198,7 @@ def plan(
             lora_rank=int(_first("lora_rank", "lora_r", default=16)),
             reference_copy=(stage == "preference" and "reference_model" in _card_requires(algorithm)),
             optimizer="host_adamw" if stage in ("rl", "preference") else "adamw",
+            activation_factor=RL_ACTIVATION_FACTOR if stage == "rl" else 1.0,
         )
         processed = tokens
         if stage == "sft":
