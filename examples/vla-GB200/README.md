@@ -157,7 +157,7 @@ DSRL task 9 is within n=50 noise of the published curve. Gaussian-actor TD3+BC f
 
 ## Step 5 — Long-WAM
 
-Long-WAM runs in its own environment (`hardware=reference`, no native kernels) from LongLive `c6a27e7` `Long-WAM/`, LIBERO at `8f1084e`. Its released IDM checkpoint goes through Long-WAM's own harness (Step 2 table: 99.0 / 99.8 / 98.2 on the first three suites, `libero_10` running). Its protocol is the 30-settle, every-step-replan one — the policy carries its own long-horizon memory.
+Long-WAM runs in its own environment (`hardware=reference`, no native kernels) from LongLive `c6a27e7` `Long-WAM/`, LIBERO at `8f1084e`. Its released IDM and COD checkpoints go through both Long-WAM's own harness and the FS harness (Step 2 table, all four suites). Its protocol is the 30-settle, every-step-replan one — the policy carries its own long-horizon memory.
 
 Through the FS harness, Long-WAM runs behind a small policy server in its own environment
 (`python -m foundationscale.vla.adapters.longwam.server`, Long-WAM's public `create_policy` +
@@ -182,9 +182,86 @@ the registry; IDM `object` is published at 100.0%, a rate the binomial rule cann
 
 ---
 
+## Step 6 — Fine-tune Long-WAM with `LongWamFinetuneSpec`
+
+`foundationscale.vla.adapters.longwam.finetune.LongWamFinetuneSpec` renders Long-WAM's own
+`scripts/train.py` under `torchrun`. It holds the recipe's global batch of 128 (`docs/TRAINING.md`:
+8 GPUs x batch 8 x accumulation 2) on any GPU count by deriving the accumulation, and refuses a layout
+that would change it — Long-WAM's training contract enforces the same number at launch.
+
+```python
+from foundationscale.vla.adapters.longwam.finetune import LongWamFinetuneSpec
+
+spec = LongWamFinetuneSpec(
+    data_root="<data>",
+    checkpoint_root="<ckpts>",
+    gpus=(0, 1),
+    batch_size=4,
+    gradient_accumulation_steps=16,  # 2 x 4 x 16 = 128
+    extra_overrides=("model.action_dit_pretrained_path=null",),
+)
+argv = spec.with_output_dir("<out>").render_command()  # run from the Long-WAM checkout
+env = spec.render_env()  # LONGWAM_DATA_ROOT, LONGWAM_CHECKPOINT_ROOT, ...
+```
+
+Before training: the LIBERO LeRobot archives (`yuanty/LIBERO-fastwam`, via Long-WAM's
+`scripts/download_data.py libero`), the Robot-S video initializer (`scripts/download_checkpoint.py
+stage1_robot_s`, verify its `SHA256SUMS`), and the text-embedding cache
+(`scripts/precompute_text_embeds.py task=libero`, then `+text_cache_mode=verify`). The LIBERO
+action-backbone initializer (`ActionDiT_from_longlive_ar_1024hdim.pt`) has no public download yet, so
+the example passes `model.action_dit_pretrained_path=null` (RoboTwin's documented choice) — a
+deviation from the released recipe, recorded as such.
+
+### Check it worked
+
+A 60-step run on 2 GPUs trained (loss 1.06 -> 0.62, action loss to 0.07 at step 40), wrote
+`checkpoints/weights/step_000060.pt` + `dataset_stats.json`, and that checkpoint evaluated through the FS
+harness by staging `model.pt` + `dataset_stats.json` and pointing the Step 5 server at it: 0/50 on
+`libero_spatial`, 0 episode errors — the expected score after 60 steps; the point is that every stage
+connects. The full recipe is 277,713 samples -> 2,170 steps/epoch -> 21,700 steps for 10 epochs; on 2
+GB200 GPUs it measured 37–51 s/step depending on the tray's CPU load (the video-decoding dataloader is
+CPU-bound), i.e. one to two weeks.
+
+---
+
+## Step 7 — Driving: Alpamayo through the FS driving harness
+
+`python -m foundationscale.vla.driving.eval --backend alpamayo` scores open-loop trajectories with
+FS-owned metrics (`foundationscale.vla.driving.metrics`: ADE and minADE with Alpamayo's semantics —
+XY L2 per waypoint, mean over time, the best sample chosen on the full horizon). The trajectory server
+(`python -m foundationscale.vla.adapters.alpamayo.server`) runs in Alpamayo's own environment and walks
+the alpamayo-recipes evaluator's own setup; `--serve-cmd` starts it. Every clip stays in the
+denominator: one failed clip makes the run UNMEASURED (exit 95).
+
+`foundationscale.vla.adapters.alpamayo.sft.AlpamayoSftSpec` renders the recipe's own training and
+evaluation launchers (`sft_stage1/2_single_node_debug`, `sft_eval_loss`, `sft_eval_trajectory`).
+
+Build the Alpamayo environment from the recipe's `uv.lock`, not from repository HEADs: with
+`alpamayo2` at HEAD the held-out loss came out 4.4% high; pinned to the lock (`alpamayo2` 9596749 plus
+the locked package versions) it matched. DeepSpeed needs a CUDA toolkit even for evaluation
+(`CUDA_HOME`; the CPU optimizer JIT also needs cuRAND).
+
+### Check it worked
+
+| run | FS | published |
+|---|---|---|
+| Alpamayo 2 Super zero-shot minADE, chunk 99 (100 clips, 6 samples) | 0.7822 m (equal to the recipe's own evaluator on the same hardware) | 0.8288 m |
+| `sft_eval_loss`, chunk 99 | 1.704507 (lock-pinned env) | 1.699801 |
+| `sft_stage1_single_node_debug`, two steps | 1.8645, 1.7561 (4 GPUs) | 1.8095, 1.7255 (8 H100) |
+| `sft_stage2_single_node_debug`, two steps | 1.6255, 0.8074 (4 GPUs) | 1.2710, 0.9367 (8 H100) |
+
+The smoke steps differ because 4 ranks see half of the 8-rank batch at step 1 (learning rate 0) and
+the stage-2 loss is the stochastic flow-matching loss: they show the recipe trains end to end, not a
+numeric match. Alpamayo 1.5 runs once its gated `nvidia/Cosmos-Reason2-8B` backbone is accessible
+(example clip: minADE 0.374 m with its Chain-of-Causation text); neither Alpamayo 1.5 nor the SFT
+recipe publishes a held-out number to compare against. Closed-loop AlpaSim needs an x86_64 host: its
+NuRec renderer image is amd64-only.
+
+---
+
 ## Measured summary
 
-All runs above, side by side. Every cell is `success rate` on GB200.
+All runs above, side by side, on GB200. Cells are success rates unless the row names another metric.
 
 | stage | model / run | measured | published |
 |---|---|---|---|
@@ -198,6 +275,9 @@ All runs above, side by side. Every cell is `success rate` on GB200.
 | Fine-tune | openpi pi05_libero (4 GPU, ~19 h) | 98.6 / 98.1 / 97.0 / 94.1 | 98.8 / 98.2 / 98.0 / 92.4 |
 | RL | FPO pi0.5 task 2 | 0.68 -> 1.00 | 0.58 -> 1.00 |
 | RL | DSRL task 2 / task 9 | 0.84 best 0.88 / 0.58 best 0.72 | 0.88 best 0.88 / 0.74 best 0.82 |
+| Fine-tune | Long-WAM, 60-step pipeline check (ActionDiT init null) | 0/50 spatial, 0 errors | — |
+| Driving eval | Alpamayo 2 Super minADE (m, lower is better) | 0.7822 | 0.8288 |
+| Driving SFT | Alpamayo 2 `sft_eval_loss` | 1.7045 | 1.6998 |
 
 ---
 
