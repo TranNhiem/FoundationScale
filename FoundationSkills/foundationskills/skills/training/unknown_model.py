@@ -200,3 +200,50 @@ def linear_attention_note(model_ref: str, variant: Any, caps: Any) -> str | None
         "longer run or install "
         "flash-linear-attention and causal-conv1d"
     )
+
+
+_TOWERS = ("vision", "visual", "audio", "multi_modal_projector", "mm_projector")
+
+
+def _weight_names(path: str) -> list[str] | None:
+    """Tensor names from ``model.safetensors.index.json`` or a single ``model.safetensors`` header."""
+    import json  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    root = Path(path)
+    try:
+        index = root / "model.safetensors.index.json"
+        if index.is_file():
+            return list(json.loads(index.read_text(encoding="utf-8"))["weight_map"])
+        single = root / "model.safetensors"
+        if single.is_file():
+            with single.open("rb") as fh:
+                (size,) = struct.unpack("<Q", fh.read(8))
+                return [k for k in json.loads(fh.read(size)) if k != "__metadata__"]
+    except (OSError, ValueError, KeyError, struct.error):
+        return None
+    return None
+
+
+def checkpoint_lora_leaves(path: str) -> dict[str, list[str]] | None:
+    """LoRA leaf names MEASURED from the checkpoint: the ``*_proj`` linear leaves inside the language
+    model's decoder layers, plus the ones a vision/audio tower reuses (FS passes bare leaves unscoped,
+    so those attach there too). None when the weights cannot be read or carry no such leaves."""
+    names = _weight_names(path)
+    if not names:
+        return None
+
+    def leaves(keys: list[str]) -> set[str]:
+        out = set()
+        for key in keys:
+            parts = key.split(".")
+            if ".layers." in key and parts[-1] == "weight" and len(parts) > 2 and parts[-2].endswith("_proj"):
+                out.add(parts[-2])
+        return out
+
+    tower = [k for k in names if any(t in k for t in _TOWERS)]
+    language = leaves([k for k in names if not any(t in k for t in _TOWERS)])
+    if not language:
+        return None
+    return {"targets": sorted(language), "shared_with_tower": sorted(language & leaves(tower))}

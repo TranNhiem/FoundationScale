@@ -35,6 +35,7 @@ from foundationskills.skills.training.method import select_method
 from foundationskills.skills.training.posttrain import select_algorithm
 from foundationskills.skills.training.recipes import RecipeQuery, rank_recipes, select_recipe
 from foundationskills.skills.training.unknown_model import (
+    checkpoint_lora_leaves as _checkpoint_lora_leaves,
     linear_attention_note as _linear_attention_note,
     synthesize_variant as _synthesize_variant,
 )
@@ -774,6 +775,16 @@ def plan(
             "explicit --adapter-target required for LoRA",
             "FS won't auto-target LoRA for this family; pass --adapter-target (family is not registered in FS)",
         )
+    # measured on medgemma (gemma3): no stage named the family, emit never asked for targets, FS refused at launch
+    measured_leaves = _checkpoint_lora_leaves(str(_get(variant, "local_path") or model_ref)) if fs_family is None else None
+    if measured_leaves:
+        shared = measured_leaves["shared_with_tower"]
+        note = (f"LoRA targets measured from the checkpoint weights: {measured_leaves['targets']} (language-model "
+                "decoder *_proj leaves); passed as bare --adapter-target names, which FS applies unscoped"
+                + (f"; {shared} also name modules in a vision/audio tower, so the adapter attaches there too "
+                   "(no gradient on text-only rows)" if shared else ""))
+        provenance_notes.append(note)
+        decide("model_analysis", "LoRA targets measured from the checkpoint", note)
 
     # 3. data analysis -------------------------------------------------------
     declared_facts = dict(goal.get("data_facts") or {})
@@ -1063,6 +1074,8 @@ def plan(
             hparams["lora_targets"] = list(vlm_fields["hparams"]["lora_targets"])
         else:
             hparams.setdefault("lora_targets", None)
+        if method == "lora" and measured_leaves and hparams.get("lora_targets") is None:
+            hparams["lora_targets"] = list(measured_leaves["targets"])
         if vlm_fields["hparams"]["max_sequence_length"] is not None:
             hparams["max_sequence_length"] = int(vlm_fields["hparams"]["max_sequence_length"])
             for alias in _HP_ALIASES.get("max_sequence_length", ()):  # drop the recipe's spelling: one value
@@ -1253,6 +1266,8 @@ def plan(
                 "method": method,
                 "modalities": list(vlm_fields["modalities"]),
                 "recipe_id": recipe_id,
+                # emit's not-FS-registered branch needs the family; a registered one keeps FS auto-targeting
+                **({"family": _get(family, "name")} if fs_family is None else {}),
                 "because": " | ".join(p for p in because_parts if p),
                 "hparams": hparams,
                 "data": data_entry,
