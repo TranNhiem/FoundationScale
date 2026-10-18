@@ -52,7 +52,7 @@ your confirmation before anything runs.
 | Speech | ASR fine-tuning for audio-LLM, seq2seq and CTC models (Whisper, Qwen3-ASR, Gemma-4 audio, Qwen2-Audio, Parakeet, Canary); TTS with VoxCPM2 (incl. Vietnamese + speaker LoRA) and Qwen3-TTS; Qwen3-Omni evaluation; WER/CER with paired bootstrap | [examples/SPEECH.md](examples/SPEECH.md), [docs/research/speech.md](docs/research/speech.md) |
 | LLM | Full fine-tune and LoRA on dense and MoE models; preference, RL and agentic RL | [examples/llm-2xA100](examples/llm-2xA100/README.md), [examples/agentic-rl-GB200](examples/agentic-rl-GB200/README.md), [docs/AGENTIC_RL.md](docs/AGENTIC_RL.md) |
 | Multimodal LLM | Image, video (sampled frames) and audio inputs; Gemma-4 and Qwen3.x VLMs; SFT, DPO-family and GRPO-family training with images | [examples/vlm-2xH200](examples/vlm-2xH200/README.md), [evidence](validation_campaigns/vlm_2xh200/EVIDENCE.md) |
-| VLA | GR00T N1.7, openpi pi0.5 and verl-vla adapters; LeRobot data; GR00T fine-tuning; LIBERO closed-loop evaluation; FPO, DSRL, TD3+BC and RECAP RL recipes | [docs/research/vla.md](docs/research/vla.md) |
+| VLA | GR00T N1.7, openpi pi0.5 and verl-vla adapters; LeRobot data; GR00T fine-tuning; LIBERO closed-loop evaluation; FPO, DSRL, TD3+BC and RECAP RL recipes | [examples/vla-GB200](examples/vla-GB200/README.md), [docs/research/vla.md](docs/research/vla.md) |
 
 ## FoundationSkills
 
@@ -129,12 +129,14 @@ Step-by-step recipes with measured results:
 | LLM LoRA SFT | 2× A100 | [examples/llm-2xA100](examples/llm-2xA100/README.md) |
 | Vision-language models (SFT, preference, RL) | 2× H200 | [examples/vlm-2xH200](examples/vlm-2xH200/README.md) |
 | VLM LoRA | 2× GB200 | [examples/vlm-2xGB200](examples/vlm-2xGB200/README.md) |
-| Agentic RL (tool-using episodes, music reward) | 2× GB200 | [examples/agentic-rl-GB200](examples/agentic-rl-GB200/README.md) |
 | VLM SFT | 2× A100 | [examples/vlm-2xA100](examples/vlm-2xA100/README.md) |
 | ASR fine-tuning | 2× H200 | [examples/speech-2xH200](examples/speech-2xH200/README.md) |
 | ASR fine-tuning | 2× A100 | [examples/speech-2xA100](examples/speech-2xA100/README.md) |
 | Text-to-speech and voice cloning | GB200 | [examples/tts-GB200](examples/tts-GB200/README.md) |
 | Omni speech-LLM (VoiceBench) | GB200 | [examples/omni-GB200](examples/omni-GB200/README.md) |
+| VLA on LIBERO (GR00T, openpi) | GB200 | [examples/vla-GB200](examples/vla-GB200/README.md) |
+| Agentic RL (tool-using episodes, music reward) | 2× GB200 | [examples/agentic-rl-GB200](examples/agentic-rl-GB200/README.md) |
+| NVFP4 4-bit training with a bf16 control | GB200 | [examples/nvfp4-GB200](examples/nvfp4-GB200/README.md) |
 | All A100 recipes in one place | 2× A100 | [examples/A100_2GPU.md](examples/A100_2GPU.md) |
 
 Index: [docs/EXAMPLES.md](docs/EXAMPLES.md) · speech hub: [examples/SPEECH.md](examples/SPEECH.md)
