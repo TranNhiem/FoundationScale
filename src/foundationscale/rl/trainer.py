@@ -2272,8 +2272,13 @@ class RLTrainer:
         # that emits pixel_values. Everything downstream is unchanged --
         # prompt_width still comes from the encoded tensor, and the extra
         # modality keys are group-expanded and forwarded to the scorer below.
-        # the declared template options travel only when declared, so the call is unchanged otherwise
-        template_kw = {"chat_template_kwargs": self.config.chat_template_kwargs} if self.config.chat_template_kwargs else {}
+        # the declared template options travel only when declared, so the call is
+        # unchanged otherwise
+        template_kw = (
+            {"chat_template_kwargs": self.config.chat_template_kwargs}
+            if self.config.chat_template_kwargs
+            else {}
+        )
         prompt_ids = encode_prompts(surface, chunk, device, **template_kw)
         with torch.no_grad(), _generation_mode(model) as gen_model:
             # Under DDP the generative path bypasses the wrapper (no_grad --

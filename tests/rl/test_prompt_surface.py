@@ -499,22 +499,30 @@ class _KwargsRecordingSurface(_RecordingSurface):
         super().__init__()
         self.template_kwargs: list[dict[str, Any]] = []
 
-    def apply_chat_template(self, conversation: Any, *, tokenize: bool, add_generation_prompt: bool, **kw: Any) -> Any:
+    def apply_chat_template(
+        self, conversation: Any, *, tokenize: bool, add_generation_prompt: bool, **kw: Any
+    ) -> Any:
         self.template_kwargs.append(kw)
-        return super().apply_chat_template(conversation, tokenize=tokenize, add_generation_prompt=add_generation_prompt)
+        return super().apply_chat_template(
+            conversation, tokenize=tokenize, add_generation_prompt=add_generation_prompt
+        )
 
 
 def test_declared_chat_template_kwargs_reach_apply_chat_template() -> None:
     # Measured 2026-10-18: Qwen3.5-4B thinks by default and its ARC-Challenge pass rates were
     # bimodal; RL needs a DECLARED way to render the prompt with thinking off.
     rec = _KwargsRecordingSurface()
-    surface = PromptSurface(kind="tokenizer", surface=rec, reason="test fixture", supports_images=False)
+    surface = PromptSurface(
+        kind="tokenizer", surface=rec, reason="test fixture", supports_images=False
+    )
     encode_prompts(surface, [_sample()], "cpu", {"enable_thinking": False})
     assert rec.template_kwargs == [{"enable_thinking": False}]
 
 
 def test_no_declaration_forwards_nothing() -> None:
     rec = _KwargsRecordingSurface()
-    surface = PromptSurface(kind="tokenizer", surface=rec, reason="test fixture", supports_images=False)
+    surface = PromptSurface(
+        kind="tokenizer", surface=rec, reason="test fixture", supports_images=False
+    )
     encode_prompts(surface, [_sample()], "cpu")
     assert rec.template_kwargs == [{}]
