@@ -204,6 +204,7 @@ def encode_prompts(
     surface: PromptSurface,
     samples: Sequence[Any],
     device: str,
+    chat_template_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     """Encode one chunk of samples into a batch mapping on ``device``.
 
@@ -221,6 +222,9 @@ def encode_prompts(
     to drop, so this is not the defect.
     """
     chat_template_or_refuse(surface)
+    # Declared template options (e.g. {"enable_thinking": False}), forwarded verbatim to every
+    # apply_chat_template call below; never inferred here.
+    template_kwargs = dict(chat_template_kwargs or {})
 
     any_images = any(getattr(s, "images", ()) for s in samples)
     if any_images and not surface.supports_images:
@@ -268,7 +272,7 @@ def encode_prompts(
         # the blocks appeared.
         texts = [
             surface.surface.apply_chat_template(
-                conversation, tokenize=False, add_generation_prompt=True
+                conversation, tokenize=False, add_generation_prompt=True, **template_kwargs
             )
             for conversation in prompts
         ]
@@ -281,7 +285,7 @@ def encode_prompts(
         )
     else:
         texts = surface.surface.apply_chat_template(
-            prompts, tokenize=False, add_generation_prompt=True
+            prompts, tokenize=False, add_generation_prompt=True, **template_kwargs
         )
         # `text=` is a KEYWORD on both surfaces, deliberately. A processor's
         # first POSITIONAL parameter is `images`, not `text`, so a positional

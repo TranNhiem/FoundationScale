@@ -24,17 +24,21 @@ from __future__ import annotations
 
 import dataclasses
 
-from types import SimpleNamespace
 from typing import Any
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.skills.training.cpt import cpt_policy
-from foundationskills.skills.training.estimate import estimate_memory, estimate_time
-from foundationskills.skills.training.feasibility import check_feasibility
+from foundationskills.skills.training.estimate import RL_ACTIVATION_FACTOR, estimate_memory, estimate_time
+from foundationskills.skills.training.feasibility import INFEASIBLE_FRACTION, check_feasibility
 from foundationskills.skills.training.knowledge import find_variant, load_algorithm_cards, load_hardware, load_stage_rules
 from foundationskills.skills.training.method import select_method
 from foundationskills.skills.training.posttrain import select_algorithm
 from foundationskills.skills.training.recipes import RecipeQuery, rank_recipes, select_recipe
+from foundationskills.skills.training.unknown_model import (
+    checkpoint_lora_leaves as _checkpoint_lora_leaves,
+    linear_attention_note as _linear_attention_note,
+    synthesize_variant as _synthesize_variant,
+)
 
 PLANNING_STEPS: tuple[str, ...] = (
     "goal",
@@ -242,49 +246,6 @@ def _apply_operator_stages(requested: Any, selected: list[dict], rules: list[dic
             decide("operator_override", f"-{stage}",
                    f"operator omitted {stage} that rule {sel.get('rule_id', '?')} added: {sel.get('because', '')}")
     return out
-
-
-def _synthesize_variant(base_model: dict) -> tuple[Any, Any, str | None]:
-    """Fallback model description from goal facts. Returns (family, variant, note)."""
-    size_b = base_model.get("size_b")
-    if size_b is None:
-        raise PlanningRefusal(
-            "missing input: base_model.size_b (model not found in the knowledge base; "
-            "state the parameter count in billions so memory/time can be estimated)"
-        )
-    size_b = float(size_b)
-    arch = str(base_model.get("arch") or "dense")
-    variant = SimpleNamespace(
-        id=str(base_model.get("name_or_path")),
-        hf_id=None,
-        local_path=None,
-        size_b=size_b,
-        active_b=size_b if arch == "dense" else None,
-        arch=arch,
-        hidden=None,
-        layers=None,
-        heads=None,
-        kv_heads=None,
-        head_dim=None,
-        vocab=None,
-        context_length=None,
-        num_experts=None,
-        experts_per_token=None,
-        tied_embeddings=False,
-        instruct=False,
-    )
-    family = SimpleNamespace(
-        name=str(base_model.get("family") or "unknown"),
-        display_name=str(base_model.get("name_or_path")),
-        fs_family=None,
-        model_types=(),
-        raw={"name": str(base_model.get("family") or "unknown")},
-    )
-    note = (
-        f"model {base_model.get('name_or_path')!r} not in the knowledge base; "
-        "using goal.base_model.size_b/arch as stated facts (unvalidated)"
-    )
-    return family, variant, note
 
 
 def _sft_processed_tokens(tokens: int, hparams: dict, readiness_stats: dict, micro_batch: int,
@@ -803,6 +764,10 @@ def plan(
         family, variant, note = _synthesize_variant(base_model)
         provenance_notes.append(note)
         decide("model_analysis", model_ref, note)
+    note = _linear_attention_note(model_ref, variant, caps)
+    if note:
+        provenance_notes.append(note)
+        decide("model_analysis", "linear-attention fast path missing", note)
     fs_family = _get(family, "fs_family")
     if fs_family is None:
         decide(
@@ -810,6 +775,16 @@ def plan(
             "explicit --adapter-target required for LoRA",
             "FS won't auto-target LoRA for this family; pass --adapter-target (family is not registered in FS)",
         )
+    # measured on medgemma (gemma3): no stage named the family, emit never asked for targets, FS refused at launch
+    measured_leaves = _checkpoint_lora_leaves(str(_get(variant, "local_path") or model_ref)) if fs_family is None else None
+    if measured_leaves:
+        shared = measured_leaves["shared_with_tower"]
+        note = (f"LoRA targets measured from the checkpoint weights: {measured_leaves['targets']} (language-model "
+                "decoder *_proj leaves); passed as bare --adapter-target names, which FS applies unscoped"
+                + (f"; {shared} also name modules in a vision/audio tower, so the adapter attaches there too "
+                   "(no gradient on text-only rows)" if shared else ""))
+        provenance_notes.append(note)
+        decide("model_analysis", "LoRA targets measured from the checkpoint", note)
 
     # 3. data analysis -------------------------------------------------------
     declared_facts = dict(goal.get("data_facts") or {})
@@ -1099,12 +1074,29 @@ def plan(
             hparams["lora_targets"] = list(vlm_fields["hparams"]["lora_targets"])
         else:
             hparams.setdefault("lora_targets", None)
+        if method == "lora" and measured_leaves and hparams.get("lora_targets") is None:
+            hparams["lora_targets"] = list(measured_leaves["targets"])
         if vlm_fields["hparams"]["max_sequence_length"] is not None:
             hparams["max_sequence_length"] = int(vlm_fields["hparams"]["max_sequence_length"])
             for alias in _HP_ALIASES.get("max_sequence_length", ()):  # drop the recipe's spelling: one value
                 hparams.pop(alias, None)
         else:
             hparams.setdefault("max_sequence_length", None)
+        if stage == "rl":
+            # measured 2026-10-18 (Qwen3.5-4B, GRPO): nothing emitted max_new_tokens, FS ran its 64-token default,
+            # the thinking model never reached an answer letter and all 32 steps abstained. One budget is
+            # resolved, emitted, and priced (estimate == command): operator data_facts > recipe/card > 1024.
+            source = ("data_facts.rl_max_new_tokens" if data_facts.get("rl_max_new_tokens")
+                      else f"recipe/card hparams ({recipe_id}, {algorithm})" if hparams.get("max_new_tokens")
+                      else "planner default")
+            budget = int(data_facts.get("rl_max_new_tokens") or hparams.get("max_new_tokens") or 1024)
+            hparams["max_new_tokens"] = budget
+            if data_facts.get("rl_tokens") is None and budget != int(data_facts.get("rl_max_new_tokens") or 1024):
+                assumptions[:] = [a for a in assumptions if not a.startswith("rl tokens heuristic")]
+                tokens = _stage_tokens(stage, {**data_facts, "rl_max_new_tokens": budget}, domain_tokens, assumptions)
+            decide("hparams", f"rl: max_new_tokens {budget}",
+                   f"from {source}; FS's own default (64) truncates a reasoning completion before its answer, "
+                   "so the budget is always emitted explicitly")
         def _first(*keys: str, default: Any = None) -> Any:
             return next((hparams[k] for k in keys if hparams.get(k) is not None), default)
 
@@ -1135,6 +1127,39 @@ def plan(
             decide("method", f"{stage}: gradient_checkpointing off",
                    f"FS refuses gradient checkpointing for {_get(variant, 'id')}: "
                    f"{variant_raw.get('fs_grad_ckpt_evidence', 'measured refusal')}")
+        if stage == "rl":
+            # measured 2026-10-18 (Qwen3.5-4B GRPO, one 184 GiB GB200): the plan priced seq 4096 x batch 2 with
+            # grad ckpt (55.6 GB) while FS held prompts_per_step x group_size rows of prompt + completion in one
+            # log-prob forward with no checkpointing, and ran out of memory at 184 GiB. Price FS's real shape and
+            # choose gradient_checkpointing / logprob_micro_batch so it fits; both are emitted.
+            rows = int(_first("prompts_per_step", default=2)) * int(_first("group_size", default=4))
+            seq_len = int(data_facts.get("rl_prompt_tokens") or 256) + int(hparams["max_new_tokens"])
+            ckpt_ok = variant_raw.get("fs_grad_ckpt") is not False
+            budget = INFEASIBLE_FRACTION * float(_get(hw, "mem_gb"))
+
+            def _rl_gb(rows_resident: int, ckpt: bool) -> float:
+                return estimate_memory(
+                    variant, method=method, seq_len=seq_len, micro_batch=rows_resident, sharding="ddp",
+                    grad_ckpt=ckpt, world=1, lora_rank=int(_first("lora_rank", "lora_r", default=16)),
+                    reference_copy=False, optimizer="host_adamw", activation_factor=RL_ACTIVATION_FACTOR,
+                ).total_per_gpu_gb
+
+            micro_batch, grad_ckpt = rows, False
+            while _rl_gb(micro_batch, grad_ckpt) > budget:
+                if not grad_ckpt and ckpt_ok:
+                    grad_ckpt = True
+                elif micro_batch > 1:
+                    micro_batch = max(1, micro_batch // 2)
+                else:
+                    break  # still too large: the estimate and feasibility below report it
+            hparams["gradient_checkpointing"] = grad_ckpt
+            hparams.pop("grad_ckpt", None)
+            if micro_batch < rows:
+                hparams["logprob_micro_batch"] = micro_batch
+            decide("hparams", f"rl: {rows} rows x {seq_len} tokens per step",
+                   f"log-prob forward keeps {micro_batch} row(s) resident, gradient_checkpointing {grad_ckpt}; "
+                   f"priced against {INFEASIBLE_FRACTION:.0%} of {_get(hw, 'mem_gb')} GB (prompt tokens from "
+                   f"{'data_facts.rl_prompt_tokens' if data_facts.get('rl_prompt_tokens') else 'the 256 default'})")
         if sharding == "fsdp" and variant_raw.get("fs_fsdp") is False:
             # measured per-variant gap (e.g. Gemma-4 26B-A4B MoE: FS's FSDP auto-wrap
             # cannot find the layer class); DDP replicates, and feasibility below
@@ -1153,6 +1178,12 @@ def plan(
                                ("gradient_checkpointing", grad_ckpt), ("sharding_strategy", sharding)):
                 if not any(hparams.get(k) is not None for k in (key, *_HP_ALIASES.get(key, ()))):
                     hparams[key] = value
+        if stage == "rl" and goal.get("rl_chat_template_kwargs") is not None and hparams.get("chat_template_kwargs") is None:
+            # An operator declaration, never inferred: e.g. {"enable_thinking": False} for a thinking model whose
+            # pass rates are bimodal with thinking on (measured 2026-10-18, Qwen3.5-4B on ARC-Challenge).
+            hparams["chat_template_kwargs"] = dict(goal["rl_chat_template_kwargs"])
+            decide("hparams", f"{stage}: chat_template_kwargs {hparams['chat_template_kwargs']}",
+                   "declared by goal.rl_chat_template_kwargs; the difficulty filter must use the same value")
         if (stage == "rl" and goal.get("rl_min_measured_fraction") is not None
                 and hparams.get("min_measured_fraction") is None):  # an operator stage value wins
             # An operator-declared verdict floor, never a planner guess: the RL driver
@@ -1173,6 +1204,7 @@ def plan(
             lora_rank=int(_first("lora_rank", "lora_r", default=16)),
             reference_copy=(stage == "preference" and "reference_model" in _card_requires(algorithm)),
             optimizer="host_adamw" if stage in ("rl", "preference") else "adamw",
+            activation_factor=RL_ACTIVATION_FACTOR if stage == "rl" else 1.0,
         )
         processed = tokens
         if stage == "sft":
@@ -1289,6 +1321,8 @@ def plan(
                 "method": method,
                 "modalities": list(vlm_fields["modalities"]),
                 "recipe_id": recipe_id,
+                # emit's not-FS-registered branch needs the family; a registered one keeps FS auto-targeting
+                **({"family": _get(family, "name")} if fs_family is None else {}),
                 "because": " | ".join(p for p in because_parts if p),
                 "hparams": hparams,
                 "data": data_entry,

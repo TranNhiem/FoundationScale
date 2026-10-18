@@ -206,6 +206,10 @@
       "exclusiveMinimum": 0,
       "maximum": 1,
       "description": "RL verdict floor: the run is UNMEASURED (95) when measured steps / max_steps falls below it. Declared, never guessed; absent = any measured step passes."
+    },
+    "rl_chat_template_kwargs": {
+      "type": "object",
+      "description": "Chat-template options for RL rollout prompts, forwarded verbatim to apply_chat_template (e.g. {\"enable_thinking\": false}). Declared, never inferred; give the data engine's difficulty_filter the same value."
     }
   }
 }

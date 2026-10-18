@@ -203,10 +203,17 @@ def test_unknown_model_without_size_refuses(patched, monkeypatch) -> None:
         planner.plan(goal, caps=_fake_caps())
 
 
+ARCH = {"hidden": 4096, "layers": 32, "heads": 32, "kv_heads": 8, "vocab": 128256,
+        "context_length": 131072}
+
+
 def test_unknown_model_with_size_synthesizes_variant(patched, monkeypatch) -> None:
     monkeypatch.setattr(planner, "find_variant", lambda model: None)
     monkeypatch.setattr(planner, "load_hardware", lambda: {"h100": patched.hw})
-    payload = planner.plan(_goal(), caps=_fake_caps())
+    goal = _goal()
+    # stated: there is no local checkpoint to read
+    goal["base_model"] = dict(goal["base_model"], architecture=ARCH)
+    payload = planner.plan(goal, caps=_fake_caps())
     assert payload["model"]["in_knowledge_base"] is False
     assert any("not in the knowledge base" in n for n in payload["provenance_notes"])
 
@@ -341,3 +348,120 @@ def test_operator_rl_floor_is_not_clobbered_by_the_goal(patched, monkeypatch) ->
     payload = planner.plan(_goal(rl_min_measured_fraction=0.8), caps=_fake_caps())
     by_stage = {s["stage"]: s for s in payload["stages"]}
     assert by_stage["rl"]["hparams"]["min_measured_fraction"] == 0.2
+
+
+@pytest.mark.usefixtures("patched")
+def test_unknown_model_without_architecture_names_remedies(monkeypatch) -> None:
+    monkeypatch.setattr(planner, "find_variant", lambda _model: None)
+    with pytest.raises(PlanningRefusal, match="base_model architecture") as err:
+        planner.plan(_goal(), caps=_fake_caps())
+    assert "config.json" in str(err.value) and "base_model.architecture" in str(err.value)
+
+
+def test_unknown_local_checkpoint_reads_its_config_json(tmp_path) -> None:
+    # measured 2026-10-17: Qwen3.5-4B (a VLM; facts under text_config) is no KB variant, and the old
+    # SimpleNamespace stand-in crashed the planner (no total_params; None dims compared with ints)
+    import json
+
+    ckpt = tmp_path / "Qwen3.5-4B"
+    ckpt.mkdir()
+    (ckpt / "config.json").write_text(json.dumps({
+        "model_type": "qwen3_5", "vision_config": {}, "tie_word_embeddings": True,
+        "text_config": {"hidden_size": 2560, "num_hidden_layers": 32, "num_attention_heads": 16,
+                        "num_key_value_heads": 4, "head_dim": 256, "vocab_size": 248320,
+                        "max_position_embeddings": 262144}}))
+    family, variant, note = planner._synthesize_variant(
+        {"name_or_path": str(ckpt), "family": "qwen3.5", "size_b": 4.66})
+    assert (variant.hidden, variant.layers, variant.heads, variant.kv_heads) == (2560, 32, 16, 4)
+    assert variant.context_length == 262144 and variant.tied_embeddings is True
+    assert variant.total_params == 4_660_000_000  # the property the stand-in lacked
+    assert "from config.json" in note and variant in family.variants
+
+
+def test_unknown_local_checkpoint_with_a_broken_config_refuses(tmp_path) -> None:
+    (tmp_path / "config.json").write_text("{not json")
+    with pytest.raises(PlanningRefusal, match="base_model architecture"):
+        planner._synthesize_variant({"name_or_path": str(tmp_path), "size_b": 4.0})
+
+
+def _caps_with_kernels(present: bool, status: str = "measured") -> SimpleNamespace:
+    value = {"fla": present, "causal_conv1d": present}
+    key = {"status": status, "value": value, "reason": "" if present else "missing"}
+    return SimpleNamespace(probe_keys={"linear_attention_kernels": key})
+
+
+def test_linear_attention_fallback_is_disclosed_only_when_measured_missing(tmp_path) -> None:
+    import json
+
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"text_config": {"layer_types": ["linear_attention", "full_attention"]}}))
+    variant = SimpleNamespace(local_path=str(tmp_path))
+    note = planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(False))
+    assert note and "torch fallback" in note and "time estimates assume the fast path" in note
+    assert planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(True)) is None
+    unmeasured = _caps_with_kernels(False, "unmeasured")
+    assert planner._linear_attention_note(str(tmp_path), variant, unmeasured) is None
+    (tmp_path / "config.json").write_text(json.dumps({"layer_types": ["full_attention"]}))
+    assert planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(False)) is None
+
+
+def test_rl_generation_budget_is_always_emitted(patched) -> None:
+    # measured 2026-10-18: nothing emitted max_new_tokens, FS ran 64 and Qwen3.5-4B abstained on 32/32 steps
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    card = planner._card_default_hparams(rl["algorithm"]).get("max_new_tokens") or 1024
+    assert rl["hparams"]["max_new_tokens"] == card
+    assert any(f"max_new_tokens {card}" in str(d) for d in payload["decisions"])
+
+
+def test_rl_generation_budget_from_the_operator_wins_and_is_priced(patched) -> None:
+    facts = _goal()["data_facts"]
+    small = planner.plan(_goal(data_facts={**facts, "rl_max_new_tokens": 128}), caps=_fake_caps())
+    large = planner.plan(_goal(), caps=_fake_caps())
+    rl_small, rl_large = (next(s for s in p["stages"] if s["stage"] == "rl") for p in (small, large))
+    assert rl_small["hparams"]["max_new_tokens"] == 128
+    assert rl_small["estimate"]["tokens"] < rl_large["estimate"]["tokens"]  # estimate == command
+
+
+def test_rl_generation_budget_from_the_recipe_is_priced(patched, monkeypatch) -> None:
+    original = planner._recipe_stage_hparams
+    monkeypatch.setattr(planner, "_recipe_stage_hparams",
+                        lambda *a, **k: {**original(*a, **k), "max_new_tokens": 512})
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    assert rl["hparams"]["max_new_tokens"] == 512
+    assert any("512 generated" in a for a in str(payload["decisions"]).split(";"))
+
+
+def test_rl_memory_is_priced_on_fs_real_step_shape(patched) -> None:
+    # measured 2026-10-18: priced as seq 4096 x batch 2 (55.6 GB), FS held 32 rows x 1280 tokens and OOMed at 184 GiB
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    hp = rl["hparams"]
+    rows = int(hp.get("prompts_per_step") or 2) * int(hp.get("group_size") or 4)
+    seq = 256 + int(hp["max_new_tokens"])
+    assert any(f"rl: {rows} rows x {seq} tokens per step" in str(d) for d in payload["decisions"])
+    assert isinstance(hp["gradient_checkpointing"], bool)  # always emitted, never FS's silent default
+    assert int(hp.get("logprob_micro_batch") or rows) <= rows
+
+
+def test_emit_rl_passes_the_memory_knobs() -> None:
+    from foundationskills.interfaces.fs import emit_rl
+
+    assert emit_rl._HPARAM_TO_RL["logprob_micro_batch"] == "logprob_micro_batch"
+    assert emit_rl._HPARAM_TO_RL["gradient_checkpointing"] == "gradient_checkpointing"
+
+
+def test_rl_chat_template_kwargs_are_declared_never_inferred(patched) -> None:
+    plain = planner.plan(_goal(), caps=_fake_caps())
+    assert all("chat_template_kwargs" not in s["hparams"] for s in plain["stages"])
+    declared = planner.plan(_goal(rl_chat_template_kwargs={"enable_thinking": False}), caps=_fake_caps())
+    by_stage = {s["stage"]: s for s in declared["stages"]}
+    assert by_stage["rl"]["hparams"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "chat_template_kwargs" not in by_stage["sft"]["hparams"]
+
+
+def test_emit_rl_passes_chat_template_kwargs() -> None:
+    from foundationskills.interfaces.fs import emit_rl
+
+    assert emit_rl._HPARAM_TO_RL["chat_template_kwargs"] == "chat_template_kwargs"

@@ -35,6 +35,28 @@ def test_think_block_is_stripped_before_scoring() -> None:
     assert MCQLetterReward().score(response=response, gold="B") == 1.0
 
 
+def test_a_think_block_opened_by_the_generation_prompt_is_stripped() -> None:
+    # Measured 2026-10-18, Qwen3.5-4B: the chat template ends the generation
+    # prompt with "<think>\n", so the completion carries only the closing tag.
+    # Before strip_think, this correct answer abstained on 32/32 GRPO steps.
+    response = "5. **Select the best answer:** Option B.\nAnswer: B\n</think>\n\nB\n"
+    assert MCQLetterReward().score(response=response, gold="B") == 1.0
+    assert MCQLetterReward().score(response=response, gold="D") == 0.0
+
+
+def test_a_completion_truncated_mid_reasoning_still_abstains() -> None:
+    # No closing tag: the model never left its reasoning, so there is no answer.
+    response = "Often dry palms generate friction. A or B? Rub"
+    assert MCQLetterReward().score(response=response, gold="A") is None
+
+
+def test_gold_extraction_strips_an_orphan_closing_tag_too() -> None:
+    from foundationscale.rl.corpus import extract_mcq_gold
+
+    question = "Which?\nA. x\nB. y\nAnswer with a single letter."
+    assert extract_mcq_gold(question, "weighing A and B\n</think>\n\nB") == "B"
+
+
 def test_missing_gold_abstains() -> None:
     # Without a gold there is nothing verifiable to score against, even
     # when the response itself parses cleanly.

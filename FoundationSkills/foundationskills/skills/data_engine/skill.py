@@ -50,6 +50,27 @@ LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "ima
 _PREFERENCE_ALGOS = ("dpo", "ipo", "kto", "orpo", "simpo", "cpo", "online_dpo", "iterative_dpo")
 
 
+def _difficulty_zero_note(stats: list[dict]) -> tuple[str, str] | None:
+    """Why difficulty_filter emptied the dataset, and what to change; None when it did not run or kept rows.
+
+    Measured 2026-10-18 (Qwen3.5-4B, ARC-Challenge, thinking on): 220 too easy, 5 too hard, 54 unscorable,
+    0 kept, and the zero-record finding only said "the thresholds may be too strict"."""
+    band = next((st for st in stats if st.get("name") == "difficulty_filter"), None)
+    if not band or not int(band.get("records_in") or 0) or int(band.get("records_out") or 0):
+        return None
+    drops = band.get("dropped") or {}
+    extra = band.get("extra") or {}
+    message = (f"; difficulty_filter kept 0 of {band.get('records_in')}: "
+               f"{int(drops.get('difficulty_too_easy', 0))} too easy, {int(drops.get('difficulty_too_hard', 0))} "
+               f"too hard, {int(drops.get('difficulty_unscorable', 0))} unscorable at max_new_tokens "
+               f"{extra.get('max_new_tokens')} (pass-rate histogram {extra.get('pass_rate_hist')})")
+    recovery = ("the base policy is deterministic on this source, so no GRPO group would carry reward variance: "
+                "use a harder source; raise max_new_tokens when unscorable dominates; or declare "
+                "chat_template_kwargs (e.g. enable_thinking false) for a thinking model, the same value in the "
+                "filter and in goal.rl_chat_template_kwargs")
+    return message, recovery
+
+
 class DataEngineSkill(BaseSkill):
     """Recommend, run, and measure a data pipeline; hand a readiness report downstream."""
 
@@ -229,6 +250,12 @@ class DataEngineSkill(BaseSkill):
             spec = dict(explicit)
             spec.setdefault("tokenizer", request.get("tokenizer"))
             spec.setdefault("chat_template_family", request.get("chat_template_family"))
+            if request.get("reasoning_unsupported"):  # measured: was silently ignored for an explicit pipeline
+                spec["ops"] = [
+                    {**op, "config": {"reasoning_unsupported": request["reasoning_unsupported"], **(op.get("config") or {})}}
+                    if op.get("op") == "format" else op
+                    for op in spec.get("ops") or []
+                ]
         else:
             spec = recommend_pipeline(
                 target_format=target,
@@ -241,6 +268,7 @@ class DataEngineSkill(BaseSkill):
                 benchmarks=list(request.get("benchmarks") or []),
                 seq_len=int(request.get("seq_len") or 4096),
                 drop_overlong=bool(request.get("drop_overlong", False)),
+                reasoning_unsupported=request.get("reasoning_unsupported"),
                 benchmark_sources=dict(request.get("benchmark_sources") or {}) or None,
                 allow_benchmark_download=bool(request.get("allow_benchmark_download", False)),
             )
@@ -316,6 +344,16 @@ class DataEngineSkill(BaseSkill):
             else:
                 message = "pipeline wrote zero records; the dataset artifact was not written"
                 recovery = "inspect stats.json dropped-reason counters; the clean/quality thresholds may be too strict"
+                lost = sum(int((st.get("dropped") or {}).get("reasoning_lost_in_template", 0)) for st in result.stats)
+                note = None if lost else _difficulty_zero_note(result.stats)
+                if note:
+                    message += note[0]
+                    recovery = note[1]
+                if lost:
+                    message += f"; {lost} record(s) carry a reasoning trace the chat template drops"
+                    recovery = ('the template has no thinking slot: choose explicitly with request '
+                                '"reasoning_unsupported": "inline_think" (trace as <think> in the answer) or '
+                                '"drop_trace" (train on the answer only), or use a reasoning-capable template')
             findings.append(
                 self.finding(
                     "DE-HO-003",

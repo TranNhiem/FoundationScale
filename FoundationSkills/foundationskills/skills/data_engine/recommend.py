@@ -31,6 +31,7 @@ def recommend_pipeline(
     benchmarks: list[str],
     seq_len: int = 4096,
     drop_overlong: bool = False,
+    reasoning_unsupported: str | None = None,
     benchmark_sources: dict[str, str] | None = None,
     allow_benchmark_download: bool = False,
 ) -> dict[str, Any]:
@@ -146,6 +147,8 @@ def recommend_pipeline(
         if tokenizer:
             # the model's own chat_template beats the builtin approximation
             format_cfg["tokenizer"] = tokenizer
+        if reasoning_unsupported:
+            format_cfg["reasoning_unsupported"] = reasoning_unsupported
     if rl_like:
         format_cfg["gold_key"] = "answer"
     add("format", format_cfg, f"render records into the FS-consumed {target_format!r} rows")

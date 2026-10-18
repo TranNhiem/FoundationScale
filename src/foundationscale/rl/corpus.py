@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from foundationscale.rl.interfaces import BatchRefusal
+from foundationscale.rl.rewards import strip_think
 
 __all__ = (
     "Sample",
@@ -43,7 +44,6 @@ __all__ = (
 )
 
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _LETTER_RE = re.compile(r"[A-Z]")
 _ROLE_MAP = {"human": "user", "gpt": "assistant"}
 
@@ -77,7 +77,7 @@ def extract_mcq_gold(question: str, answer: str) -> str | None:
     """
     if not question.rstrip().endswith("Answer with a single letter."):
         return None
-    stripped = _THINK_BLOCK_RE.sub(" ", answer)
+    stripped = strip_think(answer)
     candidates = tuple(_LETTER_RE.findall(stripped.upper()))
     unique = tuple(dict.fromkeys(candidates))
     if len(unique) != 1:

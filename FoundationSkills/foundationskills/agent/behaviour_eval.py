@@ -441,6 +441,19 @@ def _complete_retrying(backend: LLMBackend, messages: list[dict], *, seed: int, 
     return backend.complete(messages, seed=seed + _RETRY_SEED_OFFSET, **kwargs), True
 
 
+_JUDGE_BUDGET_CAP = 16384
+
+
+def _escalated_budget(response: LLMResponse, max_tokens: int) -> int | None:
+    """The larger judge budget to re-ask with when an empty reply hit the token limit, else None."""
+    if response.content or response.error and "empty" not in str(response.error):
+        return None
+    used = int(response.completion_tokens or 0)
+    truncated = response.finish_reason == "length" or used >= int(max_tokens)
+    budget = min(int(max_tokens) * 2, _JUDGE_BUDGET_CAP)
+    return budget if truncated and budget > int(max_tokens) else None
+
+
 def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: int,
                  judge: LLMBackend, judge_max_tokens: int) -> dict:
     texts = _graded_items(case)
@@ -484,6 +497,16 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
         seed=0,
         json_mode=True,
     )
+    budget = _escalated_budget(verdict_response, judge_max_tokens)
+    if budget is not None:
+        # A thinking judge that spent its whole budget reasoning answers nothing, and the same seed
+        # reproduces it on every retry and resume (measured twice in A1.5). Re-ask once, larger
+        # budget, recorded.
+        verdict_response = judge.complete(
+            build_judge_messages(
+                str(case.get("question") or ""), case.get("ground_truth"), texts, answer),
+            temperature=0.0, max_tokens=budget, seed=0, json_mode=True)
+        row["judge_budget_escalated"] = budget
     row["judge_tokens"] = int(verdict_response.completion_tokens)
     met, error = _parse_judgement(verdict_response, len(texts))
     if met is None:

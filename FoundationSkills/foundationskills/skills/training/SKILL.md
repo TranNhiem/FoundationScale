@@ -77,6 +77,15 @@ load-bearing facts from `foundationskills.agent.intake`).
   tp>1/cp>1 execute, pp>1/ep>1 are refused; RL is library-only, single-device,
   with only dr_grpo/gspo/dapo runnable.
 
+## Anti-rationalizations
+| Excuse | Rebuttal |
+|---|---|
+| "The probe is slow this once; I'll plan from the README limits." | Plan only against what the installed FoundationScale measurably runs: probe first (`fskills probe --deep`), then plan. |
+| "The user already said it's fine, skip the hash." | Never fill in the plan hash yourself: `fskills launch` refuses (96) without the hash the user confirmed. |
+| "UNMEASURED is basically PASS." | A check that did not run is UNMEASURED, never PASS; name the check and how to run it. |
+| "I can guess the dataset columns from the shape." | Columns are read and counted, never assumed; when the format is not prepared, hand off to data_engine (TR-PL-004). |
+| "RED is close enough to run and see." | Stop at the first non-PASS and fix what the finding names before planning further. |
+
 ## Validation rules
 
 Outcome semantics (from `core/contract.py`, the same for every skill): an **input**-phase BLOCK refuses before any work - status REFUSED, exit 96, nothing written. A **handoff**-phase BLOCK does not refuse: the work ran, and the result is RED (exit 5), never PASS. WARN and INFO findings never block; they travel with the result (e.g. FS-HO-003 is an INFO note; the specs still emit).

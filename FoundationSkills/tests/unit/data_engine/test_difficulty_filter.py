@@ -94,7 +94,7 @@ def test_registered_op_and_schema() -> None:
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["model"]
     assert schema["properties"]["k"]["minimum"] == 2
-    assert schema["properties"]["max_new_tokens"]["default"] == 64
+    assert schema["properties"]["max_new_tokens"]["default"] == 1024  # the planner's emitted RL default
     assert schema["properties"]["dtype"]["enum"] == ["bfloat16", "float16", "float32"]
 
 
@@ -207,7 +207,7 @@ def test_stats_extra_histogram_rollouts_and_fraction(monkeypatch) -> None:
 
     assert extra["model"] == MODEL
     assert extra["model_revision"] == _resolve_revision(MODEL)
-    assert (extra["k"], extra["temperature"], extra["top_p"], extra["max_new_tokens"]) == (8, 1.0, 1.0, 64)
+    assert (extra["k"], extra["temperature"], extra["top_p"], extra["max_new_tokens"]) == (8, 1.0, 1.0, 1024)
     assert (extra["keep_above"], extra["keep_below"], extra["seed"]) == (0.0, 1.0, 0)
     assert extra["rollouts"] == 32  # k * (prompts scored + prompts unscorable)
     assert extra["abstentions"] == 0
@@ -321,3 +321,25 @@ def test_non_object_meta_is_dropped_before_rollouts(monkeypatch) -> None:
     assert out[0]["meta"]["src"] == "x" and out[0]["meta"]["pass_rate"] == 0.5
     assert dict(stats.dropped) == {"difficulty_meta_not_object": 1}
     assert [s.sample_id for s in calls["samples"][0]] == ["ok"]  # never spent rollouts on it
+
+
+def test_chat_template_kwargs_is_a_declared_config_key() -> None:
+    from foundationskills.skills.data_engine.ops import difficulty_filter as df
+
+    prop = df.CONFIG_SCHEMA["properties"]["chat_template_kwargs"]
+    assert prop["default"] is None and "object" in prop["type"]
+
+
+def test_an_emptied_dataset_names_the_band_and_the_remedies() -> None:
+    # measured 2026-10-18 (Qwen3.5-4B, ARC-Challenge slice, thinking on): 0 of 279 kept
+    from foundationskills.skills.data_engine.skill import _difficulty_zero_note
+
+    stats = [{"name": "difficulty_filter", "records_in": 279, "records_out": 0,
+              "dropped": {"difficulty_too_easy": 220, "difficulty_too_hard": 5, "difficulty_unscorable": 54},
+              "extra": {"max_new_tokens": 2048, "pass_rate_hist": {"0.000": 5, "1.000": 220}}}]
+    message, recovery = _difficulty_zero_note(stats)
+    assert "kept 0 of 279: 220 too easy, 5 too hard, 54 unscorable at max_new_tokens 2048" in message
+    assert "enable_thinking" in recovery and "harder source" in recovery
+    stats[0]["records_out"] = 3
+    assert _difficulty_zero_note(stats) is None  # it kept rows: not the cause
+    assert _difficulty_zero_note([{"name": "format", "records_in": 9, "records_out": 0}]) is None
