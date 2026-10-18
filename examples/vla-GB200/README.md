@@ -245,14 +245,15 @@ the locked package versions) it matched. DeepSpeed needs a CUDA toolkit even for
 
 | run | FS | published |
 |---|---|---|
-| Alpamayo 2 Super zero-shot minADE, chunk 99 (100 clips, 6 samples) | 0.7822 m (equal to the recipe's own evaluator on the same hardware) | 0.8288 m |
+| Alpamayo 2 Super zero-shot minADE, chunk 99 (100 clips, 6 samples) | 0.7822 / 0.9168 / 0.8997 m at seeds 42 / 1 / 2 (mean 0.866, sd 0.073); seed 42 equals the recipe's own evaluator | 0.8288 m |
 | `sft_eval_loss`, chunk 99 | 1.704507 (lock-pinned env) | 1.699801 |
 | `sft_stage1_single_node_debug`, two steps | 1.8645, 1.7561 (4 GPUs) | 1.8095, 1.7255 (8 H100) |
 | `sft_stage2_single_node_debug`, two steps | 1.6255, 0.8074 (4 GPUs) | 1.2710, 0.9367 (8 H100) |
 
 The smoke steps differ because 4 ranks see half of the 8-rank batch at step 1 (learning rate 0) and
 the stage-2 loss is the stochastic flow-matching loss: they show the recipe trains end to end, not a
-numeric match. Alpamayo 1.5 runs once its gated `nvidia/Cosmos-Reason2-8B` backbone is accessible
+numeric match. minADE over 100 clips moves about ±0.07 m between sampling seeds, so vary the seed
+with `+trainer.seed=N` (the Hugging Face Trainer re-seeds after the recipe's own `seed`). Alpamayo 1.5 runs once its gated `nvidia/Cosmos-Reason2-8B` backbone is accessible
 (example clip: minADE 0.374 m with its Chain-of-Causation text); neither Alpamayo 1.5 nor the SFT
 recipe publishes a held-out number to compare against. Closed-loop AlpaSim needs an x86_64 host: its
 NuRec renderer image is amd64-only.
@@ -276,7 +277,7 @@ All runs above, side by side, on GB200. Cells are success rates unless the row n
 | RL | FPO pi0.5 task 2 | 0.68 -> 1.00 | 0.58 -> 1.00 |
 | RL | DSRL task 2 / task 9 | 0.84 best 0.88 / 0.58 best 0.72 | 0.88 best 0.88 / 0.74 best 0.82 |
 | Fine-tune | Long-WAM, 60-step pipeline check (ActionDiT init null) | 0/50 spatial, 0 errors | — |
-| Driving eval | Alpamayo 2 Super minADE (m, lower is better) | 0.7822 | 0.8288 |
+| Driving eval | Alpamayo 2 Super minADE (m, lower is better), 3 seeds | 0.866 ± 0.073 | 0.8288 |
 | Driving SFT | Alpamayo 2 `sft_eval_loss` | 1.7045 | 1.6998 |
 
 ---
