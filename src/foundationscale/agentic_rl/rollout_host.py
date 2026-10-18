@@ -139,6 +139,32 @@ def _all_engine_infra(trajectories: Sequence[Trajectory]) -> bool:
     return True
 
 
+def _is_engine_infra(trajectory: Trajectory) -> bool:
+    """True iff this row is an ENGINE infra failure (same reading as ``_all_engine_infra``)."""
+    reason = trajectory.abstention_reason
+    return (
+        trajectory.termination is Termination.INFRA
+        and isinstance(reason, str)
+        and (reason.startswith("infra:engine_") or reason == "infra:EngineInfraError")
+    )
+
+
+def _needs_engine_recovery(trajectories: Sequence[Trajectory], max_rate: float | None) -> bool:
+    """Whether a step's rows call for an engine restart and a retry of the same step.
+
+    Every row an engine failure (a fully hung engine), or -- when the infra gate declares a
+    ``max_rate`` -- engine failures alone exceeding that rate: a hang that times out only PART
+    of a step (GB200 swe_v1_s6, step 19: 21 of 32 engine_timeout) would be refused by the gate
+    anyway, so retrying on a restarted engine can only help. A step under the rate trains as is.
+    """
+    if _all_engine_infra(trajectories):
+        return True
+    if max_rate is None or not trajectories:
+        return False
+    engine = sum(1 for t in trajectories if _is_engine_infra(t))
+    return engine / len(trajectories) > max_rate
+
+
 @dataclass(frozen=True)
 class RolloutHost:
     """Generates and scores one step's experience batch for the agentic RL trainer.
@@ -168,14 +194,16 @@ class RolloutHost:
     hang recovery in ``rollout_async``. Why it exists: a vLLM engine can hang
     after an in-place weight reload -- every request times out -- and a 100-step
     run would then die at the infra gate through no fault of the policy.
-    Recovery fires only when EVERY trajectory in a step is an engine infra
-    failure (see ``_all_engine_infra``): it stops and restarts the fleet,
+    Recovery fires when EVERY trajectory in a step is an engine infra failure, or
+    when engine failures alone exceed ``declared_max_infra_rate`` (the step the
+    infra gate would refuse anyway; see ``_needs_engine_recovery``): it stops and
+    restarts the fleet,
     re-pushes the last published checkpoint (``_state["last_pushed_path"]``,
     recorded by ``publish``) so the restarted engine serves the CURRENT policy
     rather than the base model, and retries the SAME step with the SAME tasks. A
     failed attempt's summary is replaced by one
     ``[agentic-rl:engine-recovery]`` JSON line to stderr. It never fires on a
-    PARTIAL failure (some attempts ran) or on env failures, and if the retries
+    partial failure the gate would accept, or on env failures, and if the retries
     are exhausted the step's infra rows still reach the infra gate, which
     refuses as it always did. A positive count needs a ``fleet`` (there must be
     an engine to stop and start back up).
@@ -501,7 +529,9 @@ class RolloutHost:
         tasks = self.tasks.batch(step, self.tasks_per_step)
         trajectories = await self._gather_step(step, tasks)
         attempt = 0
-        while attempt < self.engine_recovery_retries and _all_engine_infra(trajectories):
+        while attempt < self.engine_recovery_retries and _needs_engine_recovery(
+            trajectories, self.declared_max_infra_rate
+        ):
             attempt += 1
             print(
                 "[agentic-rl:engine-recovery] "
@@ -511,7 +541,7 @@ class RolloutHost:
                         "attempt": attempt,
                         "of": self.engine_recovery_retries,
                         "abstention_reasons": dict(
-                            Counter(t.abstention_reason for t in trajectories)
+                            Counter(t.abstention_reason or "measured" for t in trajectories)
                         ),
                     },
                     sort_keys=True,

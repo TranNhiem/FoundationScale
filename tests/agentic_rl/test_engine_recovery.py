@@ -691,3 +691,30 @@ def test_a_failed_publish_recovery_refuses(tmp_path: Path, monkeypatch: pytest.M
     with pytest.raises(RolloutHostRefusal, match="re-push of .* was NOT complete"):
         host.publish(object(), object(), _Rank0(), 4)
     assert (fleet.start_calls, len(pushed)) == (1, 2)
+
+
+def test_partial_engine_failure_above_the_declared_rate_restarts_the_fleet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A hang that times out only PART of a step (GB200 swe_v1_s6: 21 of 32) is refused by the
+    # infra gate anyway, so it is recovered like a full hang: restart, then retry the step.
+    fleet = FakeFleet(FleetMode(cured_by_restart=True), hung_indices={1})
+    host = _host(
+        tmp_path, uids=["taskA"], client_factory=None, fleet=fleet,
+        engine_recovery_retries=1, gates=False, declared_max_infra_rate=0.4,
+    )  # fmt: skip
+    batch = host.rollout(0)
+    assert (fleet.stop_calls, fleet.start_calls) == (1, 1)
+    assert Termination.INFRA not in tuple(batch.columns["termination"])
+    err = capsys.readouterr().err
+    assert any(line.startswith(_RECOVERY_PREFIX) for line in err.splitlines())
+
+
+def test_partial_engine_failure_at_the_declared_rate_trains_as_is(tmp_path: Path) -> None:
+    fleet = FakeFleet(FleetMode(cured_by_restart=True), hung_indices={1})
+    host = _host(
+        tmp_path, uids=["taskA"], client_factory=None, fleet=fleet,
+        engine_recovery_retries=1, gates=False, declared_max_infra_rate=0.5,
+    )  # fmt: skip
+    host.rollout(0)
+    assert fleet.stop_calls == 0  # 1 of 2 is not above 0.5: the gate would accept this step
