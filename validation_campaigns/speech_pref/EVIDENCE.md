@@ -86,3 +86,21 @@ not. It is not a degenerate loop.
 **SP-3 met**: RL with a WER reward improves held-out WER over the SFT model, with no repetition loops
 and one borderline runaway flag (above). The method needs a large batch and early stopping on
 validation. Beyond ~100 steps it learns to truncate.
+
+## Seed replicates (2026-10-18)
+
+The two reported recipes were rerun with seeds 1 and 2 (`SEED=` in `run_dpo.sh` / `run_grpo.sh`). Each
+replicate used the same fixed validation rule and the same held-out test, with a paired bootstrap vs
+SFT (10.93).
+
+| recipe | seed 0 | seed 1 | seed 2 | mean |
+|---|---|---|---|---|
+| SP-2 RPO, 2 epochs (validation winner: step 525 every seed) | 10.65 [-0.49, -0.06] | 10.56 [-0.59, -0.15] | 10.53 [-0.63, -0.18] | **10.58** |
+| SP-3 GRPO + KL, 16 clips x 8 (winner: step 50 / 150 / 50) | 10.57 [-0.58, -0.15] | 10.37 [-0.76, -0.36] | 10.48 [-0.65, -0.25] | **10.47** |
+
+All six runs beat SFT on the held-out test with a 95% CI that excludes zero. The four replicates
+show 0 runaway and 0 repetition-loop rows. This also settles the two caveats above: SP-2's extra look
+at the test set, and SP-3's single borderline runaway flag. SP-3 seed 2 collapsed after step 50
+(validation 28.87 at step 100), the same truncation as seed 0, while seed 1 stayed near SFT on
+validation (14.00-14.15) and still scored best on test. Early stopping on validation is part of the
+recipe, not an option.
