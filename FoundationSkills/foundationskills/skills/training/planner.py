@@ -29,7 +29,7 @@ from typing import Any
 from foundationskills.interfaces.fs.capabilities import FSCapabilities
 from foundationskills.skills.training.cpt import cpt_policy
 from foundationskills.skills.training.estimate import estimate_memory, estimate_time
-from foundationskills.skills.training.feasibility import check_feasibility
+from foundationskills.skills.training.feasibility import INFEASIBLE_FRACTION, check_feasibility
 from foundationskills.skills.training.knowledge import find_variant, load_algorithm_cards, load_hardware, load_stage_rules
 from foundationskills.skills.training.method import select_method
 from foundationskills.skills.training.posttrain import select_algorithm
@@ -1127,6 +1127,39 @@ def plan(
             decide("method", f"{stage}: gradient_checkpointing off",
                    f"FS refuses gradient checkpointing for {_get(variant, 'id')}: "
                    f"{variant_raw.get('fs_grad_ckpt_evidence', 'measured refusal')}")
+        if stage == "rl":
+            # measured 2026-10-18 (Qwen3.5-4B GRPO, one 184 GiB GB200): the plan priced seq 4096 x batch 2 with
+            # grad ckpt (55.6 GB) while FS held prompts_per_step x group_size rows of prompt + completion in one
+            # log-prob forward with no checkpointing, and ran out of memory at 184 GiB. Price FS's real shape and
+            # choose gradient_checkpointing / logprob_micro_batch so it fits; both are emitted.
+            rows = int(_first("prompts_per_step", default=2)) * int(_first("group_size", default=4))
+            seq_len = int(data_facts.get("rl_prompt_tokens") or 256) + int(hparams["max_new_tokens"])
+            ckpt_ok = variant_raw.get("fs_grad_ckpt") is not False
+            budget = INFEASIBLE_FRACTION * float(_get(hw, "mem_gb"))
+
+            def _rl_gb(rows_resident: int, ckpt: bool) -> float:
+                return estimate_memory(
+                    variant, method=method, seq_len=seq_len, micro_batch=rows_resident, sharding="ddp",
+                    grad_ckpt=ckpt, world=1, lora_rank=int(_first("lora_rank", "lora_r", default=16)),
+                    reference_copy=False, optimizer="host_adamw",
+                ).total_per_gpu_gb
+
+            micro_batch, grad_ckpt = rows, False
+            while _rl_gb(micro_batch, grad_ckpt) > budget:
+                if not grad_ckpt and ckpt_ok:
+                    grad_ckpt = True
+                elif micro_batch > 1:
+                    micro_batch = max(1, micro_batch // 2)
+                else:
+                    break  # still too large: the estimate and feasibility below report it
+            hparams["gradient_checkpointing"] = grad_ckpt
+            hparams.pop("grad_ckpt", None)
+            if micro_batch < rows:
+                hparams["logprob_micro_batch"] = micro_batch
+            decide("hparams", f"rl: {rows} rows x {seq_len} tokens per step",
+                   f"log-prob forward keeps {micro_batch} row(s) resident, gradient_checkpointing {grad_ckpt}; "
+                   f"priced against {INFEASIBLE_FRACTION:.0%} of {_get(hw, 'mem_gb')} GB (prompt tokens from "
+                   f"{'data_facts.rl_prompt_tokens' if data_facts.get('rl_prompt_tokens') else 'the 256 default'})")
         if sharding == "fsdp" and variant_raw.get("fs_fsdp") is False:
             # measured per-variant gap (e.g. Gemma-4 26B-A4B MoE: FS's FSDP auto-wrap
             # cannot find the layer class); DDP replicates, and feasibility below

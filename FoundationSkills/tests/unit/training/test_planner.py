@@ -431,3 +431,22 @@ def test_rl_generation_budget_from_the_recipe_is_priced(patched, monkeypatch) ->
     rl = next(s for s in payload["stages"] if s["stage"] == "rl")
     assert rl["hparams"]["max_new_tokens"] == 512
     assert any("512 generated" in a for a in str(payload["decisions"]).split(";"))
+
+
+def test_rl_memory_is_priced_on_fs_real_step_shape(patched) -> None:
+    # measured 2026-10-18: priced as seq 4096 x batch 2 (55.6 GB), FS held 32 rows x 1280 tokens and OOMed at 184 GiB
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    hp = rl["hparams"]
+    rows = int(hp.get("prompts_per_step") or 2) * int(hp.get("group_size") or 4)
+    seq = 256 + int(hp["max_new_tokens"])
+    assert any(f"rl: {rows} rows x {seq} tokens per step" in str(d) for d in payload["decisions"])
+    assert isinstance(hp["gradient_checkpointing"], bool)  # always emitted, never FS's silent default
+    assert int(hp.get("logprob_micro_batch") or rows) <= rows
+
+
+def test_emit_rl_passes_the_memory_knobs() -> None:
+    from foundationskills.interfaces.fs import emit_rl
+
+    assert emit_rl._HPARAM_TO_RL["logprob_micro_batch"] == "logprob_micro_batch"
+    assert emit_rl._HPARAM_TO_RL["gradient_checkpointing"] == "gradient_checkpointing"

@@ -31,6 +31,8 @@ _HPARAM_TO_RL: dict[str, str] = {
     "top_p": "top_p",
     "top_k": "top_k",
     "prompts_per_step": "prompts_per_step",
+    "logprob_micro_batch": "logprob_micro_batch",
+    "gradient_checkpointing": "gradient_checkpointing",
     "seed": "seed",
     "master_weights": "master_weights",
     "device": "device",
