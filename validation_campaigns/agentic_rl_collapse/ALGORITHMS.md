@@ -45,6 +45,26 @@ runs through.
 
 At 100 steps the consistent-scoring agentic_grpo runs reach 0.653 / 0.651 / 0.628 (seeds 6 / 5 / 4).
 
+## Every algorithm with consistent scoring, seed 6, step 60
+
+The same 60-step benchmark as the raw-scoring table above, with consistent scoring on.
+
+| algorithm | raw scoring (final eval) | consistent scoring (step-60 eval) |
+|---|---|---|
+| agentic_grpo (FS default) | collapsed (0.0) | 0.599 (seed 6; mean of 3 seeds 0.603) |
+| dr_grpo | collapsed (0.014) | 0.588 (337/400) |
+| gspo | 0.447 | 0.559 (seed 6; mean of 4 seeds 0.575) |
+| dapo | collapsed (0.010) | 0.570 (320/400) |
+| rloo | not measured | 0.536 (296/400) |
+| grpo | collapsed (0.039) | 0.470 (259/400) |
+
+With consistent scoring no algorithm collapsed: all six finish between 0.470 and 0.603. Every algorithm
+that collapsed under raw scoring recovers once scoring matches the sampler, which confirms the mismatch, not
+the estimator, as the cause. The default `agentic_grpo` is still the best measured. REINFORCE++ is not in the
+table: the plane refuses the estimator-free family (`reinforce_baseline`, `reinforce_pp`, `raft`,
+`best_of_n`) whenever a `rollout_source` is set, which every agentic run has. The dry run does not catch that
+refusal, so such a run fails at its first step.
+
 ## Reading
 
 - The collapse is a sampler/trainer mismatch, and consistent scoring removes it: it is the best configuration

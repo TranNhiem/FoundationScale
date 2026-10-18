@@ -46,19 +46,19 @@ Parity against FS GRPO on the music task (MUST_PASS b) is measured below.
 (MiMo-V2.6-Distill 9B, top_p 1.0, T 1.0, lr 1e-6, 4 tasks x 8 samples, centred advantage, clip 0.2, no KL),
 on one GPU with parameter and optimizer offload. It completed all 100 steps (exit 0).
 `parity_stats.py` compares mean rollout reward per window against two FS seeds
-(`parity_tp1_s7.json`, `parity_tp1_s6.json`):
+(`parity_tp1_s7.json`, `parity_tp1_s6.json`, and `parity_tp1_s5.json`, the third seed added 2026-10-18):
 
-| window | FS seed 6 | FS seed 7 | verl | criterion | verdict |
-|---|---|---|---|---|---|
-| steps 0-19 | 0.070 | 0.133 | 0.085 | inside the FS seed envelope | PASS |
-| steps 20-49 | 0.344 | 0.421 | 0.450 | inside the FS seed envelope | 0.029 above the envelope |
-| steps 50-99 | 0.559 | 0.563 | 0.580 | within 5% of FS | PASS (3.1% / 3.8%) |
+| window | FS seed 5 | FS seed 6 | FS seed 7 | FS mean | verl | criterion | verdict |
+|---|---|---|---|---|---|---|---|
+| steps 0-19 | 0.074 | 0.070 | 0.133 | 0.092 | 0.085 | inside the FS seed envelope | PASS |
+| steps 20-49 | 0.302 | 0.344 | 0.421 | 0.356 | 0.450 | inside the FS seed envelope | FAIL: 0.029 above the highest seed |
+| steps 50-99 | 0.545 | 0.559 | 0.563 | 0.556 | 0.580 | within 5% of FS | PASS vs the mean (4.4%); 6.5% vs seed 5 |
 
-Reading: verl and FS reach the same plateau (late window within 5% of both seeds), and verl's early
-learning is inside the FS seed spread. In steps 20-49 verl learns slightly faster than either FS seed.
-Two FS seeds make a narrow envelope, so this is a near-miss rather than a measured divergence. The plan's
-criterion for the middle window is therefore not met on this evidence; a third FS seed (or a second verl seed)
-would settle it. One known difference remains: verl's loss reduction (`seq-mean-token-mean`) is the closest
+Reading (three FS seeds): verl and FS reach the same plateau (late window 4.4% above the FS mean), and
+verl's early learning is inside the FS seed spread. In steps 20-49 verl learns faster than all three FS
+seeds; the third seed lowered the envelope rather than widening it upward, so this is now a measured
+difference, not a narrow envelope. The plan's criterion for the middle window is not met. The known
+candidate cause is the loss reduction: verl's `seq-mean-token-mean` is the closest
 verl option to FS's `prompt_mean`, not an identical definition.
 
 ## FS music reward through verl's reward hook (2026-10-12)

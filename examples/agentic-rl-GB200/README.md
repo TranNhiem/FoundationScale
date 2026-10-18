@@ -46,10 +46,13 @@ The rollout reward then falls to about 0 around step 45-55
 |---|---|---|
 | agentic_grpo (default) | collapses | 0.599 / 0.592 / 0.619 (seeds 6 / 5 / 4) |
 | gspo | **no collapse on 4 of 4 seeds**: 0.447 / 0.516 / 0.545 / 0.557 | 0.559 / 0.613 / 0.596 / 0.533 (seeds 6 / 5 / 7 / 4; mean 0.575) |
-| dapo | collapses (0.010) | not measured |
-| dr_grpo | collapses (0.014) | not measured |
-| grpo | collapses (0.039) | not measured |
+| dapo | collapses (0.010) | 0.570 |
+| dr_grpo | collapses (0.014) | 0.588 |
+| grpo | collapses (0.039) | 0.470 |
+| rloo | not measured | 0.536 |
 
+With consistent scoring no algorithm collapses; agentic_grpo is the best measured. REINFORCE++ and the
+other estimator-free losses are refused for agentic runs.
 Keep consistent scoring; it is the best configuration measured. gspo is the robust choice when scoring cannot match
 the sampler. Full table: [ALGORITHMS.md](../../validation_campaigns/agentic_rl_collapse/ALGORITHMS.md).
 
