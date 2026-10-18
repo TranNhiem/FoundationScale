@@ -1082,6 +1082,21 @@ def plan(
                 hparams.pop(alias, None)
         else:
             hparams.setdefault("max_sequence_length", None)
+        if stage == "rl":
+            # measured 2026-10-18 (Qwen3.5-4B, GRPO): nothing emitted max_new_tokens, FS ran its 64-token default,
+            # the thinking model never reached an answer letter and all 32 steps abstained. One budget is
+            # resolved, emitted, and priced (estimate == command): operator data_facts > recipe/card > 1024.
+            source = ("data_facts.rl_max_new_tokens" if data_facts.get("rl_max_new_tokens")
+                      else f"recipe/card hparams ({recipe_id}, {algorithm})" if hparams.get("max_new_tokens")
+                      else "planner default")
+            budget = int(data_facts.get("rl_max_new_tokens") or hparams.get("max_new_tokens") or 1024)
+            hparams["max_new_tokens"] = budget
+            if data_facts.get("rl_tokens") is None and budget != int(data_facts.get("rl_max_new_tokens") or 1024):
+                assumptions[:] = [a for a in assumptions if not a.startswith("rl tokens heuristic")]
+                tokens = _stage_tokens(stage, {**data_facts, "rl_max_new_tokens": budget}, domain_tokens, assumptions)
+            decide("hparams", f"rl: max_new_tokens {budget}",
+                   f"from {source}; FS's own default (64) truncates a reasoning completion before its answer, "
+                   "so the budget is always emitted explicitly")
         def _first(*keys: str, default: Any = None) -> Any:
             return next((hparams[k] for k in keys if hparams.get(k) is not None), default)
 

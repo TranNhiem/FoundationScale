@@ -403,3 +403,31 @@ def test_linear_attention_fallback_is_disclosed_only_when_measured_missing(tmp_p
     assert planner._linear_attention_note(str(tmp_path), variant, unmeasured) is None
     (tmp_path / "config.json").write_text(json.dumps({"layer_types": ["full_attention"]}))
     assert planner._linear_attention_note(str(tmp_path), variant, _caps_with_kernels(False)) is None
+
+
+def test_rl_generation_budget_is_always_emitted(patched) -> None:
+    # measured 2026-10-18: nothing emitted max_new_tokens, FS ran 64 and Qwen3.5-4B abstained on 32/32 steps
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    card = planner._card_default_hparams(rl["algorithm"]).get("max_new_tokens") or 1024
+    assert rl["hparams"]["max_new_tokens"] == card
+    assert any(f"max_new_tokens {card}" in str(d) for d in payload["decisions"])
+
+
+def test_rl_generation_budget_from_the_operator_wins_and_is_priced(patched) -> None:
+    facts = _goal()["data_facts"]
+    small = planner.plan(_goal(data_facts={**facts, "rl_max_new_tokens": 128}), caps=_fake_caps())
+    large = planner.plan(_goal(), caps=_fake_caps())
+    rl_small, rl_large = (next(s for s in p["stages"] if s["stage"] == "rl") for p in (small, large))
+    assert rl_small["hparams"]["max_new_tokens"] == 128
+    assert rl_small["estimate"]["tokens"] < rl_large["estimate"]["tokens"]  # estimate == command
+
+
+def test_rl_generation_budget_from_the_recipe_is_priced(patched, monkeypatch) -> None:
+    original = planner._recipe_stage_hparams
+    monkeypatch.setattr(planner, "_recipe_stage_hparams",
+                        lambda *a, **k: {**original(*a, **k), "max_new_tokens": 512})
+    payload = planner.plan(_goal(), caps=_fake_caps())
+    rl = next(s for s in payload["stages"] if s["stage"] == "rl")
+    assert rl["hparams"]["max_new_tokens"] == 512
+    assert any("512 generated" in a for a in str(payload["decisions"]).split(";"))
