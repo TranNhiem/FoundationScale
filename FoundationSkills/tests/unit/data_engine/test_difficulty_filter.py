@@ -328,3 +328,18 @@ def test_chat_template_kwargs_is_a_declared_config_key() -> None:
 
     prop = df.CONFIG_SCHEMA["properties"]["chat_template_kwargs"]
     assert prop["default"] is None and "object" in prop["type"]
+
+
+def test_an_emptied_dataset_names_the_band_and_the_remedies() -> None:
+    # measured 2026-10-18 (Qwen3.5-4B, ARC-Challenge slice, thinking on): 0 of 279 kept
+    from foundationskills.skills.data_engine.skill import _difficulty_zero_note
+
+    stats = [{"name": "difficulty_filter", "records_in": 279, "records_out": 0,
+              "dropped": {"difficulty_too_easy": 220, "difficulty_too_hard": 5, "difficulty_unscorable": 54},
+              "extra": {"max_new_tokens": 2048, "pass_rate_hist": {"0.000": 5, "1.000": 220}}}]
+    message, recovery = _difficulty_zero_note(stats)
+    assert "kept 0 of 279: 220 too easy, 5 too hard, 54 unscorable at max_new_tokens 2048" in message
+    assert "enable_thinking" in recovery and "harder source" in recovery
+    stats[0]["records_out"] = 3
+    assert _difficulty_zero_note(stats) is None  # it kept rows: not the cause
+    assert _difficulty_zero_note([{"name": "format", "records_in": 9, "records_out": 0}]) is None
