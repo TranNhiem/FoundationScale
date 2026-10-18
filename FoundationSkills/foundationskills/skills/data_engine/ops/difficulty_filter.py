@@ -61,6 +61,13 @@ from foundationskills.skills.data_engine.ops.base import (
 from foundationskills.skills.data_engine.ops.semantic_dedup import _resolve_revision, _spec_problem
 
 
+# The training planner's emitted RL generation budget (planner.py: data_facts > recipe/card > 1024). It was
+# FS's RLTrainConfig default of 64, which the planner no longer emits: measured 2026-10-18, a 64-token sample of
+# Qwen3.5-4B never leaves its <think> block, so every prompt would drop as difficulty_unscorable, and the filter
+# would measure a pass rate RL does not train on. Pass the plan's max_new_tokens explicitly when it differs.
+RL_MAX_NEW_TOKENS = 1024
+
+
 CONFIG_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,  # unknown keys refused: a silently ignored key changes the measurement
@@ -70,7 +77,7 @@ CONFIG_SCHEMA: dict[str, Any] = {
         "k": {"type": "integer", "minimum": 2, "default": 8},
         "temperature": {"type": "number", "exclusiveMinimum": 0.0, "default": 1.0},
         "top_p": {"type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0, "default": 1.0},
-        "max_new_tokens": {"type": "integer", "minimum": 1, "default": 64},  # FS RLTrainConfig default
+        "max_new_tokens": {"type": "integer", "minimum": 1, "default": RL_MAX_NEW_TOKENS},
         "keep_above": {"type": "number", "minimum": 0.0, "exclusiveMaximum": 1.0, "default": 0.0},
         "keep_below": {"type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0, "default": 1.0},
         "batch_size": {"type": "integer", "minimum": 1, "default": 8},  # prompts per generate call
@@ -150,7 +157,7 @@ def _load_rollout(cfg: dict) -> Callable[[list], list[list[str]]]:
     model_id = str(cfg.get("model", ""))
     k = int(cfg.get("k", 8))
     batch_size = int(cfg.get("batch_size", 8))
-    max_new_tokens = int(cfg.get("max_new_tokens", 64))
+    max_new_tokens = int(cfg.get("max_new_tokens", RL_MAX_NEW_TOKENS))
     temperature = float(cfg.get("temperature", 1.0))
     top_p = float(cfg.get("top_p", 1.0))
     device = str(cfg.get("device", "auto"))
@@ -230,7 +237,7 @@ def _difficulty_filter_op(records: Iterable[dict], cfg: dict, stats: OpStats) ->
     k = int(cfg.get("k", 8))
     temperature = float(cfg.get("temperature", 1.0))
     top_p = float(cfg.get("top_p", 1.0))
-    max_new_tokens = int(cfg.get("max_new_tokens", 64))
+    max_new_tokens = int(cfg.get("max_new_tokens", RL_MAX_NEW_TOKENS))
     keep_above = float(cfg.get("keep_above", 0.0))
     keep_below = float(cfg.get("keep_below", 1.0))
     seed = int(cfg.get("seed", 0))

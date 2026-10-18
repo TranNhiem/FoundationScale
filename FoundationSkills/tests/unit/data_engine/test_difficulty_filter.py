@@ -94,7 +94,7 @@ def test_registered_op_and_schema() -> None:
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["model"]
     assert schema["properties"]["k"]["minimum"] == 2
-    assert schema["properties"]["max_new_tokens"]["default"] == 64
+    assert schema["properties"]["max_new_tokens"]["default"] == 1024  # the planner's emitted RL default
     assert schema["properties"]["dtype"]["enum"] == ["bfloat16", "float16", "float32"]
 
 
@@ -207,7 +207,7 @@ def test_stats_extra_histogram_rollouts_and_fraction(monkeypatch) -> None:
 
     assert extra["model"] == MODEL
     assert extra["model_revision"] == _resolve_revision(MODEL)
-    assert (extra["k"], extra["temperature"], extra["top_p"], extra["max_new_tokens"]) == (8, 1.0, 1.0, 64)
+    assert (extra["k"], extra["temperature"], extra["top_p"], extra["max_new_tokens"]) == (8, 1.0, 1.0, 1024)
     assert (extra["keep_above"], extra["keep_below"], extra["seed"]) == (0.0, 1.0, 0)
     assert extra["rollouts"] == 32  # k * (prompts scored + prompts unscorable)
     assert extra["abstentions"] == 0
