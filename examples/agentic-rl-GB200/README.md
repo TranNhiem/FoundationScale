@@ -58,6 +58,13 @@ the sampler. Full table: [ALGORITHMS.md](../../validation_campaigns/agentic_rl_c
 
 ---
 
+**Software-engineering agent** ([chapter 05](05_swe_agent.md)): the same plane trains the 9B policy to fix
+injected bugs in Python libraries with shell tools, one sandbox per episode, graded by hidden tests. Resolve
+rate on 24 held-out tasks x 4 attempts: base 0.604, seed 5 at step 12 / 20 / 30 0.750 / 0.792 / 0.813, seed 7
+at step 12 0.729.
+
+---
+
 ## Chapters
 
 | Chapter | You do |
@@ -66,6 +73,7 @@ the sampler. Full table: [ALGORITHMS.md](../../validation_campaigns/agentic_rl_c
 | [02_tasks_and_rewards.md](02_tasks_and_rewards.md) | Generate task files; see what an episode and the reward are |
 | [03_training.md](03_training.md) | Launch the 2-GPU run; read the run log; recover from a hung engine |
 | [04_evaluation.md](04_evaluation.md) | Serve a checkpoint and measure its held-out reward |
+| [05_swe_agent.md](05_swe_agent.md) | Build bug-fix tasks, train a software-engineering agent in per-episode sandboxes, measure its resolve rate |
 
 ## Quick start
 
