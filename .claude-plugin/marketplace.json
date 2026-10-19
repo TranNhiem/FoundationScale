@@ -13,6 +13,14 @@
       "description": "FoundationSkills: probe-first, refusal-honest agent skills for planning, launching, evaluating and researching FoundationScale training runs (statuses PASS/RED/UNMEASURED/REFUSED).",
       "license": "MIT",
       "skills": [
+        "./skills/fs-data",
+        "./skills/fs-eval",
+        "./skills/fs-goal",
+        "./skills/fs-handoff",
+        "./skills/fs-launch",
+        "./skills/fs-plan",
+        "./skills/fs-research",
+        "./skills/fs-status",
         "./skills/fskills-auto-research",
         "./skills/fskills-confirm-before-launch",
         "./skills/fskills-data-engine",
@@ -20,7 +28,8 @@
         "./skills/fskills-measured-or-unmeasured",
         "./skills/fskills-probe-first",
         "./skills/fskills-refusal-surface",
-        "./skills/fskills-training"
+        "./skills/fskills-training",
+        "./skills/using-foundationskills"
       ]
     }
   ]
