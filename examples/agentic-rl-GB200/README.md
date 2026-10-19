@@ -63,6 +63,9 @@ injected bugs in Python libraries with shell tools, one sandbox per episode, gra
 rate on 24 held-out tasks x 4 attempts: base 0.604, seed 5 at step 12 / 20 / 30 0.750 / 0.792 / 0.813, seed 7
 at step 12 0.729.
 
+**Math with tools** ([chapter 06](06_math_tools.md)): the policy runs Python through the bash tool and submits a
+boxed answer. MATH-500 0.727 -> 0.861 and AIME 2025 0.283 -> 0.404 after 100 steps; working tools add most on AIME.
+
 ---
 
 ## Chapters
@@ -74,6 +77,7 @@ at step 12 0.729.
 | [03_training.md](03_training.md) | Launch the 2-GPU run; read the run log; recover from a hung engine |
 | [04_evaluation.md](04_evaluation.md) | Serve a checkpoint and measure its held-out reward |
 | [05_swe_agent.md](05_swe_agent.md) | Build bug-fix tasks, train a software-engineering agent in per-episode sandboxes, measure its resolve rate |
+| [06_math_tools.md](06_math_tools.md) | Train a math solver that runs Python through tools; measure MATH-500 and AIME 2025 |
 
 ## Quick start
 
