@@ -21,7 +21,7 @@ O="${1:-$S/sp1_cpt_q3asr06}"
 MANIFESTS="$S/manifests"
 DATA_DIR="$S/earnings22_robust/data"
 POOL=$O/pool.jsonl
-TEACHER=$W/Qwen3-ASR-1.7B-hf
+TEACHER=${TEACHER:-$W/Qwen3-ASR-1.7B-hf}  # any Qwen3-ASR checkpoint; TEACHER_PROC = its processor
 BASE=$W/Qwen3-ASR-0.6B-hf
 RUN() {  # enroot + venv runner matching train.sh/decode.sh's container surface
   ENROOT_DATA_PATH="$CLUSTER_HOME/.local/share/enroot" enroot start -e PYTHONNOUSERSITE=1 \
@@ -39,8 +39,8 @@ fi
 
 # (b) pseudo-label the pool with the teacher decode
 if [ ! -s "$O/teacher/eval.json" ]; then
-  ln -sf "$POOL" "$MANIFESTS/sp1_pool.jsonl"  # decode.sh reads a manifest NAME under $MANIFESTS
-  bash "$R/validation_campaigns/speech_q3asr/decode.sh" "$G0" "$TEACHER" sp1_pool.jsonl "$O/teacher" || exit $?
+  ln -sf "$POOL" "$MANIFESTS/sp1_pool.jsonl"  # same pool rows for every run  # decode.sh reads a manifest NAME under $MANIFESTS
+  PROC="${TEACHER_PROC:-$TEACHER}" bash "$R/validation_campaigns/speech_q3asr/decode.sh" "$G0" "$TEACHER" sp1_pool.jsonl "$O/teacher" || exit $?
 fi
 
 # (c) CPT training manifest
