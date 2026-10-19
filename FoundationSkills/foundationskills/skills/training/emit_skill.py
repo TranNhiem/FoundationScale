@@ -44,6 +44,7 @@ from foundationskills.interfaces.fs.emit_agentic import emit_agentic
 from foundationskills.interfaces.fs.emit_rl import emit_rl
 from foundationskills.interfaces.fs.emit_train import emit_train
 from foundationskills.interfaces.fs.sbatch import render_sbatch, write_sbatch
+from foundationskills.interfaces.fs.video_envelope import beyond_envelope, frame_envelope
 
 _LOCAL_HARDWARE_IDS = {"", "local", "local-single-node", "none"}
 
@@ -166,6 +167,13 @@ class TrainingEmitSkill(BaseSkill):
         RuleSpec("FS-HO-002", "all launch specs are non-executable", Severity.BLOCK, "handoff"),
         RuleSpec("FS-HO-003", "an RL spec is single-device (FS RLTrainer runs on one device)", Severity.INFO, "handoff"),
         RuleSpec("FS-HO-004", "the emitted spec lacks --fused-loss while the stage declares it", Severity.BLOCK, "handoff"),
+        # A4.4 (video frame budget): the frame count is the declaration FS refuses video rows without,
+        # and a count past the measured envelope (interfaces.fs.video_envelope) is UNMEASURED.
+        RuleSpec("FS-IN-006", "a video stage declares no positive-integer video_frames (stage data.fs_columns or "
+                 "dataset fs_columns): FS refuses video rows without FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES",
+                 Severity.BLOCK, "input"),
+        RuleSpec("FS-HO-007", "an emitted spec's video_frames lies above the measured frame envelope (16 uniform "
+                 "frames per clip): UNMEASURED, never PASS", Severity.WARN, "handoff"),
         # A4.2 (agentic RL): the agentic spec is FS's own AgenticRLConfig, proven by FS's
         # own --dry-run INSIDE the declared runtime (FS owns the schema end to end).
         RuleSpec(
@@ -264,6 +272,20 @@ class TrainingEmitSkill(BaseSkill):
                     # conversation rows feed text through the conversations column
                     # (examples/vlm-2xH200/scripts/train_sft.sh:13), not a flat text column
                     col_val = fs_cols.get("conversations_column")
+                if modality == "video" and col_val:
+                    frames = _stage_video_frames(stage, stage_dataset)
+                    if isinstance(frames, bool) or not isinstance(frames, int) or frames < 1:
+                        findings.append(
+                            self.finding(
+                                "FS-IN-006",
+                                f"stage {name!r} feeds video but video_frames is {frames!r}: FS refuses "
+                                "video rows without FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES",
+                                {"stage": name, "fs_columns": dict(fs_cols),
+                                 "stage_fs_columns": dict((stage.get("data") or {}).get("fs_columns") or {})},
+                                "declare video_frames (a positive integer, e.g. 16) in the plan stage's "
+                                "data.fs_columns or the dataset's fs_columns",
+                            )
+                        )
                 if not col_val:
                     findings.append(
                         self.finding(
@@ -454,11 +476,32 @@ class TrainingEmitSkill(BaseSkill):
             artifact_refs.append(write_artifact(artifact, launch_dir))
             specs.append(spec)
 
-        return SkillResult(
+        result = SkillResult(
             status=Status.PASS,
             payload={"specs": specs, "launch_dir": str(launch_dir)},
             artifacts=tuple(artifact_refs),
         )
+        beyond = []
+        for stage in stages:
+            if "video" not in set(stage.get("modalities") or ()):
+                continue
+            stage_dataset = datasets_map.get(str(stage.get("name"))) or single_dataset or {}
+            reason = beyond_envelope(_stage_video_frames(stage, stage_dataset))
+            if reason:
+                beyond.append((str(stage.get("name") or "<unnamed>"), reason))
+        if not beyond:
+            return result
+        # A4.4 (FS-HO-007): a spec at a frame count no run has trained at is UNMEASURED, never PASS.
+        # The handoff checks still run here (the runner skips check_handoff off PASS); a BLOCK
+        # among them is a measured failure and outranks the unmeasured envelope: RED.
+        handoff = list(self.check_handoff(result, ctx) or [])
+        notes = [self.finding("FS-HO-007", reason, {"stage": name, "frame_envelope": frame_envelope()},
+                              "emit within the measured envelope, or measure a run at this frame count first "
+                              "and add it to interfaces/fs/video_envelope.py")
+                 for name, reason in beyond]
+        blocked = any(f.severity is Severity.BLOCK for f in handoff)
+        return SkillResult(status=Status.RED if blocked else Status.UNMEASURED, payload=result.payload,
+                           artifacts=result.artifacts, findings=(*handoff, *notes))
 
     def check_handoff(self, result: SkillResult, ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
@@ -584,7 +627,7 @@ class TrainingEmitSkill(BaseSkill):
             ),
         )
 
-    def must_fire_fixtures(self) -> dict[str, dict[str, Any]]:
+    def must_fire_fixtures(self) -> dict[str, dict[str, Any]]:  # noqa: PLR0915
         """One negative fixture per rule.
 
         Capability-dependent fixtures carry a ``capabilities`` note: the
@@ -631,6 +674,19 @@ class TrainingEmitSkill(BaseSkill):
             "multi_gpu": None,
             "errors": [],
         }
+        video_dataset = {
+            "format": "mm_sft",
+            "shards": [{"path": "ds/shard-00000.jsonl"}],
+            "fs_columns": {"text_column": "text", "image_column": "image", "video_column": "video",
+                           "gold_key": "answer"},
+        }
+
+        def video_stage(frames: int | None) -> dict[str, Any]:
+            return {"name": "vid1", "stage": "sft", "algorithm": None, "method": "lora",
+                    "modalities": ["image", "text", "video"],
+                    "hparams": {"max_sequence_length": 16384},
+                    "data": {"fs_columns": {"video_column": "video", "video_frames": frames}}}
+
         return {
             "FS-IN-001": {
                 "request": {"plan": {"stages": []}, "model": "m", "output_root": "out"},
@@ -656,6 +712,18 @@ class TrainingEmitSkill(BaseSkill):
                     "model": "m", "output_root": "out",
                 },
                 "expected": "REFUSED naming FS-IN-004 (stage declares 'image' but dataset fs_columns cannot feed it)",
+            },
+            # A4.4: a video stage with no frame count anywhere is refused; 32 frames is past the
+            # measured 16-frame envelope and comes back UNMEASURED.
+            "FS-IN-006": {
+                "request": {"plan": {"stages": [video_stage(None)]}, "dataset": video_dataset,
+                            "model": "m", "output_root": "out"},
+                "expected": "REFUSED naming FS-IN-006 (video stage without video_frames)",
+            },
+            "FS-HO-007": {
+                "request": {"plan": {"stages": [video_stage(32)]}, "dataset": video_dataset,
+                            "model": "m", "output_root": "out"},
+                "expected": "UNMEASURED 95 naming FS-HO-007 (32 frames > the measured 16)",
             },
             "FS-HO-001": {
                 "request": {
@@ -736,3 +804,10 @@ def _guess_scheduler(hardware_id: str, nodes: int) -> str | None:
     if nodes > 1 or hardware_id.lower() not in _LOCAL_HARDWARE_IDS:
         return "slurm"
     return None
+
+
+def _stage_video_frames(stage: Mapping[str, Any], dataset: Mapping[str, Any]) -> Any:
+    """The frame count emit_train mirrors into FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES (stage first, then dataset)."""
+    stage_cols = (stage.get("data") or {}).get("fs_columns") or {}
+    frames = stage_cols.get("video_frames")
+    return frames if frames is not None else (dataset.get("fs_columns") or {}).get("video_frames")

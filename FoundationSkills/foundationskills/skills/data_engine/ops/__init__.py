@@ -11,6 +11,7 @@ Note: this module also makes the stdlib-looking name ``format`` importable as
 from __future__ import annotations
 
 from foundationskills.skills.data_engine.ops import base
+from foundationskills.skills.data_engine.ops import audio_sample_rate
 from foundationskills.skills.data_engine.ops import clean
 from foundationskills.skills.data_engine.ops import decontam
 from foundationskills.skills.data_engine.ops import difficulty_filter

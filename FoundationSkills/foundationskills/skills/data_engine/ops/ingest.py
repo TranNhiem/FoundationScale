@@ -63,7 +63,8 @@ CONFIG_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "uri": {"type": "string", "minLength": 1},
                     "kind": {
-                        "enum": ["local_dir", "jsonl", "json", "parquet", "csv", "hf_dataset", "documents", "image_text"]
+                        "enum": ["local_dir", "jsonl", "json", "parquet", "csv", "hf_dataset", "documents", "image_text",
+                                 "speech_manifest"]
                     },
                     "options": {"type": "object"},
                 },
@@ -520,6 +521,22 @@ def _iter_source(uri: str, kind: str, options: dict, stats: OpStats, counter: li
         else:
             for raw in _read_parquet(path):
                 yield mapped(raw, str(path))
+    elif kind == "speech_manifest":
+        # A4.3: FoundationScale's own contract validates the rows and counts duplicates; refused rows are excluded by
+        # it and never reimplemented here. Rows pass through in FS's manifest shape (no text mapping).
+        try:
+            from foundationscale.upstream.contracts import read_speech_manifest  # noqa: PLC0415
+        except ImportError as exc:
+            raise IngestError("speech_manifest needs foundationscale (upstream.contracts) importable here") from exc
+        path = Path(uri)
+        if not path.is_file():
+            raise IngestError(f"missing input: speech_manifest uri {uri!r} is not a file")
+        rows, report = read_speech_manifest(path)
+        stats.extra.setdefault("speech_manifest", []).append(
+            {"uri": uri, "ok": bool(report.ok), **report.as_manifest()})
+        for row in rows:
+            counter[0] += 1
+            yield dict(row)
     elif kind == "hf_dataset":
         for raw in _read_hf_dataset(uri, options):
             yield mapped(raw, uri)

@@ -113,6 +113,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | TR-PL-005 | INFO | handoff | an sft stage is present: a `text` column trains with full-sequence loss; assistant-only loss needs a conversations column |
 | TR-PL-006 | BLOCK | handoff | planned `max_sequence_length >= 131072`, or a goal claim that 128K works: RED (131072 OOMs all five measured models, examples/vlm-2xH200) |
 | TR-PL-007 | BLOCK | handoff | gemma-4-31B-it planned above 32768: RED (its measured 2×H200 maximum is 32K) |
+| TR-PL-010 | WARN | handoff | a video stage plans `video_frames` above the measured frame envelope (16 uniform frames per clip, validation_campaigns/vlm_2xh200/EVIDENCE.md): the plan is UNMEASURED (95), never PASS; a handoff BLOCK still makes it RED |
 | TR-PL-009 | WARN | handoff | (agentic) `agentic_grpo_token_mean`, the measured control arm, chosen as the default: note |
 | FS-IN-001 | BLOCK | input | (training.emit) the plan has no stages |
 | FS-IN-002 | BLOCK | input | (training.emit) a stage has no dataset payload |
@@ -122,6 +123,8 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | FS-HO-003 | INFO | handoff | (training.emit) an RL spec is single-device; runnable as measurement-only (`fskills launch --measurement-only`) |
 | FS-IN-004 | BLOCK | input | (training.emit) a stage declares a modality the dataset's `fs_columns` cannot feed |
 | FS-HO-004 | BLOCK | handoff | (training.emit) the emitted spec lacks `--fused-loss` while the stage declares it: RED |
+| FS-IN-006 | BLOCK | input | (training.emit) a video stage declares no positive-integer `video_frames` (stage `data.fs_columns`, else the dataset's `fs_columns`): FS refuses video rows without `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` |
+| FS-HO-007 | WARN | handoff | (training.emit) an emitted spec's `video_frames` lies above the measured frame envelope: UNMEASURED (95), never PASS |
 | FS-IN-005 | BLOCK | input | (training.emit) an agentic stage whose runtime probe is unmeasured or whose engine is not importable there; the refusal names the container |
 | FS-HO-005 | BLOCK | handoff | (training.emit) FS `--dry-run` of the generated agentic config does not exit 0: RED (FS owns the config schema) |
 | FS-HO-006 | BLOCK | handoff | (training.emit) a claim record maps TIMEOUT/STEP_LIMIT to abstention, or claims PASS over 0 measured steps: REFUSED |
@@ -132,6 +135,14 @@ VLM competition LoRA (A4.1): a goal may declare `modalities`, `video_frames`, `m
 `examples/vlm-2xH200`. Emit declares the conversation, image, video, frame and overlong columns the
 measured launcher uses, and a `--fused-loss` spec stays non-executable unless the probe measured its
 kernel importable (`fused_loss_kernels`; FS lists `liger` as a choice even without `liger_kernel`).
+
+Video frame budget (A4.4): `video_frames` is the sampling declaration (FS samples N centred-uniform frames
+per clip inside each row's [start, end]; `uniform` is its only sampling). The planner (TR-IN-006) and emit
+(FS-IN-006) refuse video without it; emit mirrors it to `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`, and evaluation
+must score with the same `--video-frames` (EV-IN-007/EV-IN-008). The measured envelope is 16 frames per clip
+(five VLM families at 16K-64K context, `interfaces/fs/video_envelope.py`; the probe reports it as
+`video_frame_budget.frame_envelope`). A larger N has never been trained, so the plan (TR-PL-010), the spec
+(FS-HO-007) and a held-out score (EV-HO-009) are UNMEASURED, never PASS.
 
 Agentic RL (A4.2): a goal with an `agentic` block plans an `agentic_rl` stage over FS
 `foundationscale.agentic_rl`. The stage declares a runtime (the agentic stack runs in an enroot

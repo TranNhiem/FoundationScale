@@ -33,7 +33,8 @@ The skill never implements a scorer and never downloads data or models.
 - To smoke-test an eval setup (`--limit N`): the verdict is at best UNMEASURED.
 - For a VLM LoRA checkpoint: `heldout` (or `fskills eval run --heldout BLOCK.json`) scores held-out mean NLL for
   base and checkpoint on the same rows with FoundationScale's `examples/vlm-2xH200/scripts/eval_heldout_loss.py`.
-  Video rows need `video_frames` equal to training's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`; NLL has no stderr, so
+  Video rows need `video_frames` equal to training's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` (above the measured 16-frame
+  envelope a passing score is UNMEASURED, EV-HO-009); NLL has no stderr, so
   `abs_epsilon` is required. Like benchmark mode it is a non-regression gate: PASS = not worse than base beyond the band.
 - Not for VLM benchmarks (lmms-eval is a deferred follow-up), LLM-judged tasks, or RL/agentic evals.
 
@@ -72,6 +73,16 @@ non-executable, and N > 1 GPUs shard the model with `parallelize` (any
 is the only submission path; it first runs `eval run --dry-run` (inputs check,
 no report, exit 0 or 96) and refuses to submit if that fails.
 
+## Speech long-form suite
+
+`fskills eval run --suite speech-longform --manifest CALLS.jsonl --base-predictions BASE.jsonl --tuned-predictions
+TUNED.jsonl --out REPORT.json` scores whole-call ASR for a base and a tuned model from their NeMo output manifests
+(rows plus `pred_text`). It composes FoundationScale's own `speech_metrics` (normalisation, WER cross-checked against
+FS's aligner, loop words, runaway rows) and `speech_gates` (`RunawayHypothesisGate`, `RepetitionLoopGate`), exactly as
+the measured campaign scorer does. A gate FAIL is RED whatever the WER (EV-HO-007): measured, the best-WER decode
+(12.81%) carried 285 loop words and was blocked. A call without a prediction is UNMEASURED (EV-HO-008). No harness, no
+eval cache. Producing the predictions (NeMo chunked inference) is outside this suite.
+
 ## Scope
 
 LLMs of any family, any training stage, full or adapter checkpoints, on
@@ -85,7 +96,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 |---|---|---|
 | EV-IN-001 | BLOCK | checkpoint (or the run manifest naming `<output_dir>/final`) is missing |
 | EV-IN-002 | BLOCK | no local base model resolves (a named base that does not exist is not skipped over) |
-| EV-IN-003 | BLOCK | `eval_cache` is not a directory |
+| EV-IN-003 | BLOCK | lm-eval (benchmark) mode: `eval_cache` not given or not a directory (held-out and suite modes read only local files) |
 | EV-IN-004 | BLOCK | `lm_eval` is absent or not 0.4.12 |
 | EV-IN-005 | BLOCK | policy invalid, a benchmark has no policy entry, needs a judge, or a stderr-less metric has no explicit `abs_epsilon` |
 | EV-HO-001 | BLOCK | `drop > max(abs_epsilon, k*sqrt(se_b^2+se_c^2))` (improvements never fail) |
@@ -95,9 +106,13 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | EV-IN-006 | BLOCK | held-out `data` missing/unreadable, or `eval_heldout_loss.py` missing (never a silent fallback) |
 | EV-IN-007 | BLOCK | held-out rows carry video but `video_frames` is unset |
 | EV-IN-008 | BLOCK | `video_frames` disagrees with the run manifest's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` |
+| EV-IN-009 | BLOCK | `--suite speech-longform`: the manifest or a prediction file is missing, unreadable or cannot carry a WER |
 | EV-RU-001 | BLOCK | vacuous held-out run (`rows_used == 0` for either role): REFUSED, no report |
 | EV-HO-005 | BLOCK | base and checkpoint `rows_used`/`rows_dropped` disagree: the delta is UNMEASURED (95), never RED |
 | EV-HO-006 | BLOCK | a held-out row lacks `rows_used`/`rows_dropped`/`score`/`baseline`: RED |
+| EV-HO-007 | BLOCK | speech-longform: a gate FAILED (runaway or repetition loops), whatever the WER: RED |
+| EV-HO-008 | WARN | speech-longform: calls without a prediction (undercovered): UNMEASURED, never PASS |
+| EV-HO-009 | WARN | held-out video rows scored at `video_frames` above the measured frame envelope (16 per clip): a passing row is UNMEASURED (95), never PASS; a regression stays RED |
 
 ## Failure handling
 

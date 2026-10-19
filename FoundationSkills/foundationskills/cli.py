@@ -221,8 +221,13 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _eval_request(args: argparse.Namespace) -> dict[str, Any]:
-    request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "policy": args.policy,
-                               "eval_cache": args.eval_cache, "out": args.out}
+    request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "out": args.out}
+    if getattr(args, "suite", None):  # A4.3: a scoring suite takes only its own inputs
+        return {"suite": args.suite, "manifest": args.manifest, "base_predictions": args.base_predictions,
+                "tuned_predictions": args.tuned_predictions, "out": args.out}
+    for key in ("policy", "eval_cache"):  # policy and eval_cache serve the lm-eval mode; the skill names a missing one
+        if getattr(args, key, None) is not None:
+            request[key] = getattr(args, key)
     for key in ("checkpoint", "base", "run_manifest", "baseline_cache", "num_fewshot", "seed", "gen_kwargs",
                 "limit", "dtype", "batch_size", "device", "include_path"):
         if getattr(args, key) is not None:
@@ -619,9 +624,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--benchmarks", default="", help="comma-separated policy task names (may be empty with --heldout)")
     p_run.add_argument("--heldout", default=None,
                        help="JSON file with the held-out VLM loss block (data, max_length, video_frames, abs_epsilon, ...)")
-    p_run.add_argument("--policy", required=True)
-    p_run.add_argument("--eval-cache", dest="eval_cache", required=True,
-                       help="pre-staged offline HF_HOME; nothing is downloaded")
+    p_run.add_argument("--policy", default=None, help="eval policy (lm-eval and held-out modes)")
+    p_run.add_argument("--eval-cache", dest="eval_cache", default=None,
+                       help="pre-staged offline HF_HOME; nothing is downloaded (lm-eval and held-out modes)")
+    p_run.add_argument("--suite", default=None, choices=["speech-longform"],
+                       help="a scoring suite over prediction files instead of a harness run")
+    p_run.add_argument("--manifest", default=None, help="speech-longform: whole-call manifest (JSONL)")
+    p_run.add_argument("--base-predictions", dest="base_predictions", default=None,
+                       help="speech-longform: the base model's NeMo output manifest (rows + pred_text)")
+    p_run.add_argument("--tuned-predictions", dest="tuned_predictions", default=None,
+                       help="speech-longform: the tuned model's NeMo output manifest (rows + pred_text)")
     p_run.add_argument("--out", required=True, help="path of eval_report.json")
     p_run.add_argument("--baseline-cache", dest="baseline_cache", default=None)
     p_run.add_argument("--num-fewshot", dest="num_fewshot", type=int, default=None)

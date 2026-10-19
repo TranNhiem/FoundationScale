@@ -44,9 +44,9 @@ from foundationskills.skills.data_engine.report import build_readiness
 
 _LLM_OPS = ("llm_classify", "llm_enhance")
 # Ops whose module exports preflight(cfg) -> list[str]: offline checks of encoders, binaries, cached models.
-_RUNTIME_OPS = ("semantic_dedup", "video_ingest", "difficulty_filter")
+_RUNTIME_OPS = ("semantic_dedup", "video_ingest", "difficulty_filter", "audio_sample_rate")
 
-LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "image_text"}
+LOCAL_KINDS = {"local_dir", "jsonl", "json", "parquet", "csv", "documents", "image_text", "speech_manifest"}
 _PREFERENCE_ALGOS = ("dpo", "ipo", "kto", "orpo", "simpo", "cpo", "online_dpo", "iterative_dpo")
 
 
@@ -110,6 +110,7 @@ class DataEngineSkill(BaseSkill):
         RuleSpec("DE-IN-006", "preference dataset requested but FS cannot train the preference family", Severity.WARN, "input"),
         RuleSpec("DE-IN-007", "an LLM op (llm_classify/llm_enhance) has no usable inference backend", Severity.BLOCK, "input"),
         RuleSpec("DE-IN-008", "an op's runtime dependency (encoder model, ffmpeg, ASR model) is unavailable", Severity.BLOCK, "input"),
+        RuleSpec("DE-IN-009", "asr target without a speech_manifest source", Severity.BLOCK, "input"),
         RuleSpec("DE-HO-001", "readiness verdict is RED", Severity.BLOCK, "handoff"),
         RuleSpec("DE-HO-002", "readiness verdict is UNMEASURED; some checks were not run", Severity.WARN, "handoff"),
         RuleSpec("DE-HO-003", "zero records were written", Severity.BLOCK, "handoff"),
@@ -217,6 +218,19 @@ class DataEngineSkill(BaseSkill):
                 )
             )
 
+        if effective_target == "asr" and not request.get("pipeline") and not any(
+            str((s or {}).get("kind")) == "speech_manifest" for s in (request.get("sources") or [])
+        ):
+            findings.append(
+                self.finding(
+                    "DE-IN-009",
+                    "asr target without a speech_manifest source: asr rows must be FoundationScale speech-manifest "
+                    "rows {id, audio, answer, duration} so FS can validate them",
+                    {"kinds": [str((s or {}).get("kind")) for s in (request.get("sources") or [])]},
+                    'pass the manifest as a source of kind "speech_manifest"',
+                )
+            )
+
         if effective_target == "preference":
             caps = getattr(ctx, "capabilities", None)
             runnable: list[str] = []
@@ -307,6 +321,8 @@ class DataEngineSkill(BaseSkill):
             "max_pii_remaining": 0,
             "chat_template_family": request.get("chat_template_family"),
         }
+        if target == "asr":  # duplicates are FS's ManifestReport's job (DE-RDY-013); audio is not redacted by text edits
+            requirements.update(require_dedup=False, max_pii_remaining=None)
         requirements.update(dict(request.get("requirements") or {}))
         readiness = build_readiness(dict(dataset), list(result.stats), requirements)
 
@@ -496,6 +512,10 @@ class DataEngineSkill(BaseSkill):
                         ],
                     },
                 },
+                "files": {"corpus.jsonl": one_record},
+            },
+            "DE-IN-009": {
+                "request": {"target_format": "asr", "sources": src("{tmp}/corpus.jsonl", "jsonl")},
                 "files": {"corpus.jsonl": one_record},
             },
             "DE-IN-008": {

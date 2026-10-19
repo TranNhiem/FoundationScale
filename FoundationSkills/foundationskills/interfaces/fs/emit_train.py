@@ -438,9 +438,13 @@ def emit_train(
         env["FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN"] = str(video_column)
         notes.append(f"video modality: FOUNDATIONSCALE_TRAIN_VIDEO_COLUMN={video_column}")
         video_frames = fs_cols.get("video_frames") or ds_cols.get("video_frames")
-        if video_frames is not None:
-            env["FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES"] = str(video_frames)
-            notes.append(f"video modality: FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES={video_frames}")
+        if video_frames is None:
+            # A4.4: FS refuses video rows without a frame count; a spec that silently omits it is
+            # a launch that dies at its first video row (TrainingEmitSkill refuses it as FS-IN-006).
+            raise ValueError(f"stage {stage.get('name')!r} feeds video but declares no video_frames "
+                             "(FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES): declare data.fs_columns.video_frames")
+        env["FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES"] = str(video_frames)
+        notes.append(f"video modality: FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES={video_frames}")
     if modalities & {"image", "video"}:
         # multimodal rows are conversations: the measured launcher declares the column
         # (examples/vlm-2xH200/scripts/train_sft.sh:13-14) instead of relying on FS's text column
