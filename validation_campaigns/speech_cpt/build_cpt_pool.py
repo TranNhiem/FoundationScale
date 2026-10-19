@@ -183,7 +183,7 @@ def read_shards(data_dir: Path) -> list[Path]:
         raise Refusal(f"no train-*.parquet shards in {data_dir}")
     for shard in shards:
         schema = pq.ParquetFile(shard).schema_arrow
-        missing = [name for name in REQUIRED_PARQUET_COLUMNS if name.name not in schema.names]  # type: ignore[union-attr]
+        missing = [name for name in REQUIRED_PARQUET_COLUMNS if name not in schema.names]
         missing_names = [name for name in REQUIRED_PARQUET_COLUMNS if name not in schema.names]
         if missing_names:
             raise Refusal(
@@ -450,7 +450,7 @@ def main() -> int:
     for skip_reason, count in results["skipped_by_reason"].items():
         print(f"skip.{skip_reason}={count}")
     print(f"unaccounted={results['rows_unaccounted']}")
-    print(f"pool={results['pool']}")
+    print(f"pool={results.get('pool')}")
     print(f"record={record_path}")
     print(f"exit={code} {reason}")
     print(f"seconds={results['elapsed_s']:.1f}")
