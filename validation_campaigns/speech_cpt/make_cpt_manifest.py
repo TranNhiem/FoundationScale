@@ -21,15 +21,15 @@ reason (no silent drops -- rows_seen = written + dropped):
     or failed its row) -- a row with no target teaches nothing,
   * empty_hypothesis -- normalize_transcript(hypothesis) is empty (a label of "" is not "write
     ASR", it is "write nothing"),
-  * loop_hypothesis -- loop_words(hypothesis) > 0 (the teacher degenerated into a word loop; training
-    on that is how a fine-tune learns to run away with itself),
+  * loop_hypothesis -- loop_words(hypothesis) > 0 (the teacher degenerated into a word loop;
+    training on that is how a fine-tune learns to run away with itself),
   * speaking_rate_sanity -- word count of the hypothesis exceeds 4x the clip duration in seconds +
     10 (a 5 s clip cannot hold 200 words -- the teacher ignored the BEAM of what speech can say and
     hallucinated; the formula is in the row check below and is never used to reject normal dense
     speech, only runaway emissions).
 
-is_runaway is NOT used: is_runaway(hypothesis, hypothesis) is self-referential (a hypothesis against
-itself can only agree with itself) -- the self-check is meaningless as stated in the recipe -- so the
+is_runaway is NOT used: is_runaway(hypothesis, hypothesis) is self-referential (a hypothesis
+against itself can only agree with itself), so the
 loop detector and the speaking-rate bound stand in its place.
 
 Output rows are exactly FoundationScale SFT manifest rows (train columns for speech audio SFT with
@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def read_pool(path: Path) -> list[dict[str, Any]]:
-    """Every non-empty line is one pool row; a line that is not JSON is REFUSED (not lost silently)."""
+    """Every non-empty line is one pool row; a non-JSON line is REFUSED, not lost silently."""
     rows: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
         for lineno, line in enumerate(handle, 1):
@@ -163,7 +163,7 @@ def speaking_rate_ok(hypothesis: str, clip_duration_s: float) -> bool:
     cheap bound that never rejects real (fast) dense speech: one word per 250 ms sustained plus 10
     words of interjection, punctuation and the like on top of it.
     """
-    words = len(hypothesis.split())
+    words = len(hypothesis) if isinstance(hypothesis, list) else len(hypothesis.split())
     max_words = WORD_LK_PER_SECOND * float(clip_duration_s) + WORD_LK_INTERCEPT
     return words <= max_words
 
@@ -183,9 +183,16 @@ def run(args: argparse.Namespace, results: dict[str, Any], out_path: Path) -> tu
 
     teacher = read_teacher(pseudo_path)
     results["teacher_records"] = len(teacher)
+    meta = json.loads(pseudo_path.read_text(encoding="utf-8"))
+    if meta.get("fatal") or len(teacher) < len(pool_rows):
+        # a partial teacher decode is not a weak label for the missing rows: refuse, never train
+        # on the subset that happened to finish
+        raise Refusal(
+            f"teacher decode incomplete: {len(teacher)} of {len(pool_rows)} rows"
+            f"{' (fatal recorded)' if meta.get('fatal') else ''}; rerun the decode"
+        )
 
     written = 0
-    heldout_pairs: list[tuple[str, str]] = []
     wer_sum = 0.0
     wer_compared = 0
 

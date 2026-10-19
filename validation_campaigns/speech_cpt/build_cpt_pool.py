@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import platform
 import sys
 import time
@@ -51,8 +50,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy
-import soundfile
 import scipy.signal
+import soundfile
 
 EXIT_OK = 0
 EXIT_COVERAGE_SHORT = 95
@@ -103,17 +102,17 @@ def _env_record() -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Write the SP-1 CPT pool (16 kHz mono FLAC + pool.jsonl) from Earnings-22 shards."
+        description="Write the SP-1 CPT pool (16 kHz mono FLAC + pool.jsonl) from Earnings-22."
     )
     ap.add_argument(
         "--data-dir",
         required=True,
-        help="dir of the 'robust' parquet shards (train-*.parquet); $HOME/datasets/speech/earnings22_robust/data by default",
+        help="dir of the 'robust' parquet shards (train-*.parquet)",
     )
     ap.add_argument(
         "--manifests-dir",
         required=True,
-        help="dir with earnings_train6000.jsonl, earnings_validation1000.jsonl, ood_earnings223000_conv.jsonl",
+        help="dir with the train6000 / validation1000 / ood test manifests",
     )
     ap.add_argument("--out-dir", required=True, help="output dir: flac/ + pool.jsonl + record")
     ap.add_argument(
@@ -183,7 +182,6 @@ def read_shards(data_dir: Path) -> list[Path]:
         raise Refusal(f"no train-*.parquet shards in {data_dir}")
     for shard in shards:
         schema = pq.ParquetFile(shard).schema_arrow
-        missing = [name for name in REQUIRED_PARQUET_COLUMNS if name not in schema.names]
         missing_names = [name for name in REQUIRED_PARQUET_COLUMNS if name not in schema.names]
         if missing_names:
             raise Refusal(
@@ -194,9 +192,7 @@ def read_shards(data_dir: Path) -> list[Path]:
 
 
 def glob_paths(pattern: Path) -> list[Path]:
-    import glob
-
-    return [Path(p) for p in glob.glob(str(pattern))]
+    return sorted(Path(pattern).parent.glob(Path(pattern).name))
 
 
 def normalise_wave(data: Any) -> Any:
@@ -207,13 +203,6 @@ def normalise_wave(data: Any) -> Any:
     if arr.ndim == 2:
         arr = arr.mean(axis=1)
     return arr.astype("float32", copy=False)
-
-
-def resample_to_16k(data: Any, src_rate: int) -> Any:
-    """Polyphase resample (scipy.signal.resample_poly, gcd=1) to TARGET_RATE; counted upstream."""
-    from fractions import math as _math  # placeholder to keep imports tidy; real use is below
-
-    return data
 
 
 def _resample(data: Any, src_rate: int) -> Any:
@@ -270,7 +259,6 @@ def run(args: argparse.Namespace, results: dict[str, Any], out_dir: Path) -> tup
     rows_resampled = 0
     stereo_merged = 0
     rows_failed = 0
-    hours_total = 0.0
     written_duration_s = 0.0
 
     with pool_path.open("w", encoding="utf-8") as pool_f:
@@ -321,7 +309,6 @@ def run(args: argparse.Namespace, results: dict[str, Any], out_dir: Path) -> tup
                 data = normalise_wave(data)
                 if getattr(data, "ndim", 1) == 2:
                     stereo_merged += 1
-                stamped = False
                 if int(rate) != TARGET_RATE:
                     try:
                         data = _resample(data, int(rate))
@@ -337,10 +324,18 @@ def run(args: argparse.Namespace, results: dict[str, Any], out_dir: Path) -> tup
                     results["skipped_by_reason"]["missing_sentence"] += 1
                     continue
 
+                if len(data) < TARGET_RATE // 10:
+                    # a segment with (almost) no samples writes a 0-byte FLAC without raising;
+                    # MEASURED: train_4446796_0 did, and the teacher decode died on it
+                    results["skipped_by_reason"]["audio_too_short"] += 1
+                    continue
                 out_file = flac_dir / f"{rid}.flac"
                 try:
                     write_flac(out_file, data, TARGET_RATE)
+                    if out_file.stat().st_size == 0:
+                        raise OSError("0-byte FLAC")
                 except Exception:
+                    out_file.unlink(missing_ok=True)
                     results["skipped_by_reason"]["flac_write_failed"] += 1
                     rows_failed += 1
                     continue
@@ -418,6 +413,7 @@ def main() -> int:
             "resample_failed": 0,
             "missing_sentence": 0,
             "flac_write_failed": 0,
+            "audio_too_short": 0,
         },
         "limit_reason_not_written": 0,
     }

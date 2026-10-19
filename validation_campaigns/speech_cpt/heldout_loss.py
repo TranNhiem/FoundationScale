@@ -18,8 +18,9 @@ SP-1 loss claim). Fp32 accumulation of the sum of per-token losses (and the toke
 mean over the run is a mean of what a batch of 1 measured, never a mean of bf16 rounding noise.
 
 Output: JSON {model, processor, rows, tokens, mean_loss} (printed AND written to --out as a record
-of measurement): mean_loss = sum of per-token losses over all non-masked target tokens / #tokens. Every
-row is COUNTED (scored, or skipped with a reason -- audio unreadable / empty target): no silent drops.
+of measurement): mean_loss = sum of per-token losses over all non-masked target tokens /
+#tokens. Every row is COUNTED (scored, or skipped with a reason -- audio unreadable / empty
+target): no silent drops.
 
 Exit codes: 0 ok / 95 coverage short (row with no target token could inflate the token count unseen)
 / 96 refusal (model/manifest/processor refuse before anything is scored).
@@ -112,7 +113,7 @@ def read_manifest(path: Path) -> list[dict[str, Any]]:
 
 
 def load_wave(path: Path) -> Any | None:
-    """Load a waveform at the processor's rate (no resampling: eval_qwen3_asr's rule), mono mixdown."""
+    """Load a waveform at the processor's rate (no resampling, as eval_qwen3_asr), mono mixdown."""
     import soundfile
 
     try:
