@@ -365,6 +365,23 @@ def _case_source_of(args: argparse.Namespace) -> str:
     return value if isinstance(value, str) and value else "routing"
 
 
+def _cmd_skill_use_run(args: argparse.Namespace) -> int:
+    """B6.1: run the four skill-use arms of one manifest into one report; exit 0/5/95, 96 on a refused manifest."""
+    from foundationskills.agent import skill_use
+
+    try:
+        with open(args.manifest, "r", encoding="utf-8") as handle:
+            report = skill_use.run(json.load(handle))
+    except (OSError, ValueError) as exc:  # SkillUseRefused is a ValueError; so is malformed JSON
+        print(f"[fskills:skill-use:refuse] {exc}", file=sys.stderr)
+        return 96
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary = {arm: body["verdict"] for arm, body in report["arms"].items()}
+    print(json.dumps({"verdict": report["verdict"], "arms": summary, "out": args.out}))
+    return int(report["exit_code"])
+
+
 def _cmd_behaviour_uplift(args: argparse.Namespace) -> int:
     """Paired with/without uplift per package (bootstrap CI over cases); optionally append the skill-impact ledger."""
     import datetime
@@ -802,6 +819,13 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--judge-max-tokens", "4096"), ("--timeout", "600")):
         p_round.add_argument(flag, default=default)
     p_round.set_defaults(func=_cmd_behaviour_eval)
+
+    p = sub.add_parser("skill-use", help="B6.1 skill-use evaluation: arms A-D from one manifest into one report")
+    skill_use_sub = p.add_subparsers(dest="skill_use_cmd", required=True)
+    p_su = skill_use_sub.add_parser("run", help="score every arm of a manifest; exit 0/5/95 (96 refused)")
+    p_su.add_argument("--manifest", required=True, help="skill-use manifest JSON (split, arm_a..arm_d)")
+    p_su.add_argument("--out", required=True, help="path of the skill-use report JSON")
+    p_su.set_defaults(func=_cmd_skill_use_run)
 
     p = sub.add_parser("oracle-cases", help="build and check the code-grounded oracle behaviour cases")
     oracle_sub = p.add_subparsers(dest="oracle_command", required=True, parser_class=_Parser)
