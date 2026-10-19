@@ -81,7 +81,40 @@ TUNED.jsonl --out REPORT.json` scores whole-call ASR for a base and a tuned mode
 FS's aligner, loop words, runaway rows) and `speech_gates` (`RunawayHypothesisGate`, `RepetitionLoopGate`), exactly as
 the measured campaign scorer does. A gate FAIL is RED whatever the WER (EV-HO-007): measured, the best-WER decode
 (12.81%) carried 285 loop words and was blocked. A call without a prediction is UNMEASURED (EV-HO-008). No harness, no
-eval cache. Producing the predictions (NeMo chunked inference) is outside this suite.
+eval cache. Before any call is scored, a hand-added negative control (a 40-word "the" loop) must be caught by
+the loop census and FAIL the repetition gate. Otherwise the suite is REFUSED (EV-IN-009), because a gate that cannot
+fail vouches for nothing. Producing the predictions (NeMo chunked inference) is outside this suite.
+
+## Harbor benchmark suite
+
+`fskills eval run --suite harbor --job-dir JOB [--job-dir ...] --control-dir NOP_JOB [--tasks-file TASKS.txt]
+[--max-unmeasured-fraction F] --out REPORT.json` scores Harbor job directories (the agentic harness of the Skill2Env
+paper and B2.2). It is a benchmark, not a regression gate, so the row has a score and no baseline.
+
+- **Trials.** A trial passes iff every numeric verifier reward is 1, and fails on any measured reward below 1. An
+  AgentTimeoutError with a reward is a fail. A trial with no reward (infra) is **unmeasured**, never a 0.
+- **Score.** pass@1 is the mean over tasks of passes / measured trials, with a bootstrap CI over tasks (10,000
+  resamples, seed 0). A task with no measured trial is excluded and listed.
+- **Paper denominator.** The report also gives `paper_denominator`, B2.2's registered rule (reward-less trials count
+  0), so published comparisons stay reproducible.
+- **Negative controls.** `--control-dir` names nop-agent jobs over the same tasks: the refused-fixture items. Without
+  a measured control, when a control trial was run by any agent other than `nop` (a solving agent would drop every
+  task it solves), or when every control passes, the suite is REFUSED (EV-IN-011). A task whose control passes is
+  dropped and named (EV-HO-011).
+- **Verdict.** Unmeasured cells above `--max-unmeasured-fraction` (default 0) make the suite UNMEASURED (EV-HO-010),
+  and it can then never ground a claim. Producing the job directories (`harbor run`) is outside this suite.
+
+## Skill-behaviour benchmark suite
+
+`fskills eval run --suite skill-behaviour --report REPORT.json [--report ...] [--max-unmeasured-fraction F] --out
+OUT.json` turns `fskills behaviour-eval` reports into a benchmark eval_report, with one row per package and case set.
+
+- **Score.** The gated arm's item pass rate over measured calls, recomputed and cross-checked against each report's
+  own `results`. A re-score that does not reproduce its source is REFUSED (EV-IN-012).
+- **Refused-fixture items.** These are the oracle cases of BLOCK input rules, whose correct answer is REFUSED. A set
+  without one measured, such as routing reports alone, is REFUSED (EV-IN-011).
+- **Unmeasured calls.** Agent or judge errors are never counted as 0. Above the declared maximum they make the suite
+  UNMEASURED (EV-HO-010).
 
 ## Scope
 
@@ -112,6 +145,11 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | EV-HO-006 | BLOCK | a held-out row lacks `rows_used`/`rows_dropped`/`score`/`baseline`: RED |
 | EV-HO-007 | BLOCK | speech-longform: a gate FAILED (runaway or repetition loops), whatever the WER: RED |
 | EV-HO-008 | WARN | speech-longform: calls without a prediction (undercovered): UNMEASURED, never PASS |
+| EV-IN-010 | BLOCK | harbor suite: a job directory is missing or holds no trial, or `tasks_file` is unreadable |
+| EV-IN-011 | BLOCK | benchmark suite without usable refused-fixture items: harbor has no measured nop control, a control trial is not from the nop agent, or every control passed; skill-behaviour has no measured oracle case of a BLOCK input rule |
+| EV-IN-012 | BLOCK | skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its re-scored item_pass_rate does not reproduce the report's own |
+| EV-HO-010 | WARN | benchmark suite (harbor, skill-behaviour): unmeasured cells above `max_unmeasured_fraction`, or nothing measured: UNMEASURED (95), never PASS |
+| EV-HO-011 | INFO | harbor suite: tasks whose nop control passed are dropped from the score; each is named and counted |
 | EV-HO-009 | WARN | held-out video rows scored at `video_frames` above the measured frame envelope (16 per clip): a passing row is UNMEASURED (95), never PASS; a regression stays RED |
 
 ## Failure handling

@@ -59,3 +59,22 @@ def test_a_missing_prediction_file_is_refused(tmp_path) -> None:
     req["tuned_predictions"] = str(tmp_path / "nope.jsonl")
     result = EvalSkill().execute(req, SkillContext(workdir=tmp_path))
     assert result.status is Status.REFUSED and "EV-IN-009" in [f.rule_id for f in result.findings]
+
+
+
+def test_negative_control_is_recorded_and_a_blind_census_refuses(tmp_path, monkeypatch) -> None:
+    """A4.5: the hand-added looping control must be caught before any call is scored."""
+    import dataclasses
+
+    import foundationscale.train.speech_metrics as metrics
+
+    request = _suite(tmp_path)
+    result = EvalSkill().execute(request, SkillContext(workdir=tmp_path))
+    control = result.payload["speech_longform"]["negative_control"]
+    assert control["gate_verdict"] == "FAIL" and control["loop_words"] > 0
+
+    real = metrics.count_loop_words
+    monkeypatch.setattr(metrics, "count_loop_words",
+                        lambda pairs: dataclasses.replace(real(pairs), hypothesis_loop_words=0))
+    blind = EvalSkill().execute({**request, "out": str(tmp_path / "eval" / "blind.json")}, SkillContext(workdir=tmp_path))
+    assert blind.status is Status.REFUSED and "negative control" in (blind.refusal or "")

@@ -31,6 +31,8 @@ from foundationskills.skills.evaluation.baseline import BaselineCache, fingerpri
 from foundationskills.skills.evaluation.policy import Policy, PolicyError, TaskPolicy, compare, load_policy
 from foundationskills.skills.evaluation.speech_longform import SUITE, SpeechScoreRefused
 from foundationskills.skills.evaluation.speech_longform import score as speech_score
+from foundationskills.skills.evaluation.suites import harbor as harbor_suite
+from foundationskills.skills.evaluation.suites import skill_behaviour as behaviour_suite
 from foundationskills.skills.evaluation.report import verdict, write_report
 from foundationskills.interfaces.fs.video_envelope import beyond_envelope, frame_envelope
 from foundationskills.skills.evaluation.resolve import Resolved, ResolveError, manifest_video_frames, resolve, ships_chat_template
@@ -168,7 +170,12 @@ class EvalSkill(BaseSkill):
         "additionalProperties": False,
         "properties": {
             # A4.3 speech-longform suite: score a base and a tuned model's long-form predictions
-            "suite": {"enum": ["speech-longform"]},
+            "suite": {"enum": ["speech-longform", "harbor", "skill-behaviour"]},
+            "reports": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "job_dirs": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "control_dirs": {"type": "array", "items": {"type": "string"}},
+            "tasks_file": {"type": "string", "minLength": 1},
+            "max_unmeasured_fraction": {"type": "number", "minimum": 0, "maximum": 1},
             "manifest": {"type": "string", "minLength": 1},
             "base_predictions": {"type": "string", "minLength": 1},
             "tuned_predictions": {"type": "string", "minLength": 1},
@@ -227,6 +234,19 @@ class EvalSkill(BaseSkill):
         RuleSpec("EV-HO-008", "speech-longform calls have no prediction (undercovered), so the suite cannot PASS", Severity.WARN, "handoff"),
         RuleSpec("EV-HO-009", "held-out video_frames lies above the measured frame envelope (16 uniform frames per "
                  "clip): a passing held-out row is UNMEASURED, never PASS", Severity.WARN, "handoff"),
+        # A4.5 benchmarking: the harbor suite (suites/harbor.py) over Harbor job directories
+        RuleSpec("EV-IN-010", "harbor suite: a job directory is missing or holds no trial, or tasks_file is unreadable",
+                 Severity.BLOCK, "input"),
+        RuleSpec("EV-IN-011", "benchmark suite without usable refused-fixture items: harbor has no measured nop "
+                 "negative control, a control trial is not from the nop agent, or every control passed; "
+                 "skill-behaviour has no measured oracle case of a BLOCK input rule", Severity.BLOCK, "input"),
+        RuleSpec("EV-IN-012", "skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its "
+                 "re-scored item_pass_rate does not reproduce the report's own", Severity.BLOCK, "input"),
+        RuleSpec("EV-HO-010", "benchmark suite (harbor, skill-behaviour): unmeasured cells exceed "
+                 "max_unmeasured_fraction, or nothing was measured - status UNMEASURED, never PASS",
+                 Severity.WARN, "handoff"),
+        RuleSpec("EV-HO-011", "harbor suite: tasks dropped because their negative control passed (a verifier that "
+                 "cannot discriminate); each is named and counted", Severity.INFO, "handoff"),
         RuleSpec("EV-HO-006", "a held-out row lacks rows_used/rows_dropped/score/baseline", Severity.BLOCK, "handoff"),
     )
     fs_interface = FSInterface(
@@ -258,6 +278,26 @@ class EvalSkill(BaseSkill):
     # -- inputs ---------------------------------------------------------------------------------
     def check_inputs(self, request: dict[str, Any], ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
+        if request.get("suite") == behaviour_suite.SUITE:  # A4.5: reports are read in run(); refusals land there
+            missing = [r for r in request.get("reports") or () if not Path(str(r)).is_file()]
+            if not request.get("reports") or missing:
+                findings.append(self.finding("EV-IN-012", f"missing input: skill-behaviour reports {missing or '(none)'}",
+                                             {"reports": request.get("reports")},
+                                             "pass behaviour-eval JSON reports (include at least one oracle report)"))
+            return findings
+        if request.get("suite") == harbor_suite.SUITE:  # A4.5: job directories are read in run(); refusals land there
+            missing = [d for d in request.get("job_dirs") or () if not Path(str(d)).is_dir()]
+            if not request.get("job_dirs") or missing:
+                findings.append(self.finding("EV-IN-010", f"missing input: harbor job_dirs {missing or '(none)'}",
+                                             {"job_dirs": request.get("job_dirs")}, "pass the Harbor job directories"))
+            if request.get("tasks_file") and not Path(str(request["tasks_file"])).is_file():
+                findings.append(self.finding("EV-IN-010", f"missing input: tasks_file {request['tasks_file']}",
+                                             {"tasks_file": request["tasks_file"]}, "pass the task list (one per line)"))
+            if not request.get("control_dirs"):
+                findings.append(self.finding("EV-IN-011", "missing input: harbor control_dirs (nop-agent jobs over "
+                                             "the same tasks, the suite's refused-fixture items)", {},
+                                             "run the nop agent over the tasks and pass its job directories"))
+            return findings
         if request.get("suite") == SUITE:  # A4.3: a scoring suite over prediction files; no harness, no cache
             for key in ("manifest", "base_predictions", "tuned_predictions"):
                 value = request.get(key)
@@ -385,6 +425,10 @@ class EvalSkill(BaseSkill):
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         if request.get("suite") == SUITE:
             return self._speech_longform(request)
+        if request.get("suite") == harbor_suite.SUITE:
+            return self._harbor(request)
+        if request.get("suite") == behaviour_suite.SUITE:
+            return self._skill_behaviour(request)
         benchmarks = list(request.get("benchmarks") or ())
         hold = heldout_config(request)
         policy = load_policy(request["policy"]) if benchmarks else None
@@ -699,7 +743,92 @@ class EvalSkill(BaseSkill):
         return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
                            provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
 
+    def _harbor(self, request: dict[str, Any]) -> SkillResult:
+        """A4.5: score Harbor jobs; measured-only pass@1, negative controls, unmeasured cells never PASS."""
+        tasks = None
+        if request.get("tasks_file"):
+            tasks = [t.strip() for t in Path(str(request["tasks_file"])).read_text(encoding="utf-8").splitlines()
+                     if t.strip()]
+        try:
+            scored = harbor_suite.score([str(d) for d in request["job_dirs"]],
+                                        [str(d) for d in request.get("control_dirs") or ()], tasks,
+                                        float(request.get("max_unmeasured_fraction", 0.0)))
+        except harbor_suite.HarborSuiteRefused as exc:
+            rule = "EV-IN-011" if "control" in str(exc) else "EV-IN-010"
+            finding = self.finding(rule, f"{rule}: harbor suite cannot carry a score: {exc}",
+                                   {"job_dirs": request.get("job_dirs"), "control_dirs": request.get("control_dirs")},
+                                   "fix the named input and re-run")
+            return self._refused(finding.message, [finding])
+        report = {
+            "checkpoint": ",".join(str(d) for d in request["job_dirs"]),
+            "benchmarks": [{"name": "harbor", "metric": "pass_at_1", "score": scored["pass_at_1"], "baseline": None,
+                            "ci95": scored["ci95"], "status": scored["verdict"].lower()}],
+            "verdict": scored["verdict"],
+            "harbor": scored,
+        }
+        out = Path(str(request["out"]))
+        sha = write_report(out, report)
+        ref = ArtifactRef(type="eval_report", id="harbor", path=str(out), sha256=sha)
+        findings: list[Finding] = []
+        dropped = scored["negative_controls"]["non_discriminating"]
+        if dropped:
+            findings.append(self.finding("EV-HO-011", f"{len(dropped)} task(s) dropped: their nop control passed: "
+                                         f"{dropped[:10]}", {"non_discriminating": dropped},
+                                         "repair those tasks' verifiers before scoring them"))
+        if scored["verdict"] == "UNMEASURED":
+            findings.append(self.finding(
+                "EV-HO-010", f"unmeasured cells {scored['unmeasured_cells']}/{scored['cells']} "
+                f"({scored['unmeasured_fraction']}) exceed max_unmeasured_fraction {scored['max_unmeasured_fraction']}"
+                if scored["pass_at_1"] is not None else "no task has a measured trial",
+                {"unmeasured_cells": scored["unmeasured_cells"], "cells": scored["cells"]},
+                "re-run the unmeasured trials (infra), or declare a tolerated max_unmeasured_fraction up front"))
+        status = Status.UNMEASURED if scored["verdict"] == "UNMEASURED" else Status.PASS
+        return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
+                           provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
+
+    def _skill_behaviour(self, request: dict[str, Any]) -> SkillResult:
+        """A4.5: behaviour-eval reports as a benchmark; refused-fixture items required, unmeasured never PASS."""
+        try:
+            scored = behaviour_suite.score([str(r) for r in request["reports"]],
+                                           float(request.get("max_unmeasured_fraction", 0.0)))
+        except behaviour_suite.SkillBehaviourRefused as exc:
+            rule = "EV-IN-011" if "refused-fixture" in str(exc) else "EV-IN-012"
+            finding = self.finding(rule, f"{rule}: skill-behaviour suite cannot carry a score: {exc}",
+                                   {"reports": request.get("reports")}, "fix the named report and re-run")
+            return self._refused(finding.message, [finding])
+        report = {
+            "checkpoint": ",".join(str(r) for r in request["reports"]),
+            "benchmarks": [{"name": f"skill-behaviour/{name}", "metric": "item_pass_rate",
+                            "score": pkg["item_pass_rate"], "baseline": None,
+                            "status": "unmeasured" if pkg["item_pass_rate"] is None else "pass"}
+                           for name, pkg in sorted(scored["packages"].items())],
+            "verdict": scored["verdict"],
+            "skill_behaviour": scored,
+        }
+        out = Path(str(request["out"]))
+        sha = write_report(out, report)
+        ref = ArtifactRef(type="eval_report", id="skill-behaviour", path=str(out), sha256=sha)
+        findings: list[Finding] = []
+        if scored["verdict"] == "UNMEASURED":
+            findings.append(self.finding(
+                "EV-HO-010", f"unmeasured calls {scored['unmeasured_cells']}/{scored['cells']} "
+                f"({scored['unmeasured_fraction']}) exceed max_unmeasured_fraction {scored['max_unmeasured_fraction']}",
+                {"unmeasured_cells": scored["unmeasured_cells"], "cells": scored["cells"]},
+                "resume the behaviour-eval run (--resume) until every call is measured, then re-score"))
+        status = Status.UNMEASURED if scored["verdict"] == "UNMEASURED" else Status.PASS
+        return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
+                           provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
+
     def check_handoff(self, result: SkillResult, ctx: SkillContext) -> list[Finding]:
+        if (result.payload or {}).get("harbor") or (result.payload or {}).get("skill_behaviour"):  # a benchmark score has no baseline; integrity is what is checked
+            problems = []
+            for ref in result.artifacts:
+                try:
+                    if sha256_file(ref.path) != ref.sha256:
+                        problems.append(f"{ref.path} changed after it was written")
+                except OSError:
+                    problems.append(f"{ref.path} is missing on disk")
+            return [self.finding("EV-HO-004", p, {}) for p in problems]
         if (result.payload or {}).get("speech_longform"):
             gates = result.payload["speech_longform"]["gates"]
             blocked = {name: gate for name, gate in gates.items() if gate.get("verdict") == "FAIL"}
@@ -764,7 +893,23 @@ class EvalSkill(BaseSkill):
                     "heldout": {"data": "heldout.jsonl", "max_length": 16384, "video_frames": 16, "abs_epsilon": 0.05}}
         speech = {"suite": "speech-longform", "manifest": "longform.jsonl", "base_predictions": "base_pred.jsonl",
                   "tuned_predictions": "tuned_pred.jsonl", "out": "eval/speech_longform.json"}
+        harbor = {"suite": "harbor", "job_dirs": ["jobs/tb21-qwen35-4b"], "control_dirs": ["jobs/tb21-nop"],
+                  "tasks_file": "tb_tasks.txt", "out": "eval/harbor.json"}
         return {
+            # A4.5 harbor suite: the decisive fact sits in the request or in a short observed fact
+            "EV-IN-010": {"request": harbor, "observed": "job directory missing on disk",
+                          "expected": "REFUSED naming EV-IN-010 (no Harbor trials to score)"},
+            "EV-IN-011": {"request": {**harbor, "control_dirs": []},
+                          "expected": "REFUSED naming EV-IN-011 (no negative-control nop trials)"},
+            "EV-HO-010": {"request": harbor, "simulated_scores": "37 of 444 trials unmeasured",
+                          "expected": "UNMEASURED 95 naming EV-HO-010 (unmeasured cells over max 0)"},
+            "EV-HO-011": {"request": {**harbor, "max_unmeasured_fraction": 1.0},
+                          "simulated_scores": "nop control passed on two tasks",
+                          "expected": "PASS with INFO EV-HO-011 naming the two dropped tasks"},
+            "EV-IN-012": {"request": {"suite": "skill-behaviour", "reports": ["oracle_report.json"],
+                                      "out": "eval/skill_behaviour.json"},
+                          "observed": "report rate does not reproduce",
+                          "expected": "REFUSED naming EV-IN-012 (the re-score does not reproduce the report)"},
             "EV-IN-009": {"request": {**speech, "tuned_predictions": "missing_pred.jsonl"},
                           "expected": "REFUSED naming EV-IN-009 (a prediction file is missing)"},
             "EV-HO-007": {"request": speech, "simulated_scores": "tuned has 285 loop words, best WER",

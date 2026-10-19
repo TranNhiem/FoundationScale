@@ -228,6 +228,19 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 def _eval_request(args: argparse.Namespace) -> dict[str, Any]:
     request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "out": args.out}
+    if getattr(args, "suite", None) == "skill-behaviour":  # A4.5: behaviour-eval reports as a benchmark
+        request = {"suite": "skill-behaviour", "reports": list(args.report or ()), "out": args.out}
+        if args.max_unmeasured_fraction is not None:
+            request["max_unmeasured_fraction"] = args.max_unmeasured_fraction
+        return request
+    if getattr(args, "suite", None) == "harbor":  # A4.5: Harbor job directories plus their nop negative controls
+        request = {"suite": "harbor", "job_dirs": list(args.job_dir or ()), "control_dirs": list(args.control_dir or ()),
+                   "out": args.out}
+        if args.tasks_file:
+            request["tasks_file"] = args.tasks_file
+        if args.max_unmeasured_fraction is not None:
+            request["max_unmeasured_fraction"] = args.max_unmeasured_fraction
+        return request
     if getattr(args, "suite", None):  # A4.3: a scoring suite takes only its own inputs
         return {"suite": args.suite, "manifest": args.manifest, "base_predictions": args.base_predictions,
                 "tuned_predictions": args.tuned_predictions, "out": args.out}
@@ -642,8 +655,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--policy", default=None, help="eval policy (lm-eval and held-out modes)")
     p_run.add_argument("--eval-cache", dest="eval_cache", default=None,
                        help="pre-staged offline HF_HOME; nothing is downloaded (lm-eval and held-out modes)")
-    p_run.add_argument("--suite", default=None, choices=["speech-longform"],
-                       help="a scoring suite over prediction files instead of a harness run")
+    p_run.add_argument("--suite", default=None, choices=["speech-longform", "harbor", "skill-behaviour"],
+                       help="a scoring suite over prediction files or Harbor job directories instead of a harness run")
+    p_run.add_argument("--job-dir", dest="job_dir", action="append", default=None,
+                       help="harbor: a Harbor job directory to score (repeatable)")
+    p_run.add_argument("--control-dir", dest="control_dir", action="append", default=None,
+                       help="harbor: a nop-agent job directory over the same tasks (the negative controls; repeatable)")
+    p_run.add_argument("--report", action="append", default=None,
+                       help="skill-behaviour: a behaviour-eval JSON report (repeatable; include an oracle report)")
+    p_run.add_argument("--tasks-file", dest="tasks_file", default=None,
+                       help="harbor: the task universe, one task per line (default: the tasks seen)")
+    p_run.add_argument("--max-unmeasured-fraction", dest="max_unmeasured_fraction", type=float, default=None,
+                       help="harbor: tolerated fraction of unmeasured cells, declared up front (default 0)")
     p_run.add_argument("--manifest", default=None, help="speech-longform: whole-call manifest (JSONL)")
     p_run.add_argument("--base-predictions", dest="base_predictions", default=None,
                        help="speech-longform: the base model's NeMo output manifest (rows + pred_text)")

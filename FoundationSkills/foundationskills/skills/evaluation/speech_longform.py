@@ -12,6 +12,10 @@ cross-checked against FS's aligner on the first 300 words of every call. A call 
 (undercoverage), never skipped. Verdict: a FAILing gate is RED whatever the WER (measured: Canary-1B-flash beam-4 had
 the best WER, 12.81%, and 285 loop words, so it FAILED; EVIDENCE.md:116-121); otherwise any MISSING call is UNMEASURED;
 otherwise PASS.
+
+Negative control (A4.5, the suite's refused-fixture item): before scoring, the loop census and the repetition gate
+must catch a hand-built looping hypothesis (the measured "the the the ..." failure). If they do not, the suite
+refuses: a gate that cannot fail vouches for nothing.
 """
 
 from __future__ import annotations
@@ -21,6 +25,9 @@ from pathlib import Path
 from typing import Any
 
 SUITE = "speech-longform"
+# The hand-added negative control: a clean reference, and the same words followed by a 40-word "the" loop.
+_CONTROL_REFERENCE = "thank you for joining the call today we will discuss the quarterly results"
+_CONTROL_LOOP = _CONTROL_REFERENCE + " the" * 40
 
 
 class SpeechScoreRefused(ValueError):
@@ -74,6 +81,15 @@ def score(manifest: str, base_predictions: str, tuned_predictions: str) -> dict[
         word_errors,
     )
 
+    clean = count_loop_words([(_CONTROL_REFERENCE, _CONTROL_REFERENCE)])
+    looped = count_loop_words([(_CONTROL_REFERENCE, _CONTROL_LOOP)])
+    control_gate = RepetitionLoopGate().run(RepetitionLoopContext(
+        rows_expected=1, rows_checked=1, reference_words=looped.reference_words,
+        base_loop_words=clean.hypothesis_loop_words, tuned_loop_words=looped.hypothesis_loop_words))
+    control = {"loop_words": looped.hypothesis_loop_words, "gate_verdict": control_gate.verdict.value}
+    if looped.hypothesis_loop_words <= 0 or control_gate.verdict.value != "FAIL":
+        raise SpeechScoreRefused(f"negative control not caught (a 40-word loop scored {control}): the loop census or "
+                                 "the repetition gate cannot fail, so it vouches for nothing")
     calls = _load(manifest)
     preds = {"base": _load(base_predictions), "tuned": _load(tuned_predictions)}
     per_call: dict[str, dict[str, Any]] = {}
@@ -124,4 +140,4 @@ def score(manifest: str, base_predictions: str, tuned_predictions: str) -> dict[
     return {"suite": SUITE, "calls": per_call, "totals": totals, "gates": gates, "missing": missing,
             "loop_words": {"base": base_loops.hypothesis_loop_words, "tuned": tuned_loops.hypothesis_loop_words,
                            "reference_words": base_loops.reference_words},
-            "verdict": verdict}
+            "negative_control": control, "verdict": verdict}
