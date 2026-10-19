@@ -188,6 +188,19 @@ The preference and RL scripts from [chapter 04](../vlm-2xH200/04_training_algori
 
 **Why Qwen3.6-27B GRPO is refused on this recipe.** At `--max-new-tokens 400` and again at 1,024, almost every completion reasoned without ending in `Answer: X` (typically 0 of 8 completions per step earned a score). The few scored rows gave the advantage estimator nothing to use, so all 20 steps were UNMEASURED. FoundationScale refuses a run that trained nothing (exit 96) rather than report it. This is a prompt and answer-format problem of this recipe with a reasoning model, not a GB200 or memory limit (66 GB peak, no errors). gemma-4-12B-it on the same data trains (8 of 20 steps measured).
 
+## Longer run: 300 steps on every model
+
+The Step 4 command with `STEPS=300 SAVE_EVERY=300`, one model per pair of GPUs, five pairs in parallel through the shared GPU pool. Same 2,000-row image+video+text mix, the 16K configs from `configs/` (gemma-4: batch 1 x 8 accumulation; Qwen3.6: batch 2 x 4, the same effective batch), then [chapter 05](../vlm-2xH200/05_evaluation.md)'s held-out loss on the 240 mixed held-out rows (194 image / 44 video / 2 text) for the base model and the 300-step adapter. Measured 2026-10-18:
+
+| model | held-out NLL, base | after 300 steps | change | training time |
+|---|---|---|---|---|
+| gemma-4-26B-A4B-it | 5.048 | 0.581 | -88% | 2.0 h |
+| gemma-4-31B-it | 2.831 | 0.509 | -82% | 2.8 h |
+| Qwen3.6-27B | 0.904 | 0.363 | -60% | 4.1 h |
+| Qwen3.6-35B-A3B | 0.994 | 0.400 | -60% | 1.9 h |
+
+All four finished with exit 0 and save gates PASS; every evaluation scored all 240 rows. gemma-4-12B-it is being re-run: its first attempt stopped at the first collective (the timeout described in Troubleshooting). The held-out set here is not the one in the H200 300-step table, so compare the change, not the absolute NLL.
+
 ## Why GB200 is not faster here
 
 At batch 1, gemma-4 runs at about 0.65–0.7x the H200 tokens/s across lengths, and Qwen3.6 at 0.5–0.8x of the published H200 numbers (which predate the FSDP fix below, so they understate H200 too). We ruled out the usual suspects: not data loading (collate is 0.03–0.3 s/row against ~20 s steps), not clocks (2,062 MHz, no throttle), not interconnect (NCCL uses P2P/CUMEM, direct GPU-to-GPU over NVLink).
