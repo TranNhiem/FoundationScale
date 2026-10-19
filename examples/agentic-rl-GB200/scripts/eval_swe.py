@@ -54,7 +54,14 @@ async def evaluate(a: argparse.Namespace) -> dict:
     with Path(a.tasks).open() as fh:
         tasks = [json.loads(line) for line in fh if line.strip()][: a.n]
     sem = asyncio.Semaphore(a.concurrency)
-    dump = Path(a.dump).open("w") if a.dump else None  # noqa: SIM115 -- closed after the gather
+    done: dict[str, float] = {}
+    if a.resume and a.dump and Path(a.dump).exists():
+        # Keep the measured episodes of an earlier attempt; re-run the abstained ones.
+        rows = [json.loads(ln) for ln in Path(a.dump).read_text().splitlines() if ln.strip()]
+        kept = [r for r in rows if r["reward"] is not None]
+        done = {r["session"]: r["reward"] for r in kept}
+        Path(a.dump).write_text("".join(json.dumps(r) + "\n" for r in kept))
+    dump = Path(a.dump).open("a" if a.resume else "w") if a.dump else None  # noqa: SIM115
 
     async def one(t: dict, k: int) -> float | None:
         async with sem:
@@ -80,7 +87,8 @@ async def evaluate(a: argparse.Namespace) -> dict:
                 dump.flush()
             return verdict.value
 
-    res = await asyncio.gather(*(one(t, k) for t in tasks for k in range(a.samples)))
+    todo = [(t, k) for t in tasks for k in range(a.samples) if f"{t['uid']}#{k}" not in done]
+    res = list(done.values()) + list(await asyncio.gather(*(one(t, k) for t, k in todo)))
     if dump is not None:
         dump.close()
     vals = [v for v in res if v is not None]
@@ -104,6 +112,11 @@ def main() -> None:
     p.add_argument("--concurrency", type=int, default=16)
     p.add_argument("--parser", choices=["qwen_xml", "hermes_json"], default="qwen_xml")
     p.add_argument("--dump", default=None, help="write per-episode transcripts here (JSONL)")
+    p.add_argument(
+        "--resume", action="store_true",
+        help="keep the measured episodes already in --dump and run only the rest (after an "
+        "engine hang, restart the server and re-run with --resume)",
+    )  # fmt: skip
     print(json.dumps(asyncio.run(evaluate(p.parse_args()))))
 
 

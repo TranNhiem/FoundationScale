@@ -101,6 +101,10 @@ It prints the resolve rate as one JSON line; `--dump` keeps every transcript wit
 so you can read what the agent did. Serve the base model with the same flags to get the
 comparison row.
 
+An eval has no engine recovery of its own, so a stall (see below) leaves it waiting. Stop the eval
+and the server, start the server again, and re-run the same command with `--resume`: it keeps the
+episodes already in the `--dump` file and runs only the rest.
+
 ## Engine hangs
 
 On our GB200 nodes vLLM 0.21 sometimes stops producing tokens mid-step: the requests in flight time
