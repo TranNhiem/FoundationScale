@@ -194,12 +194,13 @@ The Step 4 command with `STEPS=300 SAVE_EVERY=300`, one model per pair of GPUs, 
 
 | model | held-out NLL, base | after 300 steps | change | training time |
 |---|---|---|---|---|
+| gemma-4-12B-it | 1.577 | 0.515 | -67% | 2.9 h |
 | gemma-4-26B-A4B-it | 5.048 | 0.581 | -88% | 2.0 h |
 | gemma-4-31B-it | 2.831 | 0.509 | -82% | 2.8 h |
-| Qwen3.6-27B | 0.904 | 0.363 | -60% | 4.1 h |
+| Qwen3.6-27B | 0.904 | 0.363 | -60% | 4.0 h |
 | Qwen3.6-35B-A3B | 0.994 | 0.400 | -60% | 1.9 h |
 
-All four finished with exit 0 and save gates PASS; every evaluation scored all 240 rows. gemma-4-12B-it is being re-run: its first attempt stopped at the first collective (the timeout described in Troubleshooting). The held-out set here is not the one in the H200 300-step table, so compare the change, not the absolute NLL.
+All five finished with exit 0 and save gates PASS; every evaluation scored all 240 rows. gemma-4-12B-it needed one re-run: its first attempt stopped at the first collective (the timeout described in Troubleshooting), and the identical re-run on another tray passed. The held-out set here is not the one in the H200 300-step table, so compare the change, not the absolute NLL.
 
 ## Why GB200 is not faster here
 
