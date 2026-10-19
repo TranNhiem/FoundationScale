@@ -188,6 +188,8 @@ The preference and RL scripts from [chapter 04](../vlm-2xH200/04_training_algori
 
 **Why Qwen3.6-27B GRPO is refused on this recipe.** At `--max-new-tokens 400` and again at 1,024, almost every completion reasoned without ending in `Answer: X` (typically 0 of 8 completions per step earned a score). The few scored rows gave the advantage estimator nothing to use, so all 20 steps were UNMEASURED. FoundationScale refuses a run that trained nothing (exit 96) rather than report it. This is a prompt and answer-format problem of this recipe with a reasoning model, not a GB200 or memory limit (66 GB peak, no errors). gemma-4-12B-it on the same data trains (8 of 20 steps measured).
 
+**Dense vs MoE.** On the two MoE models LoRA trains attention and the shared (Qwen) or dense (gemma) MLP, not the routed experts or the router; see [chapter 03, "Dense vs MoE"](../vlm-2xH200/03_training_configuration.md#dense-vs-moe-what-training-actually-changes) for what that means for speed, memory and quality.
+
 ## Longer run: 300 steps on every model
 
 The Step 4 command with `STEPS=300 SAVE_EVERY=300`, one model per pair of GPUs, five pairs in parallel through the shared GPU pool. Same 2,000-row image+video+text mix, the 16K configs from `configs/` (gemma-4: batch 1 x 8 accumulation; Qwen3.6: batch 2 x 4, the same effective batch), then [chapter 05](../vlm-2xH200/05_evaluation.md)'s held-out loss on the 240 mixed held-out rows (194 image / 44 video / 2 text) for the base model and the 300-step adapter. Measured 2026-10-18:

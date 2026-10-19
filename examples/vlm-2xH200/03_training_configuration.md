@@ -95,13 +95,34 @@ but a row is **never silently truncated** to fit. Truncation would make your rep
 
 **What changes per model: nothing but `MODEL` in the config file.** The same command runs all five — the LoRA target registry, the FSDP wrap and the fused loss adapt per family (see §4 and §6).
 
+### Dense vs MoE: what training actually changes
+
+The command is the same, but LoRA trains a different part of the model. Checked on the saved adapters (module names in `adapter_model.safetensors`):
+
+| model | type | LoRA attached to | not trained |
+|---|---|---|---|
+| Qwen3.6-27B | dense | attention in the 16 full-attention layers, and the MLP in all 64 layers | the gated-delta (linear-attention) layers' projections |
+| Qwen3.6-35B-A3B | MoE, 3 B active | attention in the 10 full-attention layers, and the **shared expert** in all 40 layers | **the routed experts and the router**; the gated-delta layers |
+| gemma-4-31B-it | dense | attention and MLP in all 60 layers | — |
+| gemma-4-26B-A4B-it | MoE, 4 B active | attention and the layer's **dense MLP** in all 30 layers | **the routed experts and the router** |
+
+Why: FoundationScale attaches LoRA only to plain `torch.nn.Linear` modules, and transformers stores routed experts as fused 3-D weight tensors run by `grouped_mm`, not as `Linear` layers. So on an MoE model the adapter learns through attention and the shared or dense MLP, while the routed experts, which hold most of the parameters, and the router keep their pretrained weights. Because the router does not change, no load-balancing (auxiliary) loss is needed in this LoRA recipe.
+
+What that means in practice:
+
+- **Speed:** an MoE model computes only its active experts, so it trains much faster per token than a dense model of similar size. Measured at 16K, batch 1: Qwen3.6-35B-A3B 8,009 vs Qwen3.6-27B 3,372 tokens/s on 2x H200, and 5,688 vs 2,748 on 2x GB200 (with the FSDP fix); gemma-4-26B-A4B-it 3,626 vs gemma-4-31B-it 1,088 on H200.
+- **Memory:** all experts stay in GPU memory, so peak memory follows total size, not active size: 48.5 GB (35B-A3B) vs 51.0 GB (27B) per GPU at 16K on H200.
+- **Quality:** both types learn on our data (300-step held-out NLL: -60% for both Qwen3.6 models, -88% for gemma-4-26B-A4B-it vs -82% for gemma-4-31B-it on GB200). Whether also adapting the routed experts would help more has **not been measured**.
+- **If you need the experts trained:** a full fine-tune (omit `--adapter`) updates every weight, experts and router included; its memory on 2 GPUs is **not measured** here. LoRA on routed experts is not supported by this recipe today.
+- **RL with MoE:** during `generate()` transformers switches MoE expert kernels, and FSDP2-wrapped models would refuse that switch; FoundationScale carries it over to the wrapped model automatically (`keep_experts_switchable` in `src/foundationscale/rl/distributed.py`). Dense models don't need it.
+
 One real dependency: for **Qwen3.6** models, install `flash-linear-attention` for speed. Without it, the gated-delta-rule layers fall back to the reference PyTorch path: measured **502 tokens/s** vs 1461–3156 tokens/s on Qwen3.6-27B at 32768 (§8).
 
 ## 4. LoRA settings
 
 **Verified configuration: rank 16, alpha 32** (`RANK=16 ALPHA=32`) with the family-default targets:
 
-- **Targets are chosen automatically per family** when `--adapter-target` is omitted: peft's per-model defaults, adjusted by the FoundationScale family registry so that **vision towers are excluded** and, on the two MoE models, **LoRA goes on attention and shared projections, not on the routed experts**. That saves adapters: **Qwen3.6-35B-A3B saves 320 LoRA tensors**, **gemma-4-26B-A4B-it saves 410** (vs 656 for gemma-4-12B-it, 820 for gemma-4-31B-it, 512 for Qwen3.6-27B) — a big adapter for routed experts buys little and costs save-time and checkpoint RAM/disk.
+- **Targets are chosen automatically per family** when `--adapter-target` is omitted: peft's per-model defaults, adjusted by the FoundationScale family registry so that **vision towers are excluded** and, on the two MoE models, **LoRA goes on attention and the shared/dense MLP, not on the routed experts** (see §3, "Dense vs MoE"). So the MoE adapters are smaller: **Qwen3.6-35B-A3B saves 320 LoRA tensors**, **gemma-4-26B-A4B-it saves 410** (vs 656 for gemma-4-12B-it, 820 for gemma-4-31B-it, 512 for Qwen3.6-27B).
 - **Override**: `--adapter-target PATTERN` is repeatable and collected in order. If the adapter resolves to **zero modules**, the run is **refused after wrapping** — never a silent full fine-tune.
 - **Dropout**: `--adapter-dropout DROPOUT` (adequate verified value **TODO(verify)**).
 - `--adapter lora` **requires** `--adapter-rank`; omitting `--adapter` entirely gives the explicit default: **full fine-tune**. A missing peft install is a REFUSE (96), never a silent full fine-tune.
