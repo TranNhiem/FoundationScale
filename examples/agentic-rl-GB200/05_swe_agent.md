@@ -13,17 +13,19 @@ its resolve rate on held-out libraries.
 ## What we measured
 
 Held-out set: 24 tasks from three libraries the policy never trains on, 4 attempts each (96).
-Same engine settings for every row.
 
 | Checkpoint | Resolved |
 |---|---|
 | Base MiMo-V2.6-Distill-Qwen-9B | 0.604 (58/96) |
-| Seed 5, step 12 | 0.750 (72/96) |
-| Seed 5, step 20 | 0.792 (76/96) |
-| Seed 5, step 30 | **0.813 (78/96)** |
-| Seed 7, step 12 | 0.729 (70/96) |
+| Step 20, five seeds (5, 7, 8, 9, 10) | 0.792, 0.740, 0.719, 0.750, 0.781 (mean 0.756) |
+| Seed 5, step 40 | 0.854 (82/96) |
+| Seed 5, step 80 | 0.854 (82/96) |
+| Seed 5, step 100 (final) | **0.813 (78/96)** |
 
-Two seeds agree at step 12 (+13 to +15 points), and seed 5 keeps improving through step 30.
+Every seed gains 11 to 19 points by step 20. Seed 5 peaks around 0.85 between steps 40 and 80
+and ends at 0.81; seed 7 reached 0.896 at step 30. The base model scores the same
+with either attention backend described under engine hangs below (0.604 and 0.615).
+
 A run with a looser token budget (8,000 tokens per turn, 16,000 per episode) gained less at step
 12 (0.688) and trained a third slower, so the config here uses the tighter budget.
 
@@ -120,3 +122,9 @@ What we measured with the engine settings (keep the defaults in `configs/swe_mim
 - Do not switch to `--attention-backend FLASH_ATTN`. A single 96-episode eval ran clean with it,
   but every training run that used it lost about 19 of 32 episodes to timeouts within a few
   steps, and the retries timed out on the same count again, so the runs ended.
+- `--no-async-scheduling` did not prevent stalls either, in evals or in training.
+- For evals, `--attention-backend TRITON_ATTN` ran 6 of 6 held-out evals without a stall, including
+  a checkpoint that stalled the default engine on every one of 4 launches. We have not yet trained
+  with it.
+- Rerun an eval that stalled on a fresh server instead of trusting its partial score: that
+  checkpoint scored 0.56 on the stalling engine and 0.84 to 0.91 on three clean ones.
