@@ -124,7 +124,8 @@ What we measured with the engine settings (keep the defaults in `configs/swe_mim
   steps, and the retries timed out on the same count again, so the runs ended.
 - `--no-async-scheduling` did not prevent stalls either, in evals or in training.
 - For evals, `--attention-backend TRITON_ATTN` ran 6 of 6 held-out evals without a stall, including
-  a checkpoint that stalled the default engine on every one of 4 launches. We have not yet trained
-  with it.
+  a checkpoint that stalled the default engine on every one of 4 launches. It does not help
+  training: two runs that used it stalled within 7 and 16 steps, so keep the default backend and
+  the recovery retries for training.
 - Rerun an eval that stalled on a fresh server instead of trusting its partial score: that
   checkpoint scored 0.56 on the stalling engine and 0.84 to 0.91 on three clean ones.
