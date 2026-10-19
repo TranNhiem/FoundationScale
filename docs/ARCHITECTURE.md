@@ -214,7 +214,7 @@ The entry point is deliberately thin. `cli.py` and `loop.py` validate the declar
 | `docs/` | User and maintainer documentation; `research/` holds design notes per area. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 477750 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 477751 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
