@@ -20,8 +20,12 @@ engine settings and `qwen_xml` tool parser for every row.
 | Seed 6, step 60 | 0.849 | 0.379 |
 | Seed 6, step 99 (final) | **0.861** | **0.404** |
 | Seed 5, step 20 | 0.814 | 0.329 |
+| Seed 5, final | 0.855 | 0.408 |
+| Seed 7, final | 0.860 | 0.371 |
 
-Both benchmarks improve throughout the run, and a second seed matches the first at step 20.
+Both benchmarks improve throughout the run. Three seeds end within a point of each other on
+MATH-500 (0.855 to 0.861, mean 0.859) and between 0.371 and 0.408 on AIME 2025 (mean 0.394);
+AIME has only 30 problems, so a 3-point spread between seeds is expected.
 
 **Tools matter most on the hard problems.** An earlier run trained with the wrong tool-call parser
 (`hermes_json`), so every tool call failed and the model learned to answer without running code.
