@@ -129,6 +129,8 @@ On top of the fine-tuned Qwen3-ASR-0.6B, preference training with RPO (DPO plus 
 
 RL with a WER reward also helps, with care: GRPO with a KL term, 16 clips x 8 rollouts per step, lr 1e-6, checkpoint picked on validation (step 50) reaches **10.57** held-out WER (paired [-0.58, -0.15]). Two conditions matter: a large batch (4 clips per step never beat the SFT model) and early stopping, because after about 100 steps the model learns to truncate transcripts (deletions 666 -> 7,424 at step 200). The recipe is `build_pairs.py`, `train_dpo.py`, `train_grpo.py` and `select_and_test.py` in the same folder.
 
+The two stages stack. GRPO started from the RPO model (pass `INIT=<checkpoint+processor dir>` to the runner), with checkpoints picked on validation, reaches **10.39** held-out WER on average over 3 seeds (10.30 / 10.41 / 10.47). Every seed beats both the SFT model and RPO alone, with no runaway or loop rows and no collapse. The full recipe on Earnings-22: zero-shot 16.09, SFT 10.93, RPO then GRPO 10.39.
+
 ## Measured results: 4 ASR models, LibriSpeech, 2x H200
 
 Workload: 500-step runs, global batch 8 (parakeet/whisper/qwen2-audio) or 16 (gemma-4), trained on the FULL
