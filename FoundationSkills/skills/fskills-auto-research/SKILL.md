@@ -36,7 +36,7 @@ evaluation skill), or for bug fixes/refactors (no FoundationSkills skill should 
 
 ## Inputs
 Request object; every field is optional except those the action needs:
-- `action`: `check | envelope | launch | submit | cancel | record | propose | close`.
+- `action`: `check | envelope | launch | submit | cancel | record | propose | close | index`.
 - `campaign_spec`, `campaign_confirm` (its human-approved hash) and `approver` (required on a ledger's first action);
   `ledger_dir` (default `<workdir>/ledger`).
 - Per action: `envelope` (envelope); `trial_spec`, `launch_token`, `fabric_ttl_s` (submit: a fresh IMEX probe runs
@@ -63,6 +63,14 @@ Every field, block shape, the launch-spec and result shapes, `fabric_ttl_s` and 
 - Every action returns a payload (`check` writes nothing to the ledger; a repeated `close` re-reports the sealed
   chain). Render refusals (`sbatch_not_rendered`, `sbatch_render_failed:<why>`, `partition_not_rendered:<p>`)
   happen before any launch.
+- Artifact `experiment_index` (action `index`, A4.6 experiment management, the reserved "Experiment management"
+  row of docs/ARCHITECTURE.md): one row per orchestrator `journal.jsonl` line (`skill_step`), per FS
+  `run_manifest.json` (`fs_run`: run id, code status, exit code and its `exit_contract` outcome, video frames, the
+  measured telemetry and the keys left unmeasured) and per verified ledger campaign (`campaign`: proposals,
+  launches, results, closed). Values are copied from each record, never inferred; a missing exit leaves `outcome`
+  null with the reason. A found source that cannot be read is listed under `unreadable` and makes the index
+  UNMEASURED (AR-HO-011); roots that hold nothing to index are REFUSED (AR-IN-014). CLI:
+  `fskills experiments index --root DIR [--root DIR ...]`.
 Full report fields, ledger-op payload keys and per-action payloads: `references/outputs.md`.
 
 ## Scope
@@ -116,6 +124,7 @@ itself - the acceptance statistics and the exit codes (0/5/95/96) are computed f
 | `propose` | spec + confirm + `current` + `symptoms` (+ `llm_pool` or `llm_pool_file` for proposer `llm`) | `proposal` | cards, drops, proposer, requested, rows_digest, seed, fallback, dropped, `llm_usage` (llm) |
 | `claim` | spec + confirm + `trial` | `claim` | claim_id, champion, prev |
 | `close` | spec + confirm + recorded results + `stop_reason` | `campaign_closed` + report artifact | report contents (champion, claims, unclaimed_gains) |
+| `index` | `scan_roots` only (no spec, no ledger, no approval) | `experiment_index` artifact; nothing on any ledger | rows, unreadable, counts, verdict |
 
 Once `campaign_closed` is on the ledger every action except `check` and `close` is refused (AR-LG-002) and a repeated `close` is idempotent.
 
@@ -201,6 +210,8 @@ Every rule this skill enforces (the full catalogue, with each rule's exact trigg
 | AR-HO-008 | handoff | INFO | multi-objective trade-offs disclosed at close (never claimed; no accepted gain) |
 | AR-HO-009 | handoff | BLOCK | an llm proposal's recorded cards do not re-parse from its recorded response (parse provenance drifted) |
 | AR-HO-010 | handoff | INFO | the closed ledger holds caller-asserted (unbound) results; each is named and counted |
+| AR-IN-014 | input | BLOCK | `index`: `scan_roots` missing or empty, a root is not a directory, or nothing to index under them (no journal, run manifest or ledger): a vacuous index is REFUSED |
+| AR-HO-011 | handoff | WARN | `index`: a found journal line, run manifest or ledger is unreadable (named and counted): UNMEASURED, never PASS |
 
 ## Failure handling
 Nothing is ever simulated or repaired: a refusal happens before anything is emitted or submitted, and the

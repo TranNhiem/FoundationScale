@@ -75,8 +75,9 @@ from .claims import ROOT as CLAIM_ROOT
 from .claims import build_claim, champion, claim_entries, derive_chain, reference_rows
 from .evidence import EvidenceError, derive_result, rehash_problems
 from .seeds import phase_of, phase_problems, set_status
+from .experiment_index import IndexRefused, build_index
 
-_ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel", "claim")
+_ACTIONS = ("check", "launch", "record", "propose", "close", "envelope", "submit", "cancel", "claim", "index")
 _RESULT_ROLES = ("baseline", "candidate", "confirm")
 _RESULT_FIELDS = ("trial", "role", "seed", "status", "limited", "steps", "eval_policy_fingerprint", "metrics")
 _RANK = {"accepted_gain": 4, "accepted_flat": 3, "tradeoff": 2, "no_gain": 2, "rejected_regress": 1, "unmeasured": 0}
@@ -485,6 +486,13 @@ def _evidence_must_fire_fixtures() -> dict[str, dict[str, Any]]:
                 "approver": fix, "ledger_dir": "{tmp}/ledger", "trial": "t1",
             },
         },
+        # A4.6: index fixtures (``{tmp}`` and ``files`` materialised by the test, as for every fixture here)
+        # the decisive input is visible in the request itself (an empty root list), never hidden in filesystem state
+        "AR-IN-014": {"request": {"action": "index", "scan_roots": []}},
+        "AR-HO-011": {
+            "files": {"runs/r1/run_manifest.json": "{not json"},
+            "request": {"action": "index", "scan_roots": ["{tmp}/runs"]},
+        },
         "AR-HO-010": {
             **_stage(rl_spec, close_rows),
             "request": {
@@ -534,6 +542,9 @@ _RECOVERY = {
     "AR-IN-013": "declare rl_min_measured_fraction, add rl_measured_fraction to eval_policy.metrics and confirm.guardrails with guardrail_directions max",
     "AR-RS-009": "re-record the rows with evidence (run manifest + eval report); unmeasured rows never ground a claim",
     "AR-HO-010": "treat the named rows as unverified; re-run them with evidence in a new campaign to promote them",
+    "AR-IN-014": "pass scan_roots: existing directories that hold run outputs (run_manifest.json), orchestrator "
+                 "workdirs (journal.jsonl) or campaign ledgers (chain.jsonl)",
+    "AR-HO-011": "repair or remove the named sources and re-index; an index with unreadable sources is never complete",
     "AR-PR-004": "record only what was measured: an llm proposal record overstates provenance (byte_identical / generation replay claimed)",
     "AR-PR-005": "pin the endpoint through the config model pool registry and keep credentials out of the ledgered prompt/response",
     "AR-HO-009": "investigate llm parse drift before adopting: an llm proposal's recorded cards do not re-parse from its recorded response",
@@ -565,7 +576,7 @@ class AutoResearchSkill(BaseSkill):
         hardware=(),
     )
     consumes = ()
-    produces = ("auto_research_report",)
+    produces = ("auto_research_report", "experiment_index")
     input_schema = {
         "type": "object",
         "additionalProperties": True,
@@ -586,6 +597,7 @@ class AutoResearchSkill(BaseSkill):
             "current": {"type": "object"},
             "symptoms": {"type": "array"},
             "stop_reason": {"type": "string"},
+            "scan_roots": {"type": "array", "items": {"type": "string"}},
         },
     }
     output_schema = {"type": "object", "additionalProperties": True}
@@ -699,6 +711,13 @@ class AutoResearchSkill(BaseSkill):
                  Severity.BLOCK, "handoff"),
         RuleSpec("AR-HO-010", "the closed ledger holds caller-asserted (unbound) results; each is named and counted",
                  Severity.INFO, "handoff"),
+        # A4.6 experiment management (the reserved "Experiment management" row of docs/ARCHITECTURE.md): the
+        # read-only index action over orchestrator journals, FS run manifests and campaign ledgers.
+        RuleSpec("AR-IN-014", "index: scan_roots missing or empty, a root is not a directory, or the roots hold no "
+                              "journal.jsonl, run_manifest.json or ledger chain.jsonl (a vacuous index)",
+                 Severity.BLOCK, "input"),
+        RuleSpec("AR-HO-011", "index: a found journal line, run manifest or ledger is unreadable (named and counted) "
+                              "- status UNMEASURED, never PASS", Severity.WARN, "handoff"),
     )
     fs_interface = FSInterface(
         entries=(),
@@ -772,6 +791,8 @@ class AutoResearchSkill(BaseSkill):
     def check_inputs(self, request: dict[str, Any], ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
         action = str(request.get("action") or "check")
+        if action == "index":  # read-only and campaign-free: no spec, no ledger, no approval envelope
+            return self._check_index_request(request)
         spec = dict(request.get("campaign_spec") or {})
         for rule_id, message in check_spec(spec):
             findings.append(self.finding(rule_id, message, {"spec": spec.get("id")}, _RECOVERY[rule_id]))
@@ -1224,8 +1245,43 @@ class AutoResearchSkill(BaseSkill):
         chain, _ = derive_chain(claim_entries([*data["claims"], dict(claim)]), data["results_by_key"])
         return SkillResult(Status.PASS, {"claim_id": claim["claim_id"], "champion": champion(chain), "prev": prev})
 
+    def _check_index_request(self, request: dict[str, Any]) -> list[Finding]:
+        roots = request.get("scan_roots")
+        if not isinstance(roots, list) or not roots:
+            message = "index: scan_roots is missing or empty"
+        else:
+            try:
+                build_index(roots)
+                return []
+            except IndexRefused as exc:
+                message = f"index: {exc}"
+        return [self.finding("AR-IN-014", message, {"scan_roots": roots}, _RECOVERY["AR-IN-014"])]
+
+    def _index(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
+        """A4.6: the experiment index (read-only). Unreadable sources are named and make it UNMEASURED."""
+        index = build_index(list(request["scan_roots"]))
+        unreadable = list(index["unreadable"])
+        index["verdict"] = "UNMEASURED" if unreadable else "PASS"
+        stamp = make_provenance(self.name, self.version, {"index": sha256_hex(canonical(index))})
+        artifact = Artifact("experiment_index", "experiment-index-" + sha256_hex(canonical(index))[:12], index, stamp)
+        ref = write_artifact(artifact, ctx.artifacts_dir)
+        if not unreadable:
+            return SkillResult(Status.PASS, index, artifacts=(ref,), provenance=stamp)
+        finding = self.finding(
+            "AR-HO-011",
+            f"index: {len(unreadable)} source(s) unreadable: "
+            + "; ".join(f"{u['source']}{':' + str(u['line']) if u.get('line') else ''} ({u['reason']})"
+                        for u in unreadable[:5]),
+            {"unreadable": unreadable},
+            _RECOVERY["AR-HO-011"],
+        )
+        return SkillResult(Status.UNMEASURED, index, artifacts=(ref,), findings=(finding,), provenance=stamp,
+                           next_actions=("repair or remove the named sources, then re-index",))
+
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         action = str(request.get("action") or "check")
+        if action == "index":
+            return self._index(request, ctx)
         spec = dict(request.get("campaign_spec") or {})
         spec_hash = campaign_hash(spec)
         campaign = _campaign(spec)
