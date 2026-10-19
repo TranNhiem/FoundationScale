@@ -105,3 +105,20 @@ seeds 1 and 2 have 0 runaway and 0 repetition-loop rows. SP-3 seed 2 collapsed a
 (validation 28.87 at step 100), the same truncation as seed 0, while seed 1 stayed near SFT on
 validation (14.00-14.15) and still scored best on test. Early stopping on validation is part of the
 recipe, not an option.
+
+## Stacking: RPO, then GRPO (2026-10-19)
+
+GRPO (the SP-3 large-batch recipe: KL to reference, 16 clips x 8, lr 1e-6, 200 steps) started from the
+SP-2 RPO model (seed 0, step 525) instead of the SFT model (`run_grpo.sh` with `INIT=`; the RPO
+checkpoint plus the 0.6B processor files). Checkpoints were picked on validation against the RPO model
+(13.89): steps 100 / 150 / 150, at 13.65 / 13.77 / 13.78 for seeds 0 / 1 / 2. No run collapsed.
+
+| held-out test (2,503 rows) | seed 0 | seed 1 | seed 2 | mean |
+|---|---|---|---|---|
+| RPO -> GRPO WER | 10.30 | 10.41 | 10.47 | **10.39** |
+| paired vs SFT (10.93) | [-0.85, -0.41] | [-0.75, -0.29] | [-0.67, -0.24] | |
+| paired vs RPO alone (10.65) | [-0.50, -0.22] | [-0.39, -0.12] | [-0.32, -0.05] | |
+
+The gains add up: every seed beats both the SFT model and the RPO model it started from, with
+0 runaway and 0 repetition-loop rows. The full recipe (SFT -> RPO -> GRPO) takes held-out WER from
+16.09 (zero-shot) to 10.93 (SFT) to 10.39 (mean of three seeds).
