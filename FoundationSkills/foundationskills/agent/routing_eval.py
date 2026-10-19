@@ -122,6 +122,7 @@ def _read_package(package: str) -> dict:
         "name": front["name"],
         "description": front["description"],
         "when_to_use": front["when_to_use"],
+        "invocation": front["invocation"],
         "evals": _parse_evals(evals_bytes, package),
         "skill_md_sha256": hashlib.sha256(md_bytes).hexdigest(),
         "skill_bundle_sha256": skill_bundle_sha256(root),
@@ -182,7 +183,8 @@ def _parse_frontmatter(text: str, package: str) -> dict[str, Any]:
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter has no name")
     if not isinstance(description, str):
         raise RoutingEvalRefused(f"load_index: {package}: SKILL.md frontmatter has no description")
-    return {"name": name.strip(), "description": description, "when_to_use": when}
+    invocation = str((metadata or {}).get("invocation") or "model")
+    return {"name": name.strip(), "description": description, "when_to_use": when, "invocation": invocation}
 
 
 def _parse_evals(data: bytes, package: str) -> list[dict]:
@@ -211,6 +213,10 @@ def render_index(index: list[dict], arm: str) -> str:
     blocks: list[str] = []
     for entry in index:
         name = f"- {entry['name']}"
+        if entry.get("invocation") == "user":
+            # A3.2: a user skill runs only when the user invokes it. Measured 2026-10-18: listed unmarked, /fs-status
+            # and /fs-launch drew 34 false triggers and cut confirm-before-launch recall to 70%.
+            name += f" (user-invoked: choose it ONLY when the request explicitly invokes /{entry['name']})"
         if arm == "names_only":
             blocks.append(name)
         elif arm == "description":
@@ -229,10 +235,17 @@ def _one_line(text: Any) -> str:
 
 def build_messages(index: list[dict], arm: str, question: str) -> list[dict]:
     """Build the system/user message pair that asks for one routing decision."""
+    # A3.2: a user-invoked skill is offered only when the request types its slash name, as hosts do (a skill kept out
+    # of model invocation is not in the model's list; typing /<name> IS the invocation). Measured 2026-10-18: offered
+    # on every request, even marked and with a slash-only description, /fs-launch and /fs-status drew 19 false
+    # routes and pulled three model skills under the 90% gate.
+    offered = [entry for entry in index if entry.get("invocation") != "user" or f"/{entry['name']}" in str(question)]
     system = (
         "You route user requests to FoundationSkills skill packages.\n\n"
         "Skill index:\n"
-        f"{render_index(index, arm)}"
+        f"{render_index(offered, arm)}"
+        "\nA skill marked user-invoked is a slash command: choose it only when the request explicitly types\n"
+        "/<its name>; otherwise never choose it, even when its topic matches.\n"
         "\nReply with ONLY a JSON object {\"skill\": \"<one name from the list>\"} when one listed skill applies,\n"
         "or {\"skill\": null} when no listed skill applies. Reply with nothing but that JSON object."
     )
@@ -253,8 +266,14 @@ def run_routing_eval(
     max_tokens: int = 2048,
     threshold: float = 0.9,
     created: datetime | str | None = None,
+    resume: Mapping[str, Any] | None = None,
 ) -> dict:
-    """Run the routing ablation over the index and return the report dictionary."""
+    """Run the routing ablation over the index and return the report dictionary.
+
+    ``resume`` is an earlier report of the SAME run (model, reps, temperature, max_tokens, arms and the skill-index
+    hash, which binds every SKILL.md and eval case); its measured calls are reused and only the unmeasured ones are
+    asked again. Measured 2026-10-18: 4 of 1,746 calls (one model reply that answered the question instead of
+    routing it, three empty responses) made a 25-minute run unmeasured with no way to recover but a full rerun."""
     arm_list: tuple[str, ...] = (arms,) if isinstance(arms, str) else tuple(arms)
     _check_run_args(arm_list, reps, workers, threshold)
     endpoint = _resolve_backend(backend)
@@ -268,8 +287,13 @@ def run_routing_eval(
         for rep in range(reps)
     ]
 
+    reuse = _reusable_routing_calls(resume, index, endpoint, arm_list, reps, temperature, max_tokens)
+
     def run_one(job: tuple[str, dict, dict, int]) -> dict:
         arm, entry, case, rep = job
+        kept = reuse.get((arm, str(entry["name"]), str(case["id"]), rep))
+        if kept is not None:
+            return kept
         response = endpoint.complete(
             build_messages(index, arm, str(case["question"])),
             temperature=temperature,
@@ -303,6 +327,23 @@ def run_routing_eval(
         "exit_code": exit_code,
         "reasons": reasons,
     }
+
+
+def _reusable_routing_calls(resume: Mapping[str, Any] | None, index: list[dict], endpoint: LLMBackend,
+                            arms: tuple[str, ...], reps: int, temperature: float,
+                            max_tokens: int) -> dict[tuple[str, str, str, int], dict]:
+    """Measured calls of ``resume`` keyed by (arm, package, case id, rep); refuse a report of a different run."""
+    if resume is None:
+        return {}
+    where = "run_routing_eval: resume"
+    if resume.get("schema") != SCHEMA:
+        raise RoutingEvalRefused(f"{where}: not a {SCHEMA} report")
+    for key, now in (("model", str(endpoint.model)), ("reps", reps), ("temperature", temperature),
+                     ("max_tokens", max_tokens), ("arms", list(arms)), ("index_sha256", _index_sha256(index))):
+        if resume.get(key) != now:
+            raise RoutingEvalRefused(f"{where}: {key} {resume.get(key)!r} differs from this run's {now!r}")
+    return {(str(c["arm"]), str(c["package"]), str(c["case_id"]), int(c["rep"])): dict(c)
+            for c in resume.get("calls") or [] if c.get("measured")}
 
 
 def _check_run_args(arms: tuple[str, ...], reps: int, workers: int, threshold: float) -> None:

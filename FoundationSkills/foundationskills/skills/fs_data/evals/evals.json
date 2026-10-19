@@ -1,0 +1,152 @@
+[
+  {
+    "id": "fd-positive-001",
+    "question": "/fs-data build an sft dataset from the local directory /data/raw/support_chats (jsonl) with the gemma4 chat template and tokenizer /models/gemma-4-E4B-it",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-positive-002",
+    "question": "/fs-data turn /data/raw/faq.jsonl into an sft dataset with tokenizer /models/qwen3.5-4b and chat_template_family qwen3.5, and give me the readiness verdict",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-positive-003",
+    "question": "/fs-data prepare a pretrain dataset from the parquet files in /data/web_crawl/2026-09 and tell me how many records survive cleaning",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-positive-004",
+    "question": "/fs-data make an rl dataset from the multiple-choice questions in /data/exams/science_mcq.jsonl with gold key answer",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-positive-005",
+    "question": "/fs-data run the data pipeline on /data/raw/legal_qa (local_dir) targeting sft, decontaminated against arc_easy, out_dir /data/out/legal_sft",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-positive-006",
+    "question": "/fs-data build a preference dataset from /data/pairs/helpfulness.jsonl (chosen/rejected columns) and report the readiness checks",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-misc-001",
+    "question": "Optimize the query planner in PostgreSQL for a billion-row time-series table — what index strategy should I use?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fd-misc-002",
+    "question": "How do I implement exponential backoff with jitter in a Python async worker pool without starving the task queue?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fd-sibling-001",
+    "question": "Build a dataset from raw JSONL files in my local directory for instruction tuning",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "fskills-data-engine: a natural-language data request routes to the model skill; /fs-data runs only when the user types it.",
+    "expected_behavior": [
+      "Routes to fskills-data-engine",
+      "Does not invoke /fs-data on its own initiative"
+    ]
+  },
+  {
+    "id": "fd-sibling-002",
+    "question": "Create a data pipeline that transforms my raw text and parquet files into SFT chat format",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "fskills-data-engine: a natural-language data request routes to the model skill; /fs-data runs only when the user types it.",
+    "expected_behavior": [
+      "Routes to fskills-data-engine",
+      "Does not invoke /fs-data on its own initiative"
+    ]
+  },
+  {
+    "id": "fd-misc-003",
+    "question": "Recommend a lightweight static site generator for a personal recipe blog with tag pages.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fd-positive-007",
+    "question": "/fs-data convert the medical dialogues in /data/raw/med_dialog.jsonl into an sft dataset using tokenizer /models/medgemma-1.5-4b-it",
+    "expected_skill": "fs-data",
+    "should_trigger": true,
+    "ground_truth": "/fs-data runs data_engine on the given sources (composition, never another user skill) and writes a workflow_record that references the dataset, readiness report and pipeline spec by path; data_engine RED is RED (FD-HO-001), UNMEASURED is UNMEASURED (FD-HO-002), a data_engine refusal is REFUSED (FD-IN-002).",
+    "expected_behavior": [
+      "Plans to run data_engine through /fs-data on the sources and target format named in the request",
+      "States that the readiness verdict is reported as measured, never upgrading UNMEASURED to PASS",
+      "Says the result is a workflow_record that references the dataset and readiness report by path"
+    ]
+  },
+  {
+    "id": "fd-natural-001",
+    "question": "Prepare my SFT dataset from these local raw files and tell me the readiness verdict.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "fskills-data-engine: the request does not type /fs-data, so the agent uses the model skill, never the user-invoked workflow skill.",
+    "expected_behavior": [
+      "Routes to fskills-data-engine",
+      "Does not invoke /fs-data on its own initiative"
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["source", "status", "exit_code", "meaning", "next_step"],
+  "additionalProperties": true,
+  "properties": {
+    "source": {"type": "string", "enum": ["journal", "result"]},
+    "skill": {"type": ["string", "null"]},
+    "status": {"type": "string", "enum": ["PASS", "RED", "UNMEASURED", "REFUSED"]},
+    "exit_code": {"type": "integer", "enum": [0, 5, 95, 96]},
+    "meaning": {"type": "string"},
+    "next_step": {"type": "string"},
+    "refusal": {"type": ["string", "null"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule_id": {"type": "string"},
+          "severity": {"type": "string"},
+          "message": {"type": "string"},
+          "recovery": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "artifact_ids": {"type": "array", "items": {"type": "string"}}
+  }
+}

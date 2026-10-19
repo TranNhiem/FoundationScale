@@ -1,0 +1,53 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "using-foundationskills-oracle-UF-IN-001",
+      "skill": "using_foundationskills",
+      "rule_id": "UF-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "\"want\" names an artifact type no registered skill produces",
+      "fixture": {
+        "expected": "REFUSED 96 naming UF-IN-001 (want names an artifact type no registered skill produces)",
+        "request": {
+          "want": "no_such_type"
+        }
+      },
+      "fixture_sha256": "d17cd2eb99120b3d29c22d1113e7c2bea74585c0f688ffa4050fdbb61373eaf9",
+      "expected_behavior": [
+        "Identifies the problem: \"want\" names an artifact type no registered skill produces",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule UF-IN-001"
+      ],
+      "ground_truth": "using_foundationskills: rule UF-IN-001 (BLOCK, input phase) fires: \"want\" names an artifact type no registered skill produces.",
+      "trigger_facts": [],
+      "question": "/using-foundationskills I want to route the intent `{\"want\": \"no_such_type\"}` through FoundationSkills — please tell me which registered skill handles it and what the workflow and its non-negotiable rules are. If `no_such_type` isn't a recognized type, list every registered skill so I can pick the right one. Either way, just write the `skill_route` artifact and don't run any measured work.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "using-foundationskills-oracle-UF-IN-002",
+      "skill": "using_foundationskills",
+      "rule_id": "UF-IN-002",
+      "severity": "WARN",
+      "phase": "input",
+      "description": "\"intent\" matches no registered skill",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming UF-IN-002 (the intent matches no registered skill)",
+        "request": {
+          "intent": "zzqx qqzz wwyy"
+        }
+      },
+      "fixture_sha256": "09543bd472f75734f8c85d50e93d0cff2c0492351b8050059343e8bb3e7b4be6",
+      "expected_behavior": [
+        "Identifies the problem: \"intent\" matches no registered skill",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule UF-IN-002"
+      ],
+      "ground_truth": "using_foundationskills: rule UF-IN-002 (WARN, input phase) fires: \"intent\" matches no registered skill.",
+      "trigger_facts": [],
+      "question": "/using-foundationskills I want to run the FoundationSkills entry point, using_foundationskills, on the intent string \"zzqx qqzz wwyy\" exactly as given. Please route it and tell me which FoundationSkills skill it lands on, and give me the full list of every registered skill along with the workflow and the non-negotiable rules that workflow has to keep. Keep it to routing and documentation only — a skill_route artifact, no measured work — and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

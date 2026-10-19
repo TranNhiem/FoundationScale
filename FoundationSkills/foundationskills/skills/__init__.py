@@ -88,6 +88,78 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
     except ImportError:
         pass
 
+    try:
+        from foundationskills.skills.using_foundationskills.skill import UsingFoundationSkillsSkill
+
+        if UsingFoundationSkillsSkill.name not in registry.names():
+            registry.register(UsingFoundationSkillsSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_status.skill import FsStatusSkill
+
+        if FsStatusSkill.name not in registry.names():
+            registry.register(FsStatusSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_launch.skill import FsLaunchSkill
+
+        if FsLaunchSkill.name not in registry.names():
+            registry.register(FsLaunchSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_data.skill import FsDataSkill
+
+        if FsDataSkill.name not in registry.names():
+            registry.register(FsDataSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_plan.skill import FsPlanSkill
+
+        if FsPlanSkill.name not in registry.names():
+            registry.register(FsPlanSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_eval.skill import FsEvalSkill
+
+        if FsEvalSkill.name not in registry.names():
+            registry.register(FsEvalSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_goal.skill import FsGoalSkill
+
+        if FsGoalSkill.name not in registry.names():
+            registry.register(FsGoalSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_research.skill import FsResearchSkill
+
+        if FsResearchSkill.name not in registry.names():
+            registry.register(FsResearchSkill())
+    except ImportError:
+        pass
+
+    try:
+        from foundationskills.skills.fs_handoff.skill import FsHandoffSkill
+
+        if FsHandoffSkill.name not in registry.names():
+            registry.register(FsHandoffSkill())
+    except ImportError:
+        pass
+
     return sorted(set(registry.names()) - before)
 
 

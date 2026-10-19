@@ -184,6 +184,20 @@ def _foundationscale_missing() -> str | None:
     return None
 
 
+# The Orchestrator adds `inputs` (the artifact refs earlier steps produced) to EVERY step's request.
+# Measured 2026-10-18: seven skills whose schemas forbid unknown keys (evaluation and the A3.1 discipline skills
+# among them) refused every orchestrated step before running. `inputs` is part of the step contract, so it is legal
+# for every skill whatever its own schema says; any other unknown key is still refused.
+_ORCHESTRATOR_INPUTS = {"type": "array", "items": {"type": "object"}}
+
+
+def _accepting_orchestrator_inputs(schema: dict[str, Any]) -> dict[str, Any]:
+    properties = schema.get("properties") or {}
+    if schema.get("additionalProperties", True) is not False or "inputs" in properties:
+        return schema
+    return {**schema, "properties": {**properties, "inputs": _ORCHESTRATOR_INPUTS}}
+
+
 class BaseSkill(abc.ABC):
     """Base class for skills. Subclasses define schemas/rules and implement hooks."""
 
@@ -197,6 +211,12 @@ class BaseSkill(abc.ABC):
     output_schema: dict[str, Any] = {"type": "object"}
     rules: tuple[RuleSpec, ...] = ()
     fs_interface: FSInterface = FSInterface((), (), ())
+    # A3.2 skill types. "model": the agent picks the skill from its description. "user": it runs only when
+    # the user invokes it (a slash command). A user skill may compose model skills, declared by name in
+    # `invokes`, but never another user skill (mattpocock/skills README:211). SKILL.md metadata.invocation
+    # must agree with `invocation`; conformance checks both and the call hierarchy.
+    invocation: str = "model"
+    invokes: tuple[str, ...] = ()
 
     _CORE_RULES = {"CORE-EXC", "CORE-OUT-SCHEMA", "CORE-UNDECLARED-RULE", "CORE-HOST-001"}
     # A1.5 host portability: a skill whose work needs FoundationScale sets this (or overrides
@@ -245,7 +265,7 @@ class BaseSkill(abc.ABC):
     def execute(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         """Template: schema, input checks, run, output schema, handoff, rule declaration audit."""
         try:
-            assert_valid(request, self.input_schema, f"{self.name} request")
+            assert_valid(request, _accepting_orchestrator_inputs(self.input_schema), f"{self.name} request")
         except SchemaError as exc:
             first = str(exc).split("; ", 1)[0]
             return self._refused(f"invalid request: {first}")

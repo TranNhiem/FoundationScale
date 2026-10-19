@@ -1,0 +1,148 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fs-plan-oracle-FP-HO-001",
+      "skill": "fs_plan",
+      "rule_id": "FP-HO-001",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a composed step came back RED, or an emitted spec is not executable",
+      "fixture": {
+        "expected": "RED 5 naming FP-HO-001; the workflow_record names the spec's missing item",
+        "request": {
+          "dataset": "dataset.json",
+          "goal": "goal_spec.json",
+          "model": "/models/m",
+          "probe_report": "probe.json"
+        },
+        "simulated_step": "training.emit returns a spec with executable false (missing: sft objective)"
+      },
+      "fixture_sha256": "7265f38fd2afce8f02325a53eb3150c438a18121687368ff02faa4c03dbe64cb",
+      "expected_behavior": [
+        "Identifies the problem: a composed step came back RED, or an emitted spec is not executable",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule FP-HO-001"
+      ],
+      "ground_truth": "fs_plan: rule FP-HO-001 (BLOCK, handoff phase) fires: a composed step came back RED, or an emitted spec is not executable.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "training.emit returns a spec with executable false (missing: sft objective)"
+        }
+      ],
+      "question": "/fs-plan I'm running /fs-plan on dataset.json with goal_spec.json, the model at /models/m, and probe.json as the probe report. I observed the simulated step value: \"training.emit returns a spec with executable false (missing: sft objective)\". Given that, what's the outcome of the workflow — where does it stop and what do I get shown?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-plan-oracle-FP-HO-002",
+      "skill": "fs_plan",
+      "rule_id": "FP-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "a composed step came back UNMEASURED",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming FP-HO-002; never PASS",
+        "request": {
+          "goal": "goal_spec.json",
+          "probe_report": "probe.json"
+        },
+        "simulated_step": "probe_first returns UNMEASURED (the probe was not --deep)"
+      },
+      "fixture_sha256": "8936e1d7bee4d47bf10627b7bb28f38b734ee2645026bc6ff28ee4b8a1ed3770",
+      "expected_behavior": [
+        "Identifies the problem: a composed step came back UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule FP-HO-002"
+      ],
+      "ground_truth": "fs_plan: rule FP-HO-002 (WARN, handoff phase) fires: a composed step came back UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "probe_first returns UNMEASURED (the probe was not --deep)"
+        }
+      ],
+      "question": "/fs-plan I'm running /fs-plan on goal_spec.json with probe.json as the probe report. I observed that simulated_step = \"probe_first returns UNMEASURED (the probe was not --deep)\". Given that, what's the outcome of the workflow — does it stop there, and if so what exactly do I see?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-plan-oracle-FP-IN-001",
+      "skill": "fs_plan",
+      "rule_id": "FP-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no goal is given",
+      "fixture": {
+        "expected": "REFUSED 96 naming FP-IN-001; nothing planned",
+        "request": {
+          "probe_report": "probe.json"
+        }
+      },
+      "fixture_sha256": "cec0a1a4f5324e2632a24a7012c3ce195d057c41a99d140c372237c7c676ab06",
+      "expected_behavior": [
+        "Identifies the problem: no goal is given",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FP-IN-001"
+      ],
+      "ground_truth": "fs_plan: rule FP-IN-001 (BLOCK, input phase) fires: no goal is given.",
+      "trigger_facts": [],
+      "question": "/fs-plan Run /fs-plan against my probe report at `probe.json` and tell me what comes out of it. I want the full chain — training.planner, probe_first, then training.emit — walked through in order, stopping at the first step that isn't PASS. If everything passes, give me the plan hash for each emitted fs_launch_spec so I can type them back to /fs-launch myself. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-plan-oracle-FP-IN-002",
+      "skill": "fs_plan",
+      "rule_id": "FP-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "no probe_report is given (probe first: plan only against what FS measurably runs)",
+      "fixture": {
+        "expected": "REFUSED 96 naming FP-IN-002 (probe first); nothing planned",
+        "request": {
+          "goal": "goal_spec.json"
+        }
+      },
+      "fixture_sha256": "f9f8d5b00e84c08b401712d3505db434fb176b29495a7ed0259cf8dd975c0f84",
+      "expected_behavior": [
+        "Identifies the problem: no probe_report is given (probe first: plan only against what FS measurably runs)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FP-IN-002"
+      ],
+      "ground_truth": "fs_plan: rule FP-IN-002 (BLOCK, input phase) fires: no probe_report is given (probe first: plan only against what FS measurably runs).",
+      "trigger_facts": [],
+      "question": "/fs-plan Please run /fs-plan against goal_spec.json — my goal spec is staged at that path and I want the full planning workflow (training.planner, probe_first, training.emit) taken as far as it goes before anything launches. Stop at the first step that doesn't pass and tell me exactly where it stopped and what it produced. If everything passes, show me the plan hash for each emitted fs_launch_spec so I can type them back to /fs-launch myself.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fs-plan-oracle-FP-IN-003",
+      "skill": "fs_plan",
+      "rule_id": "FP-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "a composed step (planner, probe_first or emit) refused",
+      "fixture": {
+        "expected": "REFUSED 96 naming FP-IN-003 with the planner's findings as evidence steps",
+        "request": {
+          "goal": "goal_spec.json",
+          "probe_report": "probe.json"
+        },
+        "simulated_step": "training.planner refuses (the goal names no known model)"
+      },
+      "fixture_sha256": "fb1d246e5dd851158e81e2b7426161991f0229b8d96ef0a38b50b8c3036e1c02",
+      "expected_behavior": [
+        "Identifies the problem: a composed step (planner, probe_first or emit) refused",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule FP-IN-003"
+      ],
+      "ground_truth": "fs_plan: rule FP-IN-003 (BLOCK, input phase) fires: a composed step (planner, probe_first or emit) refused.",
+      "trigger_facts": [
+        {
+          "path": "simulated_step",
+          "value": "training.planner refuses (the goal names no known model)"
+        }
+      ],
+      "question": "/fs-plan I ran /fs-plan with goal_spec.json and probe.json as the request inputs. The simulated step I observed came back as exactly \"training.planner refuses (the goal names no known model)\". Since the workflow stops at the first non-PASS step, what is the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

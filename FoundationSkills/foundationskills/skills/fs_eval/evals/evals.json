@@ -1,0 +1,140 @@
+[
+  {
+    "id": "fe-positive-001",
+    "question": "/fs-eval record my evaluation run of the checkpoint at /models/q1 against the benchmarks in /policy/eval.yaml",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-positive-002",
+    "question": "/fs-eval score /models/q4 on arc_easy and arc_challenge with the cache at /eval/cache and write the report to /out/q4",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-positive-003",
+    "question": "/fs-eval evaluate the run manifest at /runs/sft-7/run_manifest.json against the policy in /policy/eval.yaml",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-positive-004",
+    "question": "/fs-eval compare the adapter in /models/q5 with its base model on mmlu and keep the result as a workflow record",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-positive-005",
+    "question": "/fs-eval on /models/q3 with the cache at /eval/cache and out at /out/q3",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-positive-006",
+    "question": "/fs-eval wrap the evaluation of the checkpoint in /models/q7 in one workflow record with the steps and the report path",
+    "expected_skill": "fs-eval",
+    "should_trigger": true,
+    "ground_truth": "/fs-eval runs the evaluation skill on the given checkpoint (composition, never another user skill) and writes a workflow_record referencing the eval_report by path; evaluation RED is RED (FE-HO-001), UNMEASURED is UNMEASURED (FE-HO-002), an evaluation refusal is REFUSED (FE-IN-002).",
+    "expected_behavior": [
+      "Runs the evaluation skill through /fs-eval on the stated checkpoint",
+      "Reports the verdict without upgrading UNMEASURED to PASS",
+      "References the eval_report by path in a workflow_record"
+    ]
+  },
+  {
+    "id": "fe-misc-001",
+    "question": "What is a good dry rub for smoked pork ribs?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fe-misc-002",
+    "question": "Who sang the original recording of 'Strange Fruit'?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fe-misc-003",
+    "question": "How many pairs of socks should I pack for a week-long hiking trip?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No FoundationSkills skill applies; the agent answers directly.",
+    "expected_behavior": [
+      "Does not invoke a FoundationSkills skill",
+      "Answers the question directly"
+    ]
+  },
+  {
+    "id": "fe-sibling-001",
+    "question": "Evaluate the checkpoint at /models/q2 against the benchmarks in /policy/eval.yaml with the cache at /eval/cache.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "fskills-evaluation: a natural-language evaluation request routes to the model skill; /fs-eval runs only when the user types it.",
+    "expected_behavior": [
+      "Routes to fskills-evaluation",
+      "Does not invoke /fs-eval on its own initiative"
+    ]
+  },
+  {
+    "id": "fe-sibling-002",
+    "question": "Run arc_challenge on my fine-tuned checkpoint at /models/q9 and compare it with its base model.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "fskills-evaluation: a natural-language evaluation request routes to the model skill; /fs-eval runs only when the user types it.",
+    "expected_behavior": [
+      "Routes to fskills-evaluation",
+      "Does not invoke /fs-eval on its own initiative"
+    ]
+  },
+  {
+    "id": "fe-sibling-003",
+    "question": "Score my fine-tuned model on arc_challenge and tell me whether it regressed against the base.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "fskills-evaluation: a natural-language evaluation request routes to the model skill; /fs-eval runs only when the user types it.",
+    "expected_behavior": [
+      "Routes to fskills-evaluation",
+      "Does not invoke /fs-eval on its own initiative"
+    ]
+  }
+]

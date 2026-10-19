@@ -1,0 +1,195 @@
+[
+  {
+    "id": "fh-positive-001",
+    "question": "/fs-handoff close out this session: the artifacts are job/artifacts/probe.json, job/artifacts/data_report.json and job/artifacts/skill_result.json, notes are \"the curator approved the curated-q2 set on 2024-05-02\", next steps are [\"resume the trainer at step 3\",\"verify the checkpoint against the plan\"], record_dir is job/records. Go.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff (/fs-handoff) and references the three artifacts BY PATH as {path, type, id, sha256} in ONE handoff artifact written to job/records (request record_dir), copying no payload and composing/invoking no other skill. Nothing in notes or next_steps is a secret or PII, so redactions is {} and FH-HO-001 does not fire: the result is PASS 0.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent referenced every artifact by path with its sha256 and copied no payload into the handoff",
+      "The agent wrote exactly one handoff artifact to job/records and ran no other skill",
+      "The agent reported PASS 0 with an empty redactions map and no FH-HO-001"
+    ]
+  },
+  {
+    "id": "fh-positive-002",
+    "question": "/fs-handoff write the handoff on job/artifacts/probe.json and job/artifacts/data_report.json; notes are \"reached the trainer at a.chen@example.com after dropping the key sk-live-9f2c44ab77\" and next steps are [\"send the report to m.ortiz@corp.example and dial 555-0100 if the run stalls\"]. Put it in job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and redacts notes and next_steps with the secret regexes and the data_engine PII builtin (types email, phone, credit_card, ssn, national_id) before writing: the written text holds [REDACTED:secret_sk] and [REDACTED:email]/[REDACTED:phone], redactions counts {sk_token 1, email 2, phone 1}, and FH-HO-001 (INFO, handoff phase) is returned from check_handoff reporting those counts. It never blocks: the one handoff artifact lands in job/records and the result is PASS 0.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent redacted the sk- key and the two emails and the phone number, keeping no raw secret or PII in the handoff",
+      "The agent reported FH-HO-001 (INFO) with the per-kind counts and never called it a failure",
+      "The agent still wrote one handoff artifact and returned PASS 0, since INFO never blocks"
+    ]
+  },
+  {
+    "id": "fh-positive-003",
+    "question": "/fs-handoff hand off this session for me: notes are \"the Q2 set passed the curator review\", next steps are [\"resume the trainer at step 3\"], record_dir is job/records. Go.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and finds no `artifacts` in the request: FH-IN-001 is an input-phase BLOCK, so the result is REFUSED 96 carrying the finding message as refusal and NOTHING is written. It names FH-IN-001 and asks for the session's artifact JSON paths instead of pointing at some file it guessed.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent said FH-IN-001 means no `artifacts` list was given, so there is nothing to hand off",
+      "The agent returned REFUSED 96 with the FH-IN-001 message as the refusal and wrote no artifact",
+      "The agent asked the user for the session's artifact JSON paths and never invented them"
+    ]
+  },
+  {
+    "id": "fh-positive-004",
+    "question": "/fs-handoff the artifacts of this session are job/artifacts/probe.json and job/artifacts/missing_report.json — write the handoff into job/records with notes \"nothing to fix\" and next steps [\"resume at step 3\"]. Go.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and validates every path before doing any work: job/artifacts/missing_report.json cannot be read, so FH-IN-002 (input BLOCK) fires naming that path and the result is REFUSED 96 with the finding message as refusal. Nothing is written: the handoff is refused before run, and the user is told to fix or drop the named path and re-run.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent named job/artifacts/missing_report.json as the path that failed FH-IN-002",
+      "The agent returned REFUSED 96 and wrote no handoff artifact at all",
+      "The agent said to fix or drop that path and re-run fs_handoff"
+    ]
+  },
+  {
+    "id": "fh-positive-005",
+    "question": "/fs-handoff close it out on these two files: job/artifacts/probe.json and job/scratch/raw.json (raw.json is just {“rows”: 1200} from the exporter). notes are \"the exporter is fine\", next steps are [\"trust the probe run\"], record_dir job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and checks the envelope of each file: job/scratch/raw.json has no `type` and `payload`, so it is not an artifact envelope and FH-IN-002 fires naming that path — REFUSED 96 with the finding message as refusal, nothing written. The user is told that a plain JSON export is not an artifact; only artifacts written by the session (envelope with type and payload) can be handed off.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent said raw.json has no type/payload and is therefore not an artifact envelope",
+      "The agent returned REFUSED 96 naming the path and wrote no handoff artifact",
+      "The agent asked for real artifact envelopes and did not summarise raw.json as a substitute"
+    ]
+  },
+  {
+    "id": "fh-positive-006",
+    "question": "/fs-handoff hand it off on job/artifacts/probe.json; notes are \"the plan hash is 3f2a91c0b7de4410 and AWS_SECRET_ACCESS_KEY=AKIAEXAMPLEEXAMPLE\", next steps are [\"API_TOKEN=abc123def456 must stay set for the resume\"], record_dir is job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and scrubs the NAME=value lines whose NAME holds KEY/TOKEN/SECRET/PASSWORD: the NAME= is kept and only the value becomes [REDACTED:env_value], so both lines keep their name plus the harmless plan hash. counts are {env_value 2}, FH-HO-001 INFO reports them, and the one handoff artifact is written to job/records with PASS 0.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent kept the NAME= of AWS_SECRET_ACCESS_KEY and API_TOKEN and redacted only their values",
+      "The agent left the plan hash 3f2a91c0b7de4410 readable and reported FH-HO-001 with env_value 2",
+      "The agent wrote one handoff artifact to job/records and returned PASS 0"
+    ]
+  },
+  {
+    "id": "fh-positive-007",
+    "question": "/fs-handoff the launch ran, so record the handoff on job/artifacts/launch_record.json; notes are \"ops key ghp_QwErTyUiOp098765 and the wire uses Bearer eyJhbGciOi.eyJzdWIiOi.x\", next steps are [\"re-run the confirm at 09:00\"], record_dir is job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and redacts the GitHub token and the bearer token with the secret regexes (ghp_token, bearer_token) and reuses the data_engine PII builtin for the PII types; counts are {ghp_token 1, bearer_token 1}. FH-HO-001 INFO reports them, the referenced path of job/artifacts/launch_record.json carries type/id/sha256, and the result is PASS 0 with one handoff artifact in job/records.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent redacted the ghp_ token and the Bearer token and left no credential in the handoff",
+      "The agent referenced job/artifacts/launch_record.json by path with its sha256 and copied no payload",
+      "The agent reported FH-HO-001 (INFO) with the counts and returned PASS 0"
+    ]
+  },
+  {
+    "id": "fh-positive-008",
+    "question": "/fs-handoff pin down the handoff for job/artifacts/probe.json and job/artifacts/data_report.json so the next session can verify the files: notes are \"the contact card is 4111-1111-1111-1111 with ssn 123-45-6789\", next steps are [\"verify each file against the pinned hash first\"], record_dir job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and writes one handoff artifact whose artifacts rows are exactly {path, type, id, sha256} with the sha256 of each file's bytes pinning it, while the payloads stay in their own files. The card number and SSN are redacted through the PII builtin (counts {credit_card 1, ssn 1}), FH-HO-001 INFO reports them, and the result is PASS 0 in job/records.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent pinned each referenced artifact with the sha256 of its file bytes and referenced it by path",
+      "The agent redacted the card number and the SSN and reported FH-HO-001 with those counts",
+      "The agent copied no artifact payload and wrote only the one handoff artifact"
+    ]
+  },
+  {
+    "id": "fh-positive-009",
+    "question": "/fs-handoff my next person needs the short version: artifacts job/artifacts/probe.json, notes \"the curated-q2 set passed and the trainer is healthy\", next steps [\"resume the trainer at step 3\",\"re-run the claims checker before any launch\"]. Use record_dir job/records.",
+    "expected_skill": "fs-handoff",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-handoff and writes one handoff artifact in job/records: notes and the two next_steps are carried over verbatim (no secret or PII, so redactions is {} and FH-HO-001 does not fire) and job/artifacts/probe.json is referenced by path with type, id and sha256. PASS 0; it never decides for the user whether to launch — that is a training skill's job.",
+    "expected_behavior": [
+      "The agent read fs_handoff/SKILL.md before acting",
+      "The agent carried notes and next_steps over verbatim since nothing needed redaction",
+      "The agent wrote one handoff artifact to job/records and referenced the probe artifact by path",
+      "The agent reported PASS 0 with no FH-HO-001 and did not decide whether to launch"
+    ]
+  },
+  {
+    "id": "fh-natural-001",
+    "question": "Please carry these notes over to tomorrow's session and tell the next person what to do first: the artifacts are job/artifacts/probe.json and job/artifacts/data_report.json, notes \"the curator approved the curated-q2 set\", next steps [\"resume the trainer at step 3\"]. Save it under job/records.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No model skill writes handoffs and fs_handoff is user-invoked (invocation \"user\"): the agent must NOT choose it on its own. It names /fs-handoff as the only path to a handoff artifact and asks the user to type it, keeping the paths and notes ready instead of writing a temp doc of its own.",
+    "expected_behavior": [
+      "The agent did not load or run fs_handoff without the /fs-handoff command",
+      "The agent said the handoff is written only by /fs-handoff and asked the user to type it",
+      "The agent kept the given paths/notes/next_steps instead of writing an untracked temp document",
+      "The agent produced no handoff artifact and no redaction counts"
+    ]
+  },
+  {
+    "id": "fh-natural-002",
+    "question": "I want a record I can hand to the next session — the paths are job/artifacts/probe.json and job/artifacts/skill_result.json, my notes have an API key in them, and it has to go under job/records.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A handoff record is written only by the user-invoked /fs-handoff; with no model skill for handoffs the agent does not fabricate one. It points at /fs-handoff (which redacts the API key from the notes) and asks for the command, rather than writing a plain record file itself or echoing the key back.",
+    "expected_behavior": [
+      "The agent did not run fs_handoff on its own, without the /fs-handoff command",
+      "The agent did not echo the API key back in any text it wrote",
+      "The agent named /fs-handoff as the only path to a redacted handoff record",
+      "The agent wrote no artifact under job/records"
+    ]
+  },
+  {
+    "id": "fh-null-001",
+    "question": "Which of the last three data_engine runs should I keep, and why is the second one bigger than the other two?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A data-comparison question about past runs: nothing is being handed off and no /fs-handoff command is typed, so no skill from this family is triggered. The agent talks about the three runs it can see (or asks where the run records live) and does not write any artifact.",
+    "expected_behavior": [
+      "The agent did not load fs_handoff",
+      "The agent discussed the three data_engine runs or asked for their reports",
+      "The agent kept the PASS/RED/UNMEASURED/REFUSED doctrine when describing a run's outcome",
+      "The agent wrote no handoff, status_explanation or other artifact"
+    ]
+  },
+  {
+    "id": "fh-null-002",
+    "question": "My preference-tuning reward model is collapsing after about 2k steps — what should I check first?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A debugging question about preference tuning: it is not a session handoff and no /fs-handoff is typed, so this skill stays out of it. The agent gives training-side checks (reward hacking, data mix, LR) or points at the training skills, and never invents a handoff artifact.",
+    "expected_behavior": [
+      "The agent did not load fs_handoff",
+      "The agent answered the reward-model debugging question with training-side checks",
+      "The agent did not present a redaction count or a handoff record as a fix",
+      "The agent wrote no artifact"
+    ]
+  },
+  {
+    "id": "fh-null-003",
+    "question": "What fraction of the curated-q2 set failed the PII scan in the run I did this morning?",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A question about the results of this morning's PII scan: it asks for a measurement, not a handoff. The agent reads or points at the data_engine report (data_report/data_quality_report) or asks for the run's record, and does not touch /fs-handoff.",
+    "expected_behavior": [
+      "The agent did not load fs_handoff",
+      "The agent pointed at the morning run's data report or asked for its record",
+      "The agent did not claim a redaction count as if it were a scan result",
+      "The agent wrote no artifact"
+    ]
+  },
+  {
+    "id": "fh-sibling-001",
+    "question": "Before I write up today's session, rewrite these claims so nothing unmeasured reads as a pass: 'the SFT run converged' (no eval ran), 'throughput is 9k tok/s' (UNMEASURED in the manifest).",
+    "expected_skill": "fskills-measured-or-unmeasured",
+    "should_trigger": false,
+    "ground_truth": "fskills-measured-or-unmeasured: rewriting claims so every unmeasured claim says UNMEASURED is that model skill's job; /fs-handoff only packages artifacts by path.",
+    "expected_behavior": [
+      "Routes to fskills-measured-or-unmeasured",
+      "Does not invoke /fs-handoff on its own initiative"
+    ]
+  }
+]

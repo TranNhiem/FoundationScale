@@ -43,7 +43,7 @@ def test_metadata_json_path_reads_the_phrases():
     data = _base()
     data["metadata"] = {"when_to_use": json.dumps(PHRASES, ensure_ascii=False)}
     parsed = routing_eval._parse_frontmatter(_skill_md(data), "pkg")
-    assert parsed == {"name": NAME, "description": DESCRIPTION, "when_to_use": list(PHRASES)}
+    assert parsed == {"name": NAME, "description": DESCRIPTION, "when_to_use": list(PHRASES), "invocation": "model"}
 
 
 def test_metadata_when_to_use_keeps_non_ascii_phrases():
@@ -133,5 +133,5 @@ def test_both_paths_return_the_same_shape_given_the_same_phrases():
         legacy_parsed = routing_eval._parse_frontmatter(_skill_md(legacy), "pkg")
     spec_parsed = routing_eval._parse_frontmatter(_skill_md(spec), "pkg")
     assert spec_parsed == legacy_parsed
-    assert set(spec_parsed) == {"name", "description", "when_to_use"}
+    assert set(spec_parsed) == {"name", "description", "when_to_use", "invocation"}  # A3.2: invocation defaults to model
     assert all(isinstance(phrase, str) for phrase in spec_parsed["when_to_use"])

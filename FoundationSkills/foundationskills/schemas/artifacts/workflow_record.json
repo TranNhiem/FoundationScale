@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "required": [
+    "workflow",
+    "steps",
+    "outputs",
+    "verdict"
+  ],
+  "properties": {
+    "workflow": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "skill",
+          "status",
+          "exit_code"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "outputs": {
+      "type": "object"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "RED",
+        "UNMEASURED"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

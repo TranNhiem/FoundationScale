@@ -85,3 +85,13 @@ def test_a_normal_judgement_never_escalates() -> None:
         and "judge_budget_escalated" not in call
         and set(judge.budgets) == {4096}
     )
+
+
+def test_an_agent_reply_truncated_empty_is_reasked_once_with_a_larger_budget() -> None:
+    from foundationskills.agent.behaviour_eval import _AGENT_BUDGET_CAP, _escalated_budget
+    from foundationskills.skills.data_engine.llm_backend import LLMResponse
+
+    empty = LLMResponse(None, "length", 0, 16384, False, None)
+    assert _escalated_budget(empty, 16384, _AGENT_BUDGET_CAP) == 32768
+    assert _escalated_budget(empty, 32768, _AGENT_BUDGET_CAP) is None  # already at the cap: stays unmeasured
+    assert _escalated_budget(LLMResponse("ok", "stop", 10, 0, False, None), 16384, _AGENT_BUDGET_CAP) is None

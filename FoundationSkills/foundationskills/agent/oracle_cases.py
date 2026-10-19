@@ -283,6 +283,11 @@ def build_cases(
         case["question"] = _ask_question(
             backend, case, descriptions.get(str(case["skill"]), ""), temperature, max_tokens
         )
+        if getattr(reg.get(str(case["skill"])), "invocation", "model") == "user":
+            # A3.2: a user skill runs only when the user invokes it, so its oracle question invokes it explicitly
+            # (measured 2026-10-18: without the slash, agents reading the skill declined to act and /fs-launch's
+            # oracle report went RED)
+            case["question"] = f"/{_slash_name(case)} {case['question']}"
         case["question_model"] = str(backend.model)
         return package, case
 
@@ -290,6 +295,11 @@ def build_cases(
     for package, case in map_ordered(ask_one, jobs, int(workers)):
         built[package].append(case)
     return built
+
+
+def _slash_name(case: Mapping[str, Any]) -> str:
+    """The SKILL.md name a case belongs to: oracle case ids are '<skill-md-name>-oracle-<rule id>'."""
+    return str(case["id"]).split("-oracle-", 1)[0]
 
 
 def _ask_question(

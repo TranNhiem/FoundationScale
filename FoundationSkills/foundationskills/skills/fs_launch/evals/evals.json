@@ -1,0 +1,123 @@
+[
+  {
+    "id": "fl-positive-001",
+    "question": "/fs-launch launch this training run: the fs_launch_spec is at launch/fs_launch_spec.q27.json and I have typed back the plan hash 3f2a91c0b7de4410. Go.",
+    "expected_skill": "fs-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-launch (/fs-launch, THE ONLY launch path), takes 3f2a91c0b7de4410 as the hash the USER typed back, composes confirm_before_launch (launch_spec + user_plan_hash) and only then calls interfaces.fs.launch.launch(spec_payload, confirm=<the user hash>, submit=true), writing one launch_record {launch_spec, plan_hash, confirmation, submitted, returncode, result}.",
+    "expected_behavior": [
+      "The agent read fs_launch/SKILL.md before acting",
+      "The agent used the hash as typed by the user and never recomputed or auto-filled one for them",
+      "The agent composed confirm_before_launch before touching the launcher",
+      "The agent launched only through interfaces.fs.launch.launch and wrote one launch_record artifact"
+    ]
+  },
+  {
+    "id": "fl-positive-002",
+    "question": "/fs-launch start the job with this launch spec (launch/fs_launch_spec.rl.json) and run it here with submit: false so I can wait for the returncode; the plan hash I typed back is 5d88ac01e2b347ff.",
+    "expected_skill": "fs-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-launch, passes submit=false to interfaces.fs.launch.launch (the launcher runs here and waits), records submitted:false and the real returncode in the launch_record, and reports FL-HO-001 as RED 5 (the run itself failed) if that returncode is non-zero instead of calling it a pass.",
+    "expected_behavior": [
+      "The agent read fs_launch/SKILL.md before acting",
+      "The agent ran the launcher locally (submit false) and waited rather than submitting to the scheduler",
+      "The agent recorded submitted false and the actual returncode in the launch_record",
+      "The agent said a non-zero local returncode is FL-HO-001 / RED 5 and never a pass"
+    ]
+  },
+  {
+    "id": "fl-positive-003",
+    "question": "/fs-launch It came back REFUSED 96 FL-IN-001 with a plan hash printed in the message. Please launch launch/fs_launch_spec.q27.json properly this time — nothing has changed in the spec.",
+    "expected_skill": "fs-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-launch and explains FL-IN-001 (user_plan_hash absent or empty): the refusal re-shows the plan hash recomputed from the spec so the USER can type it back, and the skill never fills it in. The agent asks the user to type the hash back and then re-runs fs-launch (the only launch path) instead of filling it in.",
+    "expected_behavior": [
+      "The agent read fs_launch/SKILL.md before acting",
+      "The agent said FL-IN-001 means the hash was absent or empty and that the refusal re-shows it",
+      "The agent asked the USER to type the plan hash back and did not auto-fill user_plan_hash",
+      "The agent re-ran fs-launch once the user supplied the hash"
+    ]
+  },
+  {
+    "id": "fl-positive-004",
+    "question": "/fs-launch The cluster job from launch/fs_launch_spec.pretrain.gb200.json is fine to go and the plan hash I typed back is c71b0d24aa90fe13. Is there any confirmation I still owe you before you submit it with fskills launch?",
+    "expected_skill": "fs-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-launch and answers that the confirmation is the hash the USER typed back plus the composed confirm_before_launch record: it recomputes the plan hash, runs confirm_before_launch (which seals the confirmation_record) and then submits via interfaces.fs.launch.launch with submit=true. It never confirms on the user's behalf and never launches before the token matches.",
+    "expected_behavior": [
+      "The agent read fs_launch/SKILL.md before acting",
+      "The agent said the confirmation is the user-typed plan hash checked by confirm_before_launch",
+      "The agent composed confirm_before_launch and then launched (it is the only launch path)",
+      "The agent did not describe or perform any other submission route"
+    ]
+  },
+  {
+    "id": "fl-positive-005",
+    "question": "/fs-launch Please launch launch/fs_launch_spec.sft.json on the H100 partition and hand me back what the launch recorded.",
+    "expected_skill": "fs-launch",
+    "should_trigger": true,
+    "ground_truth": "The agent loads fs-launch, sees user_plan_hash is missing, and FL-IN-001 fires: it re-shows the plan hash recomputed from the spec and asks the USER to type it back (never filling it in), then launches and returns the launch_record {launch_spec, plan_hash, confirmation, submitted, returncode, result}.",
+    "expected_behavior": [
+      "The agent read fs_launch/SKILL.md before acting",
+      "The agent re-showed the recomputed plan hash and asked the user to type it back instead of auto-filling it",
+      "The agent launched only after the user typed the hash back",
+      "The agent reported the launch_record (including submitted and returncode) to the user"
+    ]
+  },
+  {
+    "id": "fl-sibling-001",
+    "question": "Seal the confirmation_record for launch/fs_launch_spec.q27.json against the plan hash I typed back (3f2a91c0b7de4410) but do NOT run or submit anything today.",
+    "expected_skill": "fskills-confirm-before-launch",
+    "should_trigger": false,
+    "ground_truth": "Sealing a confirmation without launching is confirm_before_launch's job (it stamps confirmed_by=user and auto_filled=false and never submits). fs-launch exists to launch: confirming without launching is deliberately not it.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-confirm-before-launch",
+      "The agent did not read or activate fs_launch/SKILL.md as the working skill",
+      "The agent did not submit, sbatch or run anything"
+    ]
+  },
+  {
+    "id": "fl-sibling-002",
+    "question": "Plan and emit the fs_launch_spec for a three-day LoRA preference stage on the GB200 partition from manifest.json — planning and emitting only, leave the scheduler alone.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Planning and emitting a spec is fskills-training's (training planner / emit) job; the plan hash that comes out of it is what the user reads and types back before anything is launched. fs-launch only launches an already-emitted, already-confirmed spec.",
+    "expected_behavior": [
+      "The agent routed the request to fskills-training",
+      "The agent did not read or activate fs_launch/SKILL.md as the working skill"
+    ]
+  },
+  {
+    "id": "fl-misc-001",
+    "question": "Turn these quarterly budget numbers into a two-sentence summary I can paste into the finance newsletter.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Summarising budget numbers is an ordinary non-ML-training request: it matches no FoundationSkills skill, and certainly not the launch gate.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_launch/SKILL.md"
+    ]
+  },
+  {
+    "id": "fl-misc-002",
+    "question": "Name five puns for a bakery that sells only banana bread.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Naming a bakery is not launching a confirmed fs_launch_spec, so no FoundationSkills skill is triggered, including fs-launch.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate fs_launch/SKILL.md"
+    ]
+  },
+  {
+    "id": "fl-natural-001",
+    "question": "launch this training run: the fs_launch_spec is at launch/fs_launch_spec.q27.json and I have typed back the plan hash 3f2a91c0b7de4410. Go.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "No skill is chosen: the request does not invoke /fs-launch, and a user-invoked skill runs only when the user types it. The agent answers directly or suggests typing /fs-launch.",
+    "expected_behavior": [
+      "Does not invoke /fs-launch on its own initiative",
+      "Answers directly or suggests the user type /fs-launch"
+    ]
+  }
+]
