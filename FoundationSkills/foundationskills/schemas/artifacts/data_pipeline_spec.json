@@ -5,7 +5,7 @@
   "required": ["target_format", "ops", "seed", "tokenizer", "rationale"],
   "additionalProperties": true,
   "properties": {
-    "target_format": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft"]},
+    "target_format": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft", "asr"]},
     "ops": {
       "type": "array",
       "items": {

@@ -29,7 +29,12 @@ from foundationskills.core.provenance import make_provenance, sha256_file
 from foundationskills.core.status import Status
 from foundationskills.skills.evaluation.baseline import BaselineCache, fingerprint, model_identity
 from foundationskills.skills.evaluation.policy import Policy, PolicyError, TaskPolicy, compare, load_policy
+from foundationskills.skills.evaluation.speech_longform import SUITE, SpeechScoreRefused
+from foundationskills.skills.evaluation.speech_longform import score as speech_score
+from foundationskills.skills.evaluation.suites import harbor as harbor_suite
+from foundationskills.skills.evaluation.suites import skill_behaviour as behaviour_suite
 from foundationskills.skills.evaluation.report import verdict, write_report
+from foundationskills.interfaces.fs.video_envelope import beyond_envelope, frame_envelope
 from foundationskills.skills.evaluation.resolve import Resolved, ResolveError, manifest_video_frames, resolve, ships_chat_template
 from foundationskills.skills.evaluation.runner import (
     PINNED_LM_EVAL,
@@ -161,9 +166,19 @@ class EvalSkill(BaseSkill):
 
     input_schema: dict[str, Any] = {
         "type": "object",
-        "required": ["eval_cache", "out"],
+        "required": ["out"],  # eval_cache is required by the lm-eval mode only (EV-IN-003)
         "additionalProperties": False,
         "properties": {
+            # A4.3 speech-longform suite: score a base and a tuned model's long-form predictions
+            "suite": {"enum": ["speech-longform", "harbor", "skill-behaviour"]},
+            "reports": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "job_dirs": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "control_dirs": {"type": "array", "items": {"type": "string"}},
+            "tasks_file": {"type": "string", "minLength": 1},
+            "max_unmeasured_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+            "manifest": {"type": "string", "minLength": 1},
+            "base_predictions": {"type": "string", "minLength": 1},
+            "tuned_predictions": {"type": "string", "minLength": 1},
             "checkpoint": {"type": "string", "minLength": 1},
             "base": {"type": "string", "minLength": 1},
             "run_manifest": {"type": "string", "minLength": 1},
@@ -202,18 +217,36 @@ class EvalSkill(BaseSkill):
     rules = (
         RuleSpec("EV-IN-001", "checkpoint (or the run manifest naming it) missing or not a directory", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-002", "no resolvable local base model to serve as the baseline", Severity.BLOCK, "input"),
-        RuleSpec("EV-IN-003", "eval cache (--eval-cache) missing", Severity.BLOCK, "input"),
+        RuleSpec("EV-IN-003", "eval cache (--eval-cache) missing in lm-eval (benchmark) mode", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-004", "installed lm_eval is absent or not the pinned version (lm-eval mode)", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-005", "eval policy invalid, a benchmark has no policy entry, needs an LLM judge, or the request holds neither a benchmark nor a held-out hit", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-006", "held-out data missing/unreadable, or the eval_heldout_loss.py script is missing (never a silent fallback)", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-007", "held-out rows carry video but video_frames is unset", Severity.BLOCK, "input"),
         RuleSpec("EV-IN-008", "video_frames disagrees with the run manifest's FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES", Severity.BLOCK, "input"),
         RuleSpec("EV-RU-001", "vacuous run (held-out rows_used == 0 for either role): the rule template has no run phase, so it is declared a handoff BLOCK and yielded as REFUSED (no report) through the existing refusal path", Severity.BLOCK, "handoff"),
+        RuleSpec("EV-IN-009", "speech-longform suite input (manifest or a prediction file) missing, unreadable or not scorable", Severity.BLOCK, "input"),
         RuleSpec("EV-HO-001", "a benchmark breached its regression tolerance", Severity.BLOCK, "handoff"),
         RuleSpec("EV-HO-002", "a configured benchmark was skipped (harness reported no metric)", Severity.BLOCK, "handoff"),
         RuleSpec("EV-HO-003", "a benchmark is unmeasured, or the run was limited (smoke) and cannot PASS", Severity.WARN, "handoff"),
         RuleSpec("EV-HO-004", "a PASS report is missing on disk, altered, limited, or has a null score", Severity.BLOCK, "handoff"),
         RuleSpec("EV-HO-005", "base and checkpoint held-out rows_used/rows_dropped disagree: the delta is unmeasured. BLOCK, but deliberately mapped to UNMEASURED 95 (never RED): an incomparable delta is no failure", Severity.BLOCK, "handoff"),
+        RuleSpec("EV-HO-007", "a speech-longform gate blocked (runaway or repetition loops), whatever the WER", Severity.BLOCK, "handoff"),
+        RuleSpec("EV-HO-008", "speech-longform calls have no prediction (undercovered), so the suite cannot PASS", Severity.WARN, "handoff"),
+        RuleSpec("EV-HO-009", "held-out video_frames lies above the measured frame envelope (16 uniform frames per "
+                 "clip): a passing held-out row is UNMEASURED, never PASS", Severity.WARN, "handoff"),
+        # A4.5 benchmarking: the harbor suite (suites/harbor.py) over Harbor job directories
+        RuleSpec("EV-IN-010", "harbor suite: a job directory is missing or holds no trial, or tasks_file is unreadable",
+                 Severity.BLOCK, "input"),
+        RuleSpec("EV-IN-011", "benchmark suite without usable refused-fixture items: harbor has no measured nop "
+                 "negative control, a control trial is not from the nop agent, or every control passed; "
+                 "skill-behaviour has no measured oracle case of a BLOCK input rule", Severity.BLOCK, "input"),
+        RuleSpec("EV-IN-012", "skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its "
+                 "re-scored item_pass_rate does not reproduce the report's own", Severity.BLOCK, "input"),
+        RuleSpec("EV-HO-010", "benchmark suite (harbor, skill-behaviour): unmeasured cells exceed "
+                 "max_unmeasured_fraction, or nothing was measured - status UNMEASURED, never PASS",
+                 Severity.WARN, "handoff"),
+        RuleSpec("EV-HO-011", "harbor suite: tasks dropped because their negative control passed (a verifier that "
+                 "cannot discriminate); each is named and counted", Severity.INFO, "handoff"),
         RuleSpec("EV-HO-006", "a held-out row lacks rows_used/rows_dropped/score/baseline", Severity.BLOCK, "handoff"),
     )
     fs_interface = FSInterface(
@@ -245,7 +278,41 @@ class EvalSkill(BaseSkill):
     # -- inputs ---------------------------------------------------------------------------------
     def check_inputs(self, request: dict[str, Any], ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
+        if request.get("suite") == behaviour_suite.SUITE:  # A4.5: reports are read in run(); refusals land there
+            missing = [r for r in request.get("reports") or () if not Path(str(r)).is_file()]
+            if not request.get("reports") or missing:
+                findings.append(self.finding("EV-IN-012", f"missing input: skill-behaviour reports {missing or '(none)'}",
+                                             {"reports": request.get("reports")},
+                                             "pass behaviour-eval JSON reports (include at least one oracle report)"))
+            return findings
+        if request.get("suite") == harbor_suite.SUITE:  # A4.5: job directories are read in run(); refusals land there
+            missing = [d for d in request.get("job_dirs") or () if not Path(str(d)).is_dir()]
+            if not request.get("job_dirs") or missing:
+                findings.append(self.finding("EV-IN-010", f"missing input: harbor job_dirs {missing or '(none)'}",
+                                             {"job_dirs": request.get("job_dirs")}, "pass the Harbor job directories"))
+            if request.get("tasks_file") and not Path(str(request["tasks_file"])).is_file():
+                findings.append(self.finding("EV-IN-010", f"missing input: tasks_file {request['tasks_file']}",
+                                             {"tasks_file": request["tasks_file"]}, "pass the task list (one per line)"))
+            if not request.get("control_dirs"):
+                findings.append(self.finding("EV-IN-011", "missing input: harbor control_dirs (nop-agent jobs over "
+                                             "the same tasks, the suite's refused-fixture items)", {},
+                                             "run the nop agent over the tasks and pass its job directories"))
+            return findings
+        if request.get("suite") == SUITE:  # A4.3: a scoring suite over prediction files; no harness, no cache
+            for key in ("manifest", "base_predictions", "tuned_predictions"):
+                value = request.get(key)
+                if not value or not Path(str(value)).is_file():
+                    findings.append(self.finding(
+                        "EV-IN-009", f"missing input: speech-longform {key} {value!r} is not a file", {key: value},
+                        "pass the whole-call manifest and the base and tuned NeMo output manifests (with pred_text)"))
+            return findings
         benchmarks = list(request.get("benchmarks") or ())
+        # The eval cache holds lm-eval's offline datasets; held-out mode reads only local files, so requiring
+        # the cache there refused a runnable evaluation (found on the A4.4 GPU run).
+        if benchmarks and "eval_cache" not in request:
+            findings.append(self.finding("EV-IN-003", "missing input: eval cache (--eval-cache) not given", {},
+                                         "stage datasets offline into a home-scoped HF_HOME and pass it as --eval-cache"))
+            return findings
         hold = heldout_config(request)
         if not benchmarks and hold is None:
             findings.append(self.finding(
@@ -258,8 +325,8 @@ class EvalSkill(BaseSkill):
                        else f"precondition failed: lm_eval {installed} installed, pinned {PINNED_LM_EVAL}")
                 findings.append(self.finding("EV-IN-004", msg, {"installed": installed, "pinned": PINNED_LM_EVAL},
                                              f"use the env with lm_eval=={PINNED_LM_EVAL}"))
-        cache = Path(request["eval_cache"])
-        if not cache.is_dir():
+        cache = Path(request["eval_cache"]) if request.get("eval_cache") else None
+        if benchmarks and cache is not None and not cache.is_dir():
             findings.append(self.finding("EV-IN-003", f"missing input: eval cache directory {cache}", {"eval_cache": str(cache)},
                                          "stage datasets offline into a home-scoped HF_HOME and pass it as --eval-cache"))
         if benchmarks:
@@ -356,11 +423,17 @@ class EvalSkill(BaseSkill):
 
     # -- run ------------------------------------------------------------------------------------
     def run(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
+        if request.get("suite") == SUITE:
+            return self._speech_longform(request)
+        if request.get("suite") == harbor_suite.SUITE:
+            return self._harbor(request)
+        if request.get("suite") == behaviour_suite.SUITE:
+            return self._skill_behaviour(request)
         benchmarks = list(request.get("benchmarks") or ())
         hold = heldout_config(request)
         policy = load_policy(request["policy"]) if benchmarks else None
         res = self._resolve(request)
-        cache = Path(request["eval_cache"])
+        cache = Path(request["eval_cache"]) if request.get("eval_cache") else None  # lm-eval mode only (EV-IN-003)
         out = Path(request["out"])
         work = out.parent / f"harness-{uuid.uuid4().hex[:8]}"
         baselines = BaselineCache(request.get("baseline_cache") or ctx.artifacts_dir / "eval" / "baselines")
@@ -393,6 +466,17 @@ class EvalSkill(BaseSkill):
                 return self._refused(*refusal)
             rows.extend(held_rows)
             findings.extend(held_findings)
+            # A4.4 (EV-HO-009): a held-out score at a frame count no run has trained at cannot PASS;
+            # a measured regression (red) stays RED.
+            beyond = beyond_envelope(hold.get("video_frames"))
+            if beyond and _video_rows_present(Path(str(hold.get("data"))), str(hold.get("video_column") or "video")):
+                for row in held_rows:
+                    if row.get("status") == "pass":
+                        row.update(status="unmeasured", error=beyond)
+                findings.append(self.finding("EV-HO-009", beyond, {"video_frames": hold.get("video_frames"),
+                                                                    "frame_envelope": frame_envelope()},
+                                             "score at a frame count inside the measured envelope, or measure a "
+                                             "training run at this count first"))
 
         final = verdict((r["status"] for r in rows), limited=limited)
         if limited:
@@ -418,7 +502,7 @@ class EvalSkill(BaseSkill):
             "dtype": request.get("dtype", "bfloat16"),
             "gen_kwargs": request.get("gen_kwargs"),
             "chat_template": chat,
-            "eval_cache": str(cache),
+            "eval_cache": str(cache) if cache is not None else None,
             "base_identity": base_ident,
             "harness_dir": str(work),
             **({"heldout": {"script": str(_heldout_script(hold) or ""), "data": str(hold.get("data")),
@@ -630,7 +714,131 @@ class EvalSkill(BaseSkill):
         return []
 
     # -- handoff --------------------------------------------------------------------------------
+    def _speech_longform(self, request: dict[str, Any]) -> SkillResult:
+        """A4.3: score the suite; a blocking gate is RED whatever the WER (EV-HO-007), missing calls UNMEASURED."""
+        try:
+            scored = speech_score(str(request["manifest"]), str(request["base_predictions"]),
+                                  str(request["tuned_predictions"]))
+        except SpeechScoreRefused as exc:
+            finding = self.finding("EV-IN-009", f"speech-longform inputs cannot carry a WER: {exc}",
+                                   {"manifest": request["manifest"]}, "fix the named input and re-run")
+            return self._refused(finding.message, [finding])
+        totals = scored["totals"]
+        report = {
+            "checkpoint": str(request["tuned_predictions"]),
+            "benchmarks": [{"name": SUITE, "metric": "wer", "score": totals["tuned"]["wer"],
+                            "baseline": totals["base"]["wer"], "status": scored["verdict"].lower()}],
+            "verdict": scored["verdict"],
+            "speech_longform": scored,
+        }
+        out = Path(str(request["out"]))
+        sha = write_report(out, report)
+        ref = ArtifactRef(type="eval_report", id="speech-longform", path=str(out), sha256=sha)
+        findings: list[Finding] = []
+        if scored["verdict"] == "UNMEASURED":
+            findings.append(self.finding("EV-HO-008", f"calls without a prediction: {scored['missing']}",
+                                         {"missing": scored["missing"]}, "predict every call, then re-run the suite"))
+        # PASS here even when a gate blocked: EV-HO-007 fires from check_handoff, which turns it RED
+        status = Status.UNMEASURED if scored["verdict"] == "UNMEASURED" else Status.PASS
+        return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
+                           provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
+
+    def _harbor(self, request: dict[str, Any]) -> SkillResult:
+        """A4.5: score Harbor jobs; measured-only pass@1, negative controls, unmeasured cells never PASS."""
+        tasks = None
+        if request.get("tasks_file"):
+            tasks = [t.strip() for t in Path(str(request["tasks_file"])).read_text(encoding="utf-8").splitlines()
+                     if t.strip()]
+        try:
+            scored = harbor_suite.score([str(d) for d in request["job_dirs"]],
+                                        [str(d) for d in request.get("control_dirs") or ()], tasks,
+                                        float(request.get("max_unmeasured_fraction", 0.0)))
+        except harbor_suite.HarborSuiteRefused as exc:
+            rule = "EV-IN-011" if "control" in str(exc) else "EV-IN-010"
+            finding = self.finding(rule, f"{rule}: harbor suite cannot carry a score: {exc}",
+                                   {"job_dirs": request.get("job_dirs"), "control_dirs": request.get("control_dirs")},
+                                   "fix the named input and re-run")
+            return self._refused(finding.message, [finding])
+        report = {
+            "checkpoint": ",".join(str(d) for d in request["job_dirs"]),
+            "benchmarks": [{"name": "harbor", "metric": "pass_at_1", "score": scored["pass_at_1"], "baseline": None,
+                            "ci95": scored["ci95"], "status": scored["verdict"].lower()}],
+            "verdict": scored["verdict"],
+            "harbor": scored,
+        }
+        out = Path(str(request["out"]))
+        sha = write_report(out, report)
+        ref = ArtifactRef(type="eval_report", id="harbor", path=str(out), sha256=sha)
+        findings: list[Finding] = []
+        dropped = scored["negative_controls"]["non_discriminating"]
+        if dropped:
+            findings.append(self.finding("EV-HO-011", f"{len(dropped)} task(s) dropped: their nop control passed: "
+                                         f"{dropped[:10]}", {"non_discriminating": dropped},
+                                         "repair those tasks' verifiers before scoring them"))
+        if scored["verdict"] == "UNMEASURED":
+            findings.append(self.finding(
+                "EV-HO-010", f"unmeasured cells {scored['unmeasured_cells']}/{scored['cells']} "
+                f"({scored['unmeasured_fraction']}) exceed max_unmeasured_fraction {scored['max_unmeasured_fraction']}"
+                if scored["pass_at_1"] is not None else "no task has a measured trial",
+                {"unmeasured_cells": scored["unmeasured_cells"], "cells": scored["cells"]},
+                "re-run the unmeasured trials (infra), or declare a tolerated max_unmeasured_fraction up front"))
+        status = Status.UNMEASURED if scored["verdict"] == "UNMEASURED" else Status.PASS
+        return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
+                           provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
+
+    def _skill_behaviour(self, request: dict[str, Any]) -> SkillResult:
+        """A4.5: behaviour-eval reports as a benchmark; refused-fixture items required, unmeasured never PASS."""
+        try:
+            scored = behaviour_suite.score([str(r) for r in request["reports"]],
+                                           float(request.get("max_unmeasured_fraction", 0.0)))
+        except behaviour_suite.SkillBehaviourRefused as exc:
+            rule = "EV-IN-011" if "refused-fixture" in str(exc) else "EV-IN-012"
+            finding = self.finding(rule, f"{rule}: skill-behaviour suite cannot carry a score: {exc}",
+                                   {"reports": request.get("reports")}, "fix the named report and re-run")
+            return self._refused(finding.message, [finding])
+        report = {
+            "checkpoint": ",".join(str(r) for r in request["reports"]),
+            "benchmarks": [{"name": f"skill-behaviour/{name}", "metric": "item_pass_rate",
+                            "score": pkg["item_pass_rate"], "baseline": None,
+                            "status": "unmeasured" if pkg["item_pass_rate"] is None else "pass"}
+                           for name, pkg in sorted(scored["packages"].items())],
+            "verdict": scored["verdict"],
+            "skill_behaviour": scored,
+        }
+        out = Path(str(request["out"]))
+        sha = write_report(out, report)
+        ref = ArtifactRef(type="eval_report", id="skill-behaviour", path=str(out), sha256=sha)
+        findings: list[Finding] = []
+        if scored["verdict"] == "UNMEASURED":
+            findings.append(self.finding(
+                "EV-HO-010", f"unmeasured calls {scored['unmeasured_cells']}/{scored['cells']} "
+                f"({scored['unmeasured_fraction']}) exceed max_unmeasured_fraction {scored['max_unmeasured_fraction']}",
+                {"unmeasured_cells": scored["unmeasured_cells"], "cells": scored["cells"]},
+                "resume the behaviour-eval run (--resume) until every call is measured, then re-score"))
+        status = Status.UNMEASURED if scored["verdict"] == "UNMEASURED" else Status.PASS
+        return SkillResult(status=status, payload=report, artifacts=(ref,), findings=tuple(findings),
+                           provenance=make_provenance(self.name, self.version, {"eval_report": sha}))
+
     def check_handoff(self, result: SkillResult, ctx: SkillContext) -> list[Finding]:
+        if (result.payload or {}).get("harbor") or (result.payload or {}).get("skill_behaviour"):  # a benchmark score has no baseline; integrity is what is checked
+            problems = []
+            for ref in result.artifacts:
+                try:
+                    if sha256_file(ref.path) != ref.sha256:
+                        problems.append(f"{ref.path} changed after it was written")
+                except OSError:
+                    problems.append(f"{ref.path} is missing on disk")
+            return [self.finding("EV-HO-004", p, {}) for p in problems]
+        if (result.payload or {}).get("speech_longform"):
+            gates = result.payload["speech_longform"]["gates"]
+            blocked = {name: gate for name, gate in gates.items() if gate.get("verdict") == "FAIL"}
+            if blocked:
+                return [self.finding(
+                    "EV-HO-007", "speech-longform blocked whatever the WER: " + "; ".join(
+                        f"{name} {gate['verdict']} ({gate['detail']})" for name, gate in blocked.items()),
+                    {"gates": gates, "totals": result.payload["speech_longform"]["totals"]},
+                    "a looping or runaway model is not shipped on WER alone: fix decoding or training and re-score")]
+            return []
         problems, counted, blocks = [], [], []
         report = result.payload
         if report.get("limited"):
@@ -683,7 +891,31 @@ class EvalSkill(BaseSkill):
                "eval_cache": "cache", "out": "eval/eval_report.json"}
         held_req = {**req, "benchmarks": [],
                     "heldout": {"data": "heldout.jsonl", "max_length": 16384, "video_frames": 16, "abs_epsilon": 0.05}}
+        speech = {"suite": "speech-longform", "manifest": "longform.jsonl", "base_predictions": "base_pred.jsonl",
+                  "tuned_predictions": "tuned_pred.jsonl", "out": "eval/speech_longform.json"}
+        harbor = {"suite": "harbor", "job_dirs": ["jobs/tb21-qwen35-4b"], "control_dirs": ["jobs/tb21-nop"],
+                  "tasks_file": "tb_tasks.txt", "out": "eval/harbor.json"}
         return {
+            # A4.5 harbor suite: the decisive fact sits in the request or in a short observed fact
+            "EV-IN-010": {"request": harbor, "observed": "job directory missing on disk",
+                          "expected": "REFUSED naming EV-IN-010 (no Harbor trials to score)"},
+            "EV-IN-011": {"request": {**harbor, "control_dirs": []},
+                          "expected": "REFUSED naming EV-IN-011 (no negative-control nop trials)"},
+            "EV-HO-010": {"request": harbor, "simulated_scores": "37 of 444 trials unmeasured",
+                          "expected": "UNMEASURED 95 naming EV-HO-010 (unmeasured cells over max 0)"},
+            "EV-HO-011": {"request": {**harbor, "max_unmeasured_fraction": 1.0},
+                          "simulated_scores": "nop control passed on two tasks",
+                          "expected": "PASS with INFO EV-HO-011 naming the two dropped tasks"},
+            "EV-IN-012": {"request": {"suite": "skill-behaviour", "reports": ["oracle_report.json"],
+                                      "out": "eval/skill_behaviour.json"},
+                          "observed": "report rate does not reproduce",
+                          "expected": "REFUSED naming EV-IN-012 (the re-score does not reproduce the report)"},
+            "EV-IN-009": {"request": {**speech, "tuned_predictions": "missing_pred.jsonl"},
+                          "expected": "REFUSED naming EV-IN-009 (a prediction file is missing)"},
+            "EV-HO-007": {"request": speech, "simulated_scores": "tuned has 285 loop words, best WER",
+                          "expected": "RED 5 naming EV-HO-007: the repetition-loop gate blocks whatever the WER"},
+            "EV-HO-008": {"request": speech, "simulated_scores": "one call has no tuned prediction",
+                          "expected": "UNMEASURED 95 naming EV-HO-008 (an undercovered call is never a pass)"},
             "EV-IN-001": {"request": {**req, "checkpoint": "missing"}, "expected": "REFUSED naming EV-IN-001"},
             "EV-IN-002": {"request": {k: v for k, v in req.items() if k != "base"},
                           "expected": "REFUSED naming EV-IN-002 (full checkpoint, no base)"},
@@ -717,6 +949,12 @@ class EvalSkill(BaseSkill):
                                                   "baseline": {"rows_used": 170, "rows_dropped": 1, "mean_nll_nats": 1.4,
                                                                "perplexity": 4.19}}},
                           "expected": "UNMEASURED 95 with EV-HO-005 (row counts differ: never PASS)"},
+            "EV-HO-009": {"request": {**held_req, "heldout": {**held_req["heldout"], "video_frames": 32}},
+                          "harness": {"heldout": {"checkpoint": {"rows_used": 171, "rows_dropped": 0, "mean_nll_nats": 0.5,
+                                                                 "perplexity": 1.65},
+                                                  "baseline": {"rows_used": 171, "rows_dropped": 0, "mean_nll_nats": 1.4,
+                                                               "perplexity": 4.06}}},
+                          "expected": "UNMEASURED 95 with EV-HO-009 (32 frames > the measured 16; a passing row cannot PASS)"},
             "EV-HO-006": {"request": held_req,
                           "harness": {"heldout": {"checkpoint": {"rows_used": 171, "rows_dropped": 0, "mean_nll_nats": 0.5},
                                                   "baseline": {"rows_used": 171}}},

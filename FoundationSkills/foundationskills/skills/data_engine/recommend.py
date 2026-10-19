@@ -16,7 +16,7 @@ from typing import Any
 
 from foundationskills.core.schema import assert_valid, load_schema
 
-FORMATS = ("pretrain", "cpt", "sft", "preference", "rl", "mm_sft")
+FORMATS = ("pretrain", "cpt", "sft", "preference", "rl", "mm_sft", "asr")
 
 
 def recommend_pipeline(
@@ -57,6 +57,18 @@ def recommend_pipeline(
     sft_like = target_format in {"sft", "mm_sft"}
     preference_like = target_format == "preference"
     rl_like = target_format == "rl"
+    if target_format == "asr":
+        # A4.3: speech manifests are validated by FS at ingest (duplicates, field types) and their audio is MEASURED
+        # here; text cleaning, dedup, formatting and tokenisation do not apply to audio rows.
+        add("audio_sample_rate", {"sample_rate": 16000},
+            "measure every row's audio header and keep only 16 kHz rows (the FS manifest has no rate field)")
+        rationale.append("asr: rows stay in FS's speech-manifest shape {id, audio, answer, duration}; "
+                         "duplicate ids/audio paths make FS's ManifestReport not ok (readiness DE-RDY-013)")
+        spec = {"target_format": target_format, "ops": ops, "seed": 0, "tokenizer": tokenizer, "rationale": rationale,
+                "chat_template_family": None, "goal": goal, "algorithm": algorithm, "domain": domain,
+                "recommended": True}
+        assert_valid(spec, load_schema("artifacts/data_pipeline_spec"), "data_pipeline_spec")
+        return spec
 
     # 2. clean
     if pretrain_like:

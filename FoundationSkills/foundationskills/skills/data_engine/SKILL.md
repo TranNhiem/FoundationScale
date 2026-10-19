@@ -47,7 +47,8 @@ Request object (validated against the skill input schema):
 - `sources` (required unless `pipeline` is given): `[{uri, kind}]` where kind
   is one of `local_dir | jsonl | json | parquet | csv | hf_dataset | documents
   | image_text` (a `raw_data_ref` payload).
-- `target_format` (required): `pretrain | cpt | sft | mm_sft | preference | rl`.
+- `target_format` (required): `pretrain | cpt | sft | mm_sft | preference | rl | asr`. `asr` takes
+  FoundationScale speech manifests (source kind `speech_manifest`, rows `{id, audio, answer, duration}`).
 - Optional: `goal`, `algorithm`, `tokenizer`, `chat_template_family`, `domain`,
   `benchmarks` (triggers decontam; names follow eval_policy.yaml, e.g. `arc_easy`),
   `benchmark_sources` (`{name: local file}`) or `allow_benchmark_download: true`
@@ -72,7 +73,7 @@ Payload extras: `stats.json` in `out_dir` with every op's in/out/dropped
 counters and the realized mixture.
 
 ## Scope
-- Stages: pretrain, cpt, sft, preference, rl (mm_sft via image_column).
+- Stages: pretrain, cpt, sft, preference, rl (mm_sft via image_column); asr data for FS speech fine-tuning.
 - Model types: llm and vlm. Families: any. Methods/hardware: not applicable.
 - FS interface: emits artifacts only; consumes nothing from FS directly, but
   consults `ctx.capabilities` for the preference-family warning (DE-IN-006).
@@ -91,6 +92,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | DE-IN-006 | input | WARN | preference target while the installed FS cannot run the preference family |
 | DE-IN-007 | input | BLOCK | `llm_classify`/`llm_enhance` without a usable `config.backend` (static), or a backend config error at run time → REFUSED |
 | DE-IN-008 | input | BLOCK | `semantic_dedup`/`video_ingest`/`difficulty_filter` runtime dependency unavailable (encoder not cached, ffmpeg/ffprobe missing, ASR model not cached) — checked offline by the op's `preflight`, or raised at run time → REFUSED; nothing is downloaded |
+| DE-IN-009 | input | BLOCK | `asr` target without a `speech_manifest` source (asr rows must be FS speech-manifest rows FS can validate) |
 | DE-HO-001 | handoff | BLOCK | readiness verdict is RED |
 | DE-HO-002 | handoff | WARN | readiness verdict is UNMEASURED (null checks listed) |
 | DE-HO-003 | handoff | BLOCK | zero records written |
@@ -105,6 +107,8 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | DE-RDY-009 | readiness | check | every shard's first record carries the FS columns |
 | DE-RDY-010 | readiness | disclosure | sft/mm_sft: FS trains on the full rendered text (no assistant-only loss masking) |
 | DE-RDY-011 | readiness | check | sft/mm_sft: training targets start exactly as the tokenizer's inference prompt does (Gemma-4 26B/31B empty-thought prefix aligned) |
+| DE-RDY-012 | readiness | check | asr: every kept row's audio MEASURED at 16 kHz by `audio_sample_rate` (soundfile header); unmeasured is never a pass |
+| DE-RDY-013 | readiness | check | asr: FS's `ManifestReport` is ok for every speech source (duplicate ids/audio paths or field problems make it RED) |
 
 (Readiness rule ids DE-RDY-001..011 are emitted by
 `foundationskills.skills.data_engine.report.build_readiness`; consult the
@@ -208,6 +212,16 @@ and every touched record gets `meta.llm` provenance (model, prompt hash, cache h
   with its source ≥ `min_overlap`), or it is dropped as `ungrounded`.
 
 Design record and survey: `artifacts/research/llm_data_engine.md`.
+
+## Speech (asr)
+
+`target_format: "asr"` reads FoundationScale speech manifests (`kind: "speech_manifest"`). FS's own
+`upstream.contracts.read_speech_manifest` validates every row and counts duplicate ids and audio paths; nothing is
+reimplemented here. The `audio_sample_rate` op then MEASURES each row's audio header with `soundfile` and keeps only
+16 kHz rows (others drop as `sample_rate_not_<rate>`, unreadable files as `audio_unreadable`): the FS manifest has no
+rate field, and the Earnings-22 long-form set's metadata said 16 kHz while 5 of its 6 calls were not. Rows stay in FS's
+manifest shape. Readiness for asr: DE-RDY-012 (rates measured), DE-RDY-013 (FS manifest report ok); token, truncation
+and (by default) PII checks report "not applicable" for audio rows. Without `soundfile` the op refuses (DE-IN-008).
 
 ## Semantic, tool-call and video ops
 - `semantic_dedup` — sentence-transformers embeddings (default

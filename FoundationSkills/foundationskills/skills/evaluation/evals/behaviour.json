@@ -47,7 +47,7 @@
           "value": 0.004
         }
       ],
-      "question": "I want to evaluate checkpoint `ck` against its base model `base` on `mmlu` using the pinned lm-evaluation-harness, fully offline, with `cache` as the eval cache, `eval_policy.yaml` as the policy, and the verdict written to `eval/eval_report.json`. The harness run I just saw reported baseline = 0.5, checkpoint = 0.4, and stderr = 0.004. Given those numbers and the one-sided stderr-band comparison against the base model, what's the verdict and what ends up in `eval/eval_report.json`?",
+      "question": "I want to evaluate my checkpoint `ck` offline against its base model `base`, using the policy in `eval_policy.yaml`, with lm-eval-harness pinned benchmarks `mmlu` and the VLM held-out loss over image, video, and text rows (video included) run through FoundationScale's `eval_heldout_loss.py`, caching under `cache` and writing the single verdict to `eval/eval_report.json`. From the harness run I already have: baseline = 0.5, checkpoint = 0.4, stderr = 0.004. Please tell me what the outcome is.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -91,7 +91,7 @@
           "value": null
         }
       ],
-      "question": "I want to evaluate my PEFT adapter checkpoint \"ck\" against its base model \"base\" on the \"mmlu\" benchmark using the pinned lm-evaluation-harness in offline mode, with \"eval_policy.yaml\" as the policy file, \"cache\" as the eval cache, and the verdict written to \"eval/eval_report.json\". The harness run came back with baseline = 0.5 and checkpoint = null. Given those are the numbers I actually observed, what is the outcome of the evaluation?",
+      "question": "I ran the offline eval with base \"base\", checkpoint \"ck\", benchmarks [\"mmlu\"], policy \"eval_policy.yaml\", eval cache \"cache\", and the report written to \"eval/eval_report.json\". The harness result I observed is baseline = 0.5, and the harness result I observed is checkpoint = null. I also want the VLM held-out loss over the image, video, and text rows — video included — through FoundationScale's eval_heldout_loss.py, feeding the same eval cache and report. Can you run it and tell me what the outcome is and what verdict lands in eval_report.json?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -136,7 +136,7 @@
           "value": 0.5
         }
       ],
-      "question": "I ran the pinned lm-evaluation-harness offline on model \"ck\" against its base \"base\", using benchmark mmlu with limit 8, eval cache at \"cache\", policy \"eval_policy.yaml\", and output to \"eval/eval_report.json\". The harness result for the baseline is 0.5, and the harness result for the checkpoint is 0.5. Given those two values and the one-sided stderr-band comparison against the base model, what verdict did the eval produce and what does eval_report.json end up containing?",
+      "question": "I'm running an offline eval of my checkpoint \"ck\" against base \"base\" using the pinned lm-evaluation-harness benchmarks (just \"mmlu\", with limit = 8), plus the VLM held-out loss over image/video/text rows with video included via FoundationScale's eval_heldout_loss.py, with eval_cache = \"cache\", policy = \"eval_policy.yaml\", and the report written to eval/eval_report.json. The harness run I observed came back with baseline = 0.5 and checkpoint = 0.5, so the benchmark score is unchanged. I want the one-sided regression band applied on top of that. What's the final verdict in eval_report.json?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -173,7 +173,7 @@
           "value": "delete report before handoff"
         }
       ],
-      "question": "I want to run the pinned lm-evaluation-harness fully offline to evaluate checkpoint \"ck\" (PEFT adapter or full) against base model \"base\" on benchmark \"mmlu\", using eval cache \"cache\" and policy file \"eval_policy.yaml\", writing the one-sided stderr-band verdict to \"eval/eval_report.json\". I also want the report deleted before handoff. I observed that what happened to the report is \"delete report before handoff\". What is the outcome?",
+      "question": "I want to evaluate checkpoint \"ck\" (full or PEFT adapter) offline against base model \"base\", running benchmark \"mmlu\" under pinned lm-evaluation-harness with a one-sided regression band, plus VLM held-out loss over image, video, and text rows (video included) via FoundationScale's eval_heldout_loss.py, with eval cache at \"cache\", policy from \"eval_policy.yaml\", and one verdict written to \"eval/eval_report.json\". On disk I observed that what happened was \"delete report before handoff\". What is the outcome here?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -257,7 +257,7 @@
           "value": 171
         }
       ],
-      "question": "I want to run the offline evaluation with checkpoint \"ck\" against base model \"base\", using eval_policy.yaml, eval cache dir \"cache\", benchmarks list [], heldout data \"heldout.jsonl\" with abs_epsilon 0.05, max_length 16384, and video_frames 16, writing to eval/eval_report.json. The heldout run I observed gave baseline mean_nll_nats = 1.4 and perplexity = 4.19 with rows_used = 170 and rows_dropped = 1, while the checkpoint gave mean_nll_nats = 0.5 and perplexity = 1.66 with rows_used = 171 and rows_dropped = 0. What is the resulting verdict in eval_report.json?",
+      "question": "I want to evaluate checkpoint \"ck\" offline against base model \"base\" using eval_policy.yaml, writing one verdict to eval/eval_report.json with eval cache at \"cache\"; my benchmark list came through empty, and the held-out VLM loss run uses heldout.jsonl with abs_epsilon 0.05, max_length 16384, and 16 video frames with video rows included. From the run I observed heldout.baseline.mean_nll_nats = 1.4, heldout.baseline.perplexity = 4.19, heldout.baseline.rows_dropped = 1, and heldout.baseline.rows_used = 170. I also observed heldout.checkpoint.mean_nll_nats = 0.5, heldout.checkpoint.perplexity = 1.66, heldout.checkpoint.rows_dropped = 0, and heldout.checkpoint.rows_used = 171. What is the outcome and the final verdict written to eval_report.json?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -321,7 +321,236 @@
           "value": 171
         }
       ],
-      "question": "I ran the eval with base \"base\", checkpoint \"ck\", policy \"eval_policy.yaml\", cache \"cache\", and heldout data \"heldout.jsonl\" (max_length 16384, video_frames 16, abs_epsilon 0.05), writing to eval/eval_report.json. From the harness I observed heldout.baseline.rows_used = 171, heldout.checkpoint.mean_nll_nats = 0.5, heldout.checkpoint.rows_dropped = 0, and heldout.checkpoint.rows_used = 171. I passed benchmarks as an empty list. What's the verdict and the full eval_report.json outcome?",
+      "question": "Run the evaluation skill with base `base`, checkpoint `ck`, eval cache `cache`, policy `eval_policy.yaml`, and output `eval/eval_report.json`; the pinned benchmark list I'm sending is `benchmarks: []`, and the heldout config is `heldout.jsonl` with `max_length=16384`, `video_frames=16`, `abs_epsilon=0.05`. From the harness result I already have: `heldout.baseline.rows_used = 171`, `heldout.checkpoint.mean_nll_nats = 0.5`, `heldout.checkpoint.rows_dropped = 0`, and `heldout.checkpoint.rows_used = 171`. What's the final verdict and what lands in `eval/eval_report.json`?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-007",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-007",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "a speech-longform gate blocked (runaway or repetition loops), whatever the WER",
+      "fixture": {
+        "expected": "RED 5 naming EV-HO-007: the repetition-loop gate blocks whatever the WER",
+        "request": {
+          "base_predictions": "base_pred.jsonl",
+          "manifest": "longform.jsonl",
+          "out": "eval/speech_longform.json",
+          "suite": "speech-longform",
+          "tuned_predictions": "tuned_pred.jsonl"
+        },
+        "simulated_scores": "tuned has 285 loop words, best WER"
+      },
+      "fixture_sha256": "fa346312be210ec04b29ead21ed0f32bf5814e062b5ab253e6a314aa05b62400",
+      "expected_behavior": [
+        "Identifies the problem: a speech-longform gate blocked (runaway or repetition loops), whatever the WER",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule EV-HO-007"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-007 (BLOCK, handoff phase) fires: a speech-longform gate blocked (runaway or repetition loops), whatever the WER.",
+      "trigger_facts": [
+        {
+          "path": "simulated_scores",
+          "value": "tuned has 285 loop words, best WER"
+        }
+      ],
+      "question": "I want to run the offline evaluation with base_predictions = \"base_pred.jsonl\", tuned_predictions = \"tuned_pred.jsonl\", manifest = \"longform.jsonl\", out = \"eval/speech_longform.json\", and suite = \"speech-longform\". I've also seen simulated_scores = \"tuned has 285 loop words, best WER\". What's the verdict in eval_report.json?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-008",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-008",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "speech-longform calls have no prediction (undercovered), so the suite cannot PASS",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming EV-HO-008 (an undercovered call is never a pass)",
+        "request": {
+          "base_predictions": "base_pred.jsonl",
+          "manifest": "longform.jsonl",
+          "out": "eval/speech_longform.json",
+          "suite": "speech-longform",
+          "tuned_predictions": "tuned_pred.jsonl"
+        },
+        "simulated_scores": "one call has no tuned prediction"
+      },
+      "fixture_sha256": "de1ac5ddcb87e8b078f5b5ad1318cfbb2e9947b286edff491e47aabbb7802535",
+      "expected_behavior": [
+        "Identifies the problem: speech-longform calls have no prediction (undercovered), so the suite cannot PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule EV-HO-008"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-008 (WARN, handoff phase) fires: speech-longform calls have no prediction (undercovered), so the suite cannot PASS.",
+      "trigger_facts": [
+        {
+          "path": "simulated_scores",
+          "value": "one call has no tuned prediction"
+        }
+      ],
+      "question": "I want to evaluate my checkpoint offline on the speech-longform suite using base_pred.jsonl as the base predictions, tuned_pred.jsonl as the tuned predictions, and longform.jsonl as the manifest, writing the verdict to eval/speech_longform.json. When I ran the simulated scores, I observed that \"one call has no tuned prediction.\" What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-009",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-009",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "held-out video_frames lies above the measured frame envelope (16 uniform frames per clip): a passing held-out row is UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED 95 with EV-HO-009 (32 frames > the measured 16; a passing row cannot PASS)",
+        "harness": {
+          "heldout": {
+            "baseline": {
+              "mean_nll_nats": 1.4,
+              "perplexity": 4.06,
+              "rows_dropped": 0,
+              "rows_used": 171
+            },
+            "checkpoint": {
+              "mean_nll_nats": 0.5,
+              "perplexity": 1.65,
+              "rows_dropped": 0,
+              "rows_used": 171
+            }
+          }
+        },
+        "request": {
+          "base": "base",
+          "benchmarks": [],
+          "checkpoint": "ck",
+          "eval_cache": "cache",
+          "heldout": {
+            "abs_epsilon": 0.05,
+            "data": "heldout.jsonl",
+            "max_length": 16384,
+            "video_frames": 32
+          },
+          "out": "eval/eval_report.json",
+          "policy": "eval_policy.yaml"
+        }
+      },
+      "fixture_sha256": "ad535c24dbc9e0a0144f4c90bc27238239101ae30472051312849d4b8ea5f987",
+      "expected_behavior": [
+        "Identifies the problem: held-out video_frames lies above the measured frame envelope (16 uniform frames per clip): a passing held-out row is UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule EV-HO-009"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-009 (WARN, handoff phase) fires: held-out video_frames lies above the measured frame envelope (16 uniform frames per clip): a passing held-out row is UNMEASURED, never PASS.",
+      "trigger_facts": [
+        {
+          "path": "harness.heldout.baseline.mean_nll_nats",
+          "value": 1.4
+        },
+        {
+          "path": "harness.heldout.baseline.perplexity",
+          "value": 4.06
+        },
+        {
+          "path": "harness.heldout.baseline.rows_dropped",
+          "value": 0
+        },
+        {
+          "path": "harness.heldout.baseline.rows_used",
+          "value": 171
+        },
+        {
+          "path": "harness.heldout.checkpoint.mean_nll_nats",
+          "value": 0.5
+        },
+        {
+          "path": "harness.heldout.checkpoint.perplexity",
+          "value": 1.65
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_dropped",
+          "value": 0
+        },
+        {
+          "path": "harness.heldout.checkpoint.rows_used",
+          "value": 171
+        }
+      ],
+      "question": "I want to run the offline evaluation of checkpoint `ck` against base model `base`, using policy `eval_policy.yaml`, eval cache `cache`, and writing the combined verdict to `eval/eval_report.json`. For the VLM held-out loss I want `heldout.jsonl` evaluated with `max_length` 16384, `video_frames` 32, and a one-sided regression `abs_epsilon` of 0.05. From the harness run I already have these held-out numbers: baseline mean_nll_nats = 1.4, baseline perplexity = 4.06, baseline rows_dropped = 0, baseline rows_used = 171, and checkpoint mean_nll_nats = 0.5, checkpoint perplexity = 1.65, checkpoint rows_dropped = 0, checkpoint rows_used = 171. The benchmark list I'm passing is empty. What does the evaluation produce as the final verdict in `eval/eval_report.json`?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-010",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-010",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "benchmark suite (harbor, skill-behaviour): unmeasured cells exceed max_unmeasured_fraction, or nothing was measured - status UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED 95 naming EV-HO-010 (unmeasured cells over max 0)",
+        "request": {
+          "control_dirs": [
+            "jobs/tb21-nop"
+          ],
+          "job_dirs": [
+            "jobs/tb21-qwen35-4b"
+          ],
+          "out": "eval/harbor.json",
+          "suite": "harbor",
+          "tasks_file": "tb_tasks.txt"
+        },
+        "simulated_scores": "37 of 444 trials unmeasured"
+      },
+      "fixture_sha256": "2d14a299dc654401ac2c821deedb46d25d63164b86d3242ad064e461d9f9793b",
+      "expected_behavior": [
+        "Identifies the problem: benchmark suite (harbor, skill-behaviour): unmeasured cells exceed max_unmeasured_fraction, or nothing was measured - status UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule EV-HO-010"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-010 (WARN, handoff phase) fires: benchmark suite (harbor, skill-behaviour): unmeasured cells exceed max_unmeasured_fraction, or nothing was measured - status UNMEASURED, never PASS.",
+      "trigger_facts": [
+        {
+          "path": "simulated_scores",
+          "value": "37 of 444 trials unmeasured"
+        }
+      ],
+      "question": "Run the evaluation skill on the checkpoint in `jobs/tb21-qwen35-4b` against the control `jobs/tb21-nop`, using the `harbor` suite with `tb_tasks.txt`, and write the result to `eval/harbor.json`. I want the pinned lm-evaluation-harness benchmarks under a one-sided regression band plus the VLM held-out loss from FoundationScale's `eval_heldout_loss.py` covering image, video, and text rows (video included), with one verdict into `eval_report.json`. One thing I observed from the simulated scores: \"37 of 444 trials unmeasured\". Can you tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-HO-011",
+      "skill": "evaluation",
+      "rule_id": "EV-HO-011",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "harbor suite: tasks dropped because their negative control passed (a verifier that cannot discriminate); each is named and counted",
+      "fixture": {
+        "expected": "PASS with INFO EV-HO-011 naming the two dropped tasks",
+        "request": {
+          "control_dirs": [
+            "jobs/tb21-nop"
+          ],
+          "job_dirs": [
+            "jobs/tb21-qwen35-4b"
+          ],
+          "max_unmeasured_fraction": 1.0,
+          "out": "eval/harbor.json",
+          "suite": "harbor",
+          "tasks_file": "tb_tasks.txt"
+        },
+        "simulated_scores": "nop control passed on two tasks"
+      },
+      "fixture_sha256": "b6b37d9d9dcd1561d9819523940c6e707b338bbc81f10a2eb99829636c64feda",
+      "expected_behavior": [
+        "Identifies the problem: harbor suite: tasks dropped because their negative control passed (a verifier that cannot discriminate); each is named and counted",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule EV-HO-011"
+      ],
+      "ground_truth": "evaluation: rule EV-HO-011 (INFO, handoff phase) fires: harbor suite: tasks dropped because their negative control passed (a verifier that cannot discriminate); each is named and counted.",
+      "trigger_facts": [
+        {
+          "path": "simulated_scores",
+          "value": "nop control passed on two tasks"
+        }
+      ],
+      "question": "I want to run the evaluation skill on my Qwen3.5-4B job: control dir `jobs/tb21-nop`, job dir `jobs/tb21-qwen35-4b`, suite `harbor`, tasks file `tb_tasks.txt`, `max_unmeasured_fraction` 1.0, writing to `eval/harbor.json`. One thing I've already observed is `simulated_scores = \"nop control passed on two tasks\"`. Please run the full eval — pinned lm-eval-harness benchmarks under the one-sided regression band plus the VLM held-out loss over image/video/text rows with video included — and tell me what the outcome is.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -352,7 +581,7 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-001 (BLOCK, input phase) fires: checkpoint (or the run manifest naming it) missing or not a directory.",
       "trigger_facts": [],
-      "question": "I want to evaluate a checkpoint with the pinned lm-evaluation-harness, fully offline, against its base model, with a one-sided stderr-band verdict written to eval/eval_report.json. The values I'm working with are base \"base\", benchmarks [\"mmlu\"], checkpoint \"missing\", eval_cache \"cache\", out \"eval/eval_report.json\", and policy \"eval_policy.yaml\". I've checked disk and the checkpoint path \"missing\" doesn't resolve to any existing file or directory. What's the outcome?",
+      "question": "I want to evaluate my checkpoint offline against its base model and need one verdict written to eval/eval_report.json. Please use base as the base model, checkpoint as the checkpoint to evaluate (it's a path called \"missing\" in my setup), eval_policy.yaml as the policy, and cache for the eval cache. Run the pinned lm-evaluation-harness benchmarks with just mmlu under the one-sided regression band, and also compute the VLM held-out loss on held-out rows covering image, video, and text, with video included, using FoundationScale's eval_heldout_loss.py. Let me know what the outcome is.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -382,7 +611,7 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-002 (BLOCK, input phase) fires: no resolvable local base model to serve as the baseline.",
       "trigger_facts": [],
-      "question": "I want to run the evaluation skill on my checkpoint \"ck\" (it may be a full model or a PEFT adapter) using the pinned lm-evaluation-harness, fully offline. Please evaluate it against its base model on the mmlu benchmark, using \"eval_policy.yaml\" as the policy and \"cache\" as the eval cache. Write the results, including the one-sided stderr-band verdict, to eval/eval_report.json.",
+      "question": "Please evaluate my checkpoint `ck` offline against its base model — it may be a full checkpoint or a PEFT adapter, so handle either. Run the pinned `mmlu` benchmark under the one-sided regression band defined in `eval_policy.yaml`, and also compute the VLM held-out loss with FoundationScale's `eval_heldout_loss.py` across image, video, and text rows, making sure video is included. Use `cache` as the eval cache. Fold everything into a single verdict written to `eval/eval_report.json`.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -391,7 +620,7 @@
       "rule_id": "EV-IN-003",
       "severity": "BLOCK",
       "phase": "input",
-      "description": "eval cache (--eval-cache) missing",
+      "description": "eval cache (--eval-cache) missing in lm-eval (benchmark) mode",
       "fixture": {
         "expected": "REFUSED naming EV-IN-003",
         "request": {
@@ -407,13 +636,13 @@
       },
       "fixture_sha256": "3f9b3477af49d94df966f7991e56473342e1cba91f4b71c684dc1acee78ec85c",
       "expected_behavior": [
-        "Identifies the problem: eval cache (--eval-cache) missing",
+        "Identifies the problem: eval cache (--eval-cache) missing in lm-eval (benchmark) mode",
         "Refuses before doing any work (status REFUSED, nothing written) instead of running",
         "Cites rule EV-IN-003"
       ],
-      "ground_truth": "evaluation: rule EV-IN-003 (BLOCK, input phase) fires: eval cache (--eval-cache) missing.",
+      "ground_truth": "evaluation: rule EV-IN-003 (BLOCK, input phase) fires: eval cache (--eval-cache) missing in lm-eval (benchmark) mode.",
       "trigger_facts": [],
-      "question": "I want to evaluate the checkpoint `ck` against its base model `base` on `mmlu`, offline with the pinned lm-evaluation-harness, producing a one-sided stderr-band verdict into `eval/eval_report.json` per `eval_policy.yaml`. One thing I already know is that `eval_cache` is `missing` in my setup. What's the outcome?",
+      "question": "Please evaluate my checkpoint `ck` offline against base model `base`, running the pinned `mmlu` benchmark under the one-sided regression band defined in `eval_policy.yaml`, and also compute the VLM held-out loss across the image, video, and text rows (video included) with FoundationScale's `eval_heldout_loss.py`. Note that `eval_cache` is `missing`, so you'll need to pull whatever eval data you need fresh. Write the combined verdict to `eval/eval_report.json`.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -450,7 +679,7 @@
           "value": "0.4.11"
         }
       ],
-      "question": "I want to evaluate my checkpoint `ck` offline against the base model `base`, using the pinned benchmark `mmlu`, the eval cache at `cache`, the policy in `eval_policy.yaml`, and I want the single verdict written to `eval/eval_report.json`. I've already confirmed the installed lm_eval version is `0.4.11`, matching the pinned version `0.4.11`. The run should also cover the VLM held-out loss over image, video, and text rows, with video included, through FoundationScale's `eval_heldout_loss.py`. What's the outcome?",
+      "question": "I want to run the evaluation skill on my checkpoint \"ck\" against its base model \"base\", covering the mmlu benchmark in cache, with the regression policy in eval_policy.yaml and the final verdict written to eval/eval_report.json. I can confirm the installed lm_eval version is \"0.4.11\", matching the pinned harness version. Please include the VLM held-out loss evaluation via FoundationScale's eval_heldout_loss.py across image, video, and text rows, with video included. What is the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -481,7 +710,7 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-005 (BLOCK, input phase) fires: eval policy invalid, a benchmark has no policy entry, needs an LLM judge, or the request holds neither a benchmark nor a held-out hit.",
       "trigger_facts": [],
-      "question": "I want to run an offline evaluation of checkpoint \"ck\" (full or PEFT adapter) against base model \"base\", using the pinned lm-evaluation-harness benchmarks from eval_policy.yaml plus the VLM held-out loss across image, video, and text rows (video included) via FoundationScale's eval_heldout_loss.py. The benchmarks I'm passing are [\"not_in_policy\"], with eval cache directory \"cache\" and the policy file eval_policy.yaml. Please write the single combined verdict to eval/eval_report.json. What's the outcome?",
+      "question": "Evaluate my checkpoint \"ck\" (full or PEFT adapter) offline against base model \"base\", using the pinned lm-evaluation-harness benchmarks listed in \"eval_policy.yaml\" — here I want the benchmark \"not_in_policy\" included — plus the VLM held-out loss over image, video, and text rows (include video) via FoundationScale's eval_heldout_loss.py. Use eval cache \"cache\", and write the single combined verdict to \"eval/eval_report.json\".",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -515,7 +744,7 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-006 (BLOCK, input phase) fires: held-out data missing/unreadable, or the eval_heldout_loss.py script is missing (never a silent fallback).",
       "trigger_facts": [],
-      "question": "Please evaluate checkpoint `ck` offline against its base model `base`, using `eval_policy.yaml` for the one-sided regression band and writing the single verdict to `eval/eval_report.json`, with `cache` as the eval cache. For the VLM held-out loss, use `missing.jsonl` as the held-out data with `abs_epsilon` 0.05 and `max_length` 16384, and make sure image, video, and text rows are all covered with video included. The `benchmarks` list is empty, so nothing beyond the held-out loss is being pulled in from lm-evaluation-harness. Let me know what the outcome is.",
+      "question": "I want to run an offline evaluation of my checkpoint \"ck\" against its base model \"base\", with the policy in \"eval_policy.yaml\" and an eval cache at \"cache\". Please run the pinned lm-evaluation-harness benchmarks under the one-sided regression band — I don't have a benchmark list specified, so use whatever the policy pins — and also compute the VLM held-out loss over \"missing.jsonl\" with max_length 16384 and abs_epsilon 0.05, covering the image, video, and text rows with video included. Write the single combined verdict to \"eval/eval_report.json\". What's the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -549,7 +778,7 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-007 (BLOCK, input phase) fires: held-out rows carry video but video_frames is unset.",
       "trigger_facts": [],
-      "question": "I want to run an offline evaluation of checkpoint `ck` (against base model `base`) using the policy in `eval_policy.yaml`, with the benchmark list in my request currently empty, and write the single verdict to `eval/eval_report.json`. Please use `cache` as the eval cache, and include the VLM held-out loss via FoundationScale's `eval_heldout_loss.py` on `video_rows.jsonl` with `max_length` 16384 and `abs_epsilon` 0.05, covering image, video, and text rows with video included. Let me know what the resulting verdict is.",
+      "question": "I want to evaluate checkpoint `ck` offline against base model `base` using the policy in `eval_policy.yaml`, with the harness cache at `cache` and one combined verdict written to `eval/eval_report.json`. I haven't listed any specific benchmarks in my request, so use whatever the pinned lm-evaluation-harness set is under the one-sided regression band. For the VLM side I want held-out loss on `video_rows.jsonl` with `abs_epsilon` 0.05 and `max_length` 16384, and I do want the video rows included alongside image and text. Run it through FoundationScale's `eval_heldout_loss.py` and tell me what the final verdict comes out as.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -585,7 +814,137 @@
       ],
       "ground_truth": "evaluation: rule EV-IN-008 (BLOCK, input phase) fires: video_frames disagrees with the run manifest's FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES.",
       "trigger_facts": [],
-      "question": "I want to evaluate my checkpoint \"ck\" against base \"base\", writing one verdict to eval/eval_report.json using policy \"eval_policy.yaml\", the run manifest run_manifest.json, and eval cache \"cache\". The held-out VLM pass should use heldout.jsonl with abs_epsilon 0.05, max_length 16384, and video_frames 24, covering image, video, and text rows with video included. The benchmarks list I supplied is empty, and my policy file is eval_policy.yaml. What is the outcome?",
+      "question": "Please evaluate my checkpoint `ck` (full or PEFT adapter) offline against base model `base`, using the pinned lm-evaluation-harness benchmarks and a one-sided regression band, and write the single verdict to `eval/eval_report.json`. Use `eval_policy.yaml` for the policy and `run_manifest.json` for the run manifest, with `cache` as the eval cache. Also run the VLM held-out loss via FoundationScale's `eval_heldout_loss.py` on `heldout.jsonl` with `abs_epsilon` 0.05, `max_length` 16384, and `video_frames` 24, covering image, video, and text rows including video. Note that the `benchmarks` list came through empty — use whatever pinned benchmark set the policy defines.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-009",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-009",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "speech-longform suite input (manifest or a prediction file) missing, unreadable or not scorable",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-009 (a prediction file is missing)",
+        "request": {
+          "base_predictions": "base_pred.jsonl",
+          "manifest": "longform.jsonl",
+          "out": "eval/speech_longform.json",
+          "suite": "speech-longform",
+          "tuned_predictions": "missing_pred.jsonl"
+        }
+      },
+      "fixture_sha256": "c424f51c733f42bc66de482f4385ace7eaac297dca56cd722cea4098749dec9f",
+      "expected_behavior": [
+        "Identifies the problem: speech-longform suite input (manifest or a prediction file) missing, unreadable or not scorable",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-009"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-009 (BLOCK, input phase) fires: speech-longform suite input (manifest or a prediction file) missing, unreadable or not scorable.",
+      "trigger_facts": [],
+      "question": "I want to run an offline evaluation of my speech checkpoint against its base model and get a single verdict written to eval/speech_longform.json. Please use the suite \"speech-longform\", with base_pred.jsonl as the base predictions, missing_pred.jsonl as the tuned predictions, and longform.jsonl as the manifest. Let me know what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-010",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-010",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "harbor suite: a job directory is missing or holds no trial, or tasks_file is unreadable",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-010 (no Harbor trials to score)",
+        "observed": "job directory missing on disk",
+        "request": {
+          "control_dirs": [
+            "jobs/tb21-nop"
+          ],
+          "job_dirs": [
+            "jobs/tb21-qwen35-4b"
+          ],
+          "out": "eval/harbor.json",
+          "suite": "harbor",
+          "tasks_file": "tb_tasks.txt"
+        }
+      },
+      "fixture_sha256": "30d7913b7b54830a94c5d20e630df300b856f6df55db4a0d3c9db39b60c79cf1",
+      "expected_behavior": [
+        "Identifies the problem: harbor suite: a job directory is missing or holds no trial, or tasks_file is unreadable",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-010"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-010 (BLOCK, input phase) fires: harbor suite: a job directory is missing or holds no trial, or tasks_file is unreadable.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "job directory missing on disk"
+        }
+      ],
+      "question": "I'm trying to run the evaluation skill offline: suite \"harbor\" with tasks_file \"tb_tasks.txt\", control_dirs [\"jobs/tb21-nop\"], job_dirs [\"jobs/tb21-qwen35-4b\"], and out \"eval/harbor.json\". What I observed is \"job directory missing on disk\", and that's the state I'm working from right now. Given that observation and these inputs, what's the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-011",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-011",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "benchmark suite without usable refused-fixture items: harbor has no measured nop negative control, a control trial is not from the nop agent, or every control passed; skill-behaviour has no measured oracle case of a BLOCK input rule",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-011 (no negative-control nop trials)",
+        "request": {
+          "control_dirs": [],
+          "job_dirs": [
+            "jobs/tb21-qwen35-4b"
+          ],
+          "out": "eval/harbor.json",
+          "suite": "harbor",
+          "tasks_file": "tb_tasks.txt"
+        }
+      },
+      "fixture_sha256": "437395b7c03cc32068842952aad444758e4f2b843856d8cae57d77709abf2c9d",
+      "expected_behavior": [
+        "Identifies the problem: benchmark suite without usable refused-fixture items: harbor has no measured nop negative control, a control trial is not from the nop agent, or every control passed; skill-behaviour has no measured oracle case of a BLOCK input rule",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-011"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-011 (BLOCK, input phase) fires: benchmark suite without usable refused-fixture items: harbor has no measured nop negative control, a control trial is not from the nop agent, or every control passed; skill-behaviour has no measured oracle case of a BLOCK input rule.",
+      "trigger_facts": [],
+      "question": "Please run an offline evaluation of the checkpoint in `jobs/tb21-qeken35-4b`… correction, `jobs/tb21-qwen35-4b` against its base model, handling it as either a full checkpoint or a PEFT adapter as appropriate. I want the pinned lm-evaluation-harness benchmarks evaluated under a one-sided regression band, with the task list taken from `tb_tasks.txt` and the suite set to `harbor`. Also run the VLM held-out loss through FoundationScale's `eval_heldout_loss.py`, covering image, text, and video rows with video included. Write the results to `eval/harbor.json` and give me a single overall verdict in `eval_report.json`. I have no control dirs to compare against this time.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-evaluation-oracle-EV-IN-012",
+      "skill": "evaluation",
+      "rule_id": "EV-IN-012",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its re-scored item_pass_rate does not reproduce the report's own",
+      "fixture": {
+        "expected": "REFUSED naming EV-IN-012 (the re-score does not reproduce the report)",
+        "observed": "report rate does not reproduce",
+        "request": {
+          "out": "eval/skill_behaviour.json",
+          "reports": [
+            "oracle_report.json"
+          ],
+          "suite": "skill-behaviour"
+        }
+      },
+      "fixture_sha256": "9f6c687506c4dec5a0fd4bace4590cedbd3dd038d8a7e8f98294103e42222f3e",
+      "expected_behavior": [
+        "Identifies the problem: skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its re-scored item_pass_rate does not reproduce the report's own",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule EV-IN-012"
+      ],
+      "ground_truth": "evaluation: rule EV-IN-012 (BLOCK, input phase) fires: skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its re-scored item_pass_rate does not reproduce the report's own.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "report rate does not reproduce"
+        }
+      ],
+      "question": "I've observed that \"report rate does not reproduce\". I want to run the skill-behaviour suite and write the result to eval/skill_behaviour.json, using oracle_report.json as the reference report. Can you tell me what the outcome is?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -659,7 +1018,7 @@
           "value": 0
         }
       ],
-      "question": "I'm running an offline eval of checkpoint `ck` against base `base`, with the pinned benchmarks list empty for now, policy in `eval_policy.yaml`, cache at `cache`, and the report going to `eval/eval_report.json`; the held-out pass used `heldout.jsonl` with abs_epsilon 0.05, max_length 16384, and video_frames 16. From the harness run I observed: heldout.baseline.mean_nll_nats = 1.4, heldout.baseline.rows_dropped = 0, heldout.baseline.rows_used = 5, and heldout.checkpoint.mean_nll_nats = 1.2, heldout.checkpoint.rows_dropped = 5, heldout.checkpoint.rows_used = 0. What's the outcome and what verdict lands in eval_report.json?",
+      "question": "I ran the evaluation skill with base=\"base\", checkpoint=\"ck\", policy=\"eval_policy.yaml\", out=\"eval/eval_report.json\", eval_cache=\"cache\", an empty benchmarks list, and heldout data \"heldout.jsonl\" with abs_epsilon=0.05, max_length=16384, video_frames=16. The harness heldout results I observed: baseline mean_nll_nats = 1.4, rows_dropped = 0, rows_used = 5; checkpoint mean_nll_nats = 1.2, rows_dropped = 5, rows_used = 0. Given those exact numbers, what verdict lands in eval/eval_report.json?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from foundationskills.interfaces.fs.video_envelope import frame_envelope
+
 
 @dataclass(frozen=True)
 class FSCapabilities:
@@ -279,10 +281,10 @@ def _probe_video_key() -> dict[str, Any]:
     except Exception as exc:
         return _failed("video probe (foundationscale.video.available_backends)", exc)
     value = {"samplings": list(video.SAMPLINGS), "decode_backends": decode,
-             "declaration_env": video.VIDEO_FRAMES_ENV, "frame_envelope": None}
+             "declaration_env": video.VIDEO_FRAMES_ENV, "frame_envelope": frame_envelope()}
     return _key(_MEASURED, value,
-                "the frame count N is caller-declared; no measured frame envelope exists, so a "
-                "frame count beyond a measured run is UNMEASURED, never PASS")
+                "the frame count N is caller-declared; frame_envelope is the ledger of measured runs "
+                "(interfaces.fs.video_envelope), and a frame count beyond it is UNMEASURED, never PASS")
 
 
 def _probe_label_mask_key() -> dict[str, Any]:

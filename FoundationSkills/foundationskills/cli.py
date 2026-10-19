@@ -178,6 +178,12 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return _execute("training.planner", request, args.workdir or "fskills-plan")
 
 
+def _cmd_experiments_index(args: argparse.Namespace) -> int:
+    """A4.6: auto_research's read-only experiment index over run outputs, journals and campaign ledgers."""
+    request = {"action": "index", "scan_roots": list(args.root)}
+    return _execute("auto_research", request, args.workdir or "fskills-experiments")
+
+
 def _cmd_emit(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {
         "plan": _load_payload(args.plan),
@@ -221,8 +227,26 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _eval_request(args: argparse.Namespace) -> dict[str, Any]:
-    request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "policy": args.policy,
-                               "eval_cache": args.eval_cache, "out": args.out}
+    request: dict[str, Any] = {"benchmarks": [b for b in args.benchmarks.split(",") if b], "out": args.out}
+    if getattr(args, "suite", None) == "skill-behaviour":  # A4.5: behaviour-eval reports as a benchmark
+        request = {"suite": "skill-behaviour", "reports": list(args.report or ()), "out": args.out}
+        if args.max_unmeasured_fraction is not None:
+            request["max_unmeasured_fraction"] = args.max_unmeasured_fraction
+        return request
+    if getattr(args, "suite", None) == "harbor":  # A4.5: Harbor job directories plus their nop negative controls
+        request = {"suite": "harbor", "job_dirs": list(args.job_dir or ()), "control_dirs": list(args.control_dir or ()),
+                   "out": args.out}
+        if args.tasks_file:
+            request["tasks_file"] = args.tasks_file
+        if args.max_unmeasured_fraction is not None:
+            request["max_unmeasured_fraction"] = args.max_unmeasured_fraction
+        return request
+    if getattr(args, "suite", None):  # A4.3: a scoring suite takes only its own inputs
+        return {"suite": args.suite, "manifest": args.manifest, "base_predictions": args.base_predictions,
+                "tuned_predictions": args.tuned_predictions, "out": args.out}
+    for key in ("policy", "eval_cache"):  # policy and eval_cache serve the lm-eval mode; the skill names a missing one
+        if getattr(args, key, None) is not None:
+            request[key] = getattr(args, key)
     for key in ("checkpoint", "base", "run_manifest", "baseline_cache", "num_fewshot", "seed", "gen_kwargs",
                 "limit", "dtype", "batch_size", "device", "include_path"):
         if getattr(args, key) is not None:
@@ -591,6 +615,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workdir", default=None)
     p.set_defaults(func=_cmd_plan)
 
+    p = sub.add_parser("experiments", help="experiment management (auto_research, A4.6)")
+    experiments_sub = p.add_subparsers(dest="experiments_cmd", required=True)
+    p_index = experiments_sub.add_parser(
+        "index", help="index FS run manifests, orchestrator journals and campaign ledgers; exit 0/95/96")
+    p_index.add_argument("--root", action="append", required=True,
+                         help="a directory to scan (repeatable): run outputs, workdirs or ledger dirs")
+    p_index.add_argument("--workdir", default=None)
+    p_index.set_defaults(func=_cmd_experiments_index)
+
     p = sub.add_parser("emit", help="emit FS launch specs from a plan")
     p.add_argument("--plan", required=True)
     p.add_argument("--dataset", required=True)
@@ -619,9 +652,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--benchmarks", default="", help="comma-separated policy task names (may be empty with --heldout)")
     p_run.add_argument("--heldout", default=None,
                        help="JSON file with the held-out VLM loss block (data, max_length, video_frames, abs_epsilon, ...)")
-    p_run.add_argument("--policy", required=True)
-    p_run.add_argument("--eval-cache", dest="eval_cache", required=True,
-                       help="pre-staged offline HF_HOME; nothing is downloaded")
+    p_run.add_argument("--policy", default=None, help="eval policy (lm-eval and held-out modes)")
+    p_run.add_argument("--eval-cache", dest="eval_cache", default=None,
+                       help="pre-staged offline HF_HOME; nothing is downloaded (lm-eval and held-out modes)")
+    p_run.add_argument("--suite", default=None, choices=["speech-longform", "harbor", "skill-behaviour"],
+                       help="a scoring suite over prediction files or Harbor job directories instead of a harness run")
+    p_run.add_argument("--job-dir", dest="job_dir", action="append", default=None,
+                       help="harbor: a Harbor job directory to score (repeatable)")
+    p_run.add_argument("--control-dir", dest="control_dir", action="append", default=None,
+                       help="harbor: a nop-agent job directory over the same tasks (the negative controls; repeatable)")
+    p_run.add_argument("--report", action="append", default=None,
+                       help="skill-behaviour: a behaviour-eval JSON report (repeatable; include an oracle report)")
+    p_run.add_argument("--tasks-file", dest="tasks_file", default=None,
+                       help="harbor: the task universe, one task per line (default: the tasks seen)")
+    p_run.add_argument("--max-unmeasured-fraction", dest="max_unmeasured_fraction", type=float, default=None,
+                       help="harbor: tolerated fraction of unmeasured cells, declared up front (default 0)")
+    p_run.add_argument("--manifest", default=None, help="speech-longform: whole-call manifest (JSONL)")
+    p_run.add_argument("--base-predictions", dest="base_predictions", default=None,
+                       help="speech-longform: the base model's NeMo output manifest (rows + pred_text)")
+    p_run.add_argument("--tuned-predictions", dest="tuned_predictions", default=None,
+                       help="speech-longform: the tuned model's NeMo output manifest (rows + pred_text)")
     p_run.add_argument("--out", required=True, help="path of eval_report.json")
     p_run.add_argument("--baseline-cache", dest="baseline_cache", default=None)
     p_run.add_argument("--num-fewshot", dest="num_fewshot", type=int, default=None)

@@ -33,7 +33,8 @@ The skill never implements a scorer and never downloads data or models.
 - To smoke-test an eval setup (`--limit N`): the verdict is at best UNMEASURED.
 - For a VLM LoRA checkpoint: `heldout` (or `fskills eval run --heldout BLOCK.json`) scores held-out mean NLL for
   base and checkpoint on the same rows with FoundationScale's `examples/vlm-2xH200/scripts/eval_heldout_loss.py`.
-  Video rows need `video_frames` equal to training's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES`; NLL has no stderr, so
+  Video rows need `video_frames` equal to training's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` (above the measured 16-frame
+  envelope a passing score is UNMEASURED, EV-HO-009); NLL has no stderr, so
   `abs_epsilon` is required. Like benchmark mode it is a non-regression gate: PASS = not worse than base beyond the band.
 - Not for VLM benchmarks (lmms-eval is a deferred follow-up), LLM-judged tasks, or RL/agentic evals.
 
@@ -72,6 +73,49 @@ non-executable, and N > 1 GPUs shard the model with `parallelize` (any
 is the only submission path; it first runs `eval run --dry-run` (inputs check,
 no report, exit 0 or 96) and refuses to submit if that fails.
 
+## Speech long-form suite
+
+`fskills eval run --suite speech-longform --manifest CALLS.jsonl --base-predictions BASE.jsonl --tuned-predictions
+TUNED.jsonl --out REPORT.json` scores whole-call ASR for a base and a tuned model from their NeMo output manifests
+(rows plus `pred_text`). It composes FoundationScale's own `speech_metrics` (normalisation, WER cross-checked against
+FS's aligner, loop words, runaway rows) and `speech_gates` (`RunawayHypothesisGate`, `RepetitionLoopGate`), exactly as
+the measured campaign scorer does. A gate FAIL is RED whatever the WER (EV-HO-007): measured, the best-WER decode
+(12.81%) carried 285 loop words and was blocked. A call without a prediction is UNMEASURED (EV-HO-008). No harness, no
+eval cache. Before any call is scored, a hand-added negative control (a 40-word "the" loop) must be caught by
+the loop census and FAIL the repetition gate. Otherwise the suite is REFUSED (EV-IN-009), because a gate that cannot
+fail vouches for nothing. Producing the predictions (NeMo chunked inference) is outside this suite.
+
+## Harbor benchmark suite
+
+`fskills eval run --suite harbor --job-dir JOB [--job-dir ...] --control-dir NOP_JOB [--tasks-file TASKS.txt]
+[--max-unmeasured-fraction F] --out REPORT.json` scores Harbor job directories (the agentic harness of the Skill2Env
+paper and B2.2). It is a benchmark, not a regression gate, so the row has a score and no baseline.
+
+- **Trials.** A trial passes iff every numeric verifier reward is 1, and fails on any measured reward below 1. An
+  AgentTimeoutError with a reward is a fail. A trial with no reward (infra) is **unmeasured**, never a 0.
+- **Score.** pass@1 is the mean over tasks of passes / measured trials, with a bootstrap CI over tasks (10,000
+  resamples, seed 0). A task with no measured trial is excluded and listed.
+- **Paper denominator.** The report also gives `paper_denominator`, B2.2's registered rule (reward-less trials count
+  0), so published comparisons stay reproducible.
+- **Negative controls.** `--control-dir` names nop-agent jobs over the same tasks: the refused-fixture items. Without
+  a measured control, when a control trial was run by any agent other than `nop` (a solving agent would drop every
+  task it solves), or when every control passes, the suite is REFUSED (EV-IN-011). A task whose control passes is
+  dropped and named (EV-HO-011).
+- **Verdict.** Unmeasured cells above `--max-unmeasured-fraction` (default 0) make the suite UNMEASURED (EV-HO-010),
+  and it can then never ground a claim. Producing the job directories (`harbor run`) is outside this suite.
+
+## Skill-behaviour benchmark suite
+
+`fskills eval run --suite skill-behaviour --report REPORT.json [--report ...] [--max-unmeasured-fraction F] --out
+OUT.json` turns `fskills behaviour-eval` reports into a benchmark eval_report, with one row per package and case set.
+
+- **Score.** The gated arm's item pass rate over measured calls, recomputed and cross-checked against each report's
+  own `results`. A re-score that does not reproduce its source is REFUSED (EV-IN-012).
+- **Refused-fixture items.** These are the oracle cases of BLOCK input rules, whose correct answer is REFUSED. A set
+  without one measured, such as routing reports alone, is REFUSED (EV-IN-011).
+- **Unmeasured calls.** Agent or judge errors are never counted as 0. Above the declared maximum they make the suite
+  UNMEASURED (EV-HO-010).
+
 ## Scope
 
 LLMs of any family, any training stage, full or adapter checkpoints, on
@@ -85,7 +129,7 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 |---|---|---|
 | EV-IN-001 | BLOCK | checkpoint (or the run manifest naming `<output_dir>/final`) is missing |
 | EV-IN-002 | BLOCK | no local base model resolves (a named base that does not exist is not skipped over) |
-| EV-IN-003 | BLOCK | `eval_cache` is not a directory |
+| EV-IN-003 | BLOCK | lm-eval (benchmark) mode: `eval_cache` not given or not a directory (held-out and suite modes read only local files) |
 | EV-IN-004 | BLOCK | `lm_eval` is absent or not 0.4.12 |
 | EV-IN-005 | BLOCK | policy invalid, a benchmark has no policy entry, needs a judge, or a stderr-less metric has no explicit `abs_epsilon` |
 | EV-HO-001 | BLOCK | `drop > max(abs_epsilon, k*sqrt(se_b^2+se_c^2))` (improvements never fail) |
@@ -95,9 +139,18 @@ Outcome semantics (from `core/contract.py`, the same for every skill): an **inpu
 | EV-IN-006 | BLOCK | held-out `data` missing/unreadable, or `eval_heldout_loss.py` missing (never a silent fallback) |
 | EV-IN-007 | BLOCK | held-out rows carry video but `video_frames` is unset |
 | EV-IN-008 | BLOCK | `video_frames` disagrees with the run manifest's `FOUNDATIONSCALE_TRAIN_VIDEO_FRAMES` |
+| EV-IN-009 | BLOCK | `--suite speech-longform`: the manifest or a prediction file is missing, unreadable or cannot carry a WER |
 | EV-RU-001 | BLOCK | vacuous held-out run (`rows_used == 0` for either role): REFUSED, no report |
 | EV-HO-005 | BLOCK | base and checkpoint `rows_used`/`rows_dropped` disagree: the delta is UNMEASURED (95), never RED |
 | EV-HO-006 | BLOCK | a held-out row lacks `rows_used`/`rows_dropped`/`score`/`baseline`: RED |
+| EV-HO-007 | BLOCK | speech-longform: a gate FAILED (runaway or repetition loops), whatever the WER: RED |
+| EV-HO-008 | WARN | speech-longform: calls without a prediction (undercovered): UNMEASURED, never PASS |
+| EV-IN-010 | BLOCK | harbor suite: a job directory is missing or holds no trial, or `tasks_file` is unreadable |
+| EV-IN-011 | BLOCK | benchmark suite without usable refused-fixture items: harbor has no measured nop control, a control trial is not from the nop agent, or every control passed; skill-behaviour has no measured oracle case of a BLOCK input rule |
+| EV-IN-012 | BLOCK | skill-behaviour suite: a report is unreadable, has no gated-arm calls, or its re-scored item_pass_rate does not reproduce the report's own |
+| EV-HO-010 | WARN | benchmark suite (harbor, skill-behaviour): unmeasured cells above `max_unmeasured_fraction`, or nothing measured: UNMEASURED (95), never PASS |
+| EV-HO-011 | INFO | harbor suite: tasks whose nop control passed are dropped from the score; each is named and counted |
+| EV-HO-009 | WARN | held-out video rows scored at `video_frames` above the measured frame envelope (16 per clip): a passing row is UNMEASURED (95), never PASS; a regression stays RED |
 
 ## Failure handling
 

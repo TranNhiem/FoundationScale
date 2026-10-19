@@ -5,7 +5,7 @@
   "required": ["format", "shards", "schema", "num_records", "num_tokens", "tokenizer", "chat_template_family", "fs_columns"],
   "additionalProperties": true,
   "properties": {
-    "format": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft"]},
+    "format": {"enum": ["pretrain", "cpt", "sft", "preference", "rl", "mm_sft", "asr"]},
     "shards": {
       "type": "array",
       "minItems": 1,

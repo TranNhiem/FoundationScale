@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - defensive
         pass
 
 from foundationskills.interfaces.fs.capabilities import FSCapabilities, probe
+from foundationskills.interfaces.fs.video_envelope import beyond_envelope, frame_envelope
 from foundationskills.skills.training.planner import (
     PlanningRefusal,
     plan,
@@ -472,6 +473,15 @@ class TrainingPlannerSkill(BaseSkill):
             Severity.BLOCK,
             "input",
         ),
+        # A4.4: a planned frame count above the measured envelope (interfaces.fs.video_envelope)
+        # is UNMEASURED: run() returns it with this note (a handoff BLOCK still wins as RED).
+        RuleSpec(
+            "TR-PL-010",
+            "a stage plans video_frames above the measured frame envelope (16 uniform frames per clip): the plan "
+            "is UNMEASURED, never PASS",
+            Severity.WARN,
+            "handoff",
+        ),
         RuleSpec(
             "TR-PL-009",
             "the measured control chosen as the default arm (agentic_grpo_token_mean): handoff note",
@@ -611,11 +621,50 @@ class TrainingPlannerSkill(BaseSkill):
             provenance=make_provenance(self.name, self.version, inputs={"goal": sha256_json(goal)[:16]}),
         )
         ref = write_artifact(artifact, ctx.artifacts_dir)
-        return SkillResult(
+        result = SkillResult(
             status=Status.PASS,
             payload={"plan": payload, "plan_ref": ref.to_dict()},
             artifacts=(ref,),
         )
+        beyond = self._beyond_frame_envelope(payload, goal)
+        if not beyond:
+            return result
+        # A4.4 (TR-PL-010): a frame count no run has trained at is UNMEASURED, never PASS. The
+        # handoff notes are still evaluated here (the runner skips check_handoff off PASS), and a
+        # BLOCK among them is a measured failure that outranks the unmeasured envelope: RED.
+        handoff = list(self.check_handoff(result, ctx) or [])
+        notes = [
+            self.finding(
+                "TR-PL-010",
+                message,
+                {"stage": name, "frame_envelope": frame_envelope()},
+                "plan video_frames within the measured envelope, or measure a run at this frame count first "
+                "and add it to interfaces/fs/video_envelope.py",
+            )
+            for name, message in beyond
+        ]
+        blocked = any(f.severity is Severity.BLOCK for f in handoff)
+        return SkillResult(
+            status=Status.RED if blocked else Status.UNMEASURED,
+            payload=result.payload,
+            artifacts=result.artifacts,
+            findings=(*handoff, *notes),
+        )
+
+    @staticmethod
+    def _beyond_frame_envelope(plan_payload: dict[str, Any], goal: dict[str, Any]) -> list[tuple[str, str]]:
+        """(stage, reason) for each planned video stage whose frame count lies past the measured envelope."""
+        declared = vlm_goal_fields(goal)["fs_columns"].get("video_frames")
+        out: list[tuple[str, str]] = []
+        for stage in plan_payload.get("stages") or []:
+            if "video" not in set(stage.get("modalities") or ()):
+                continue
+            fs_cols = (stage.get("data") or {}).get("fs_columns") or {}
+            frames = fs_cols.get("video_frames")
+            reason = beyond_envelope(frames if frames is not None else declared)
+            if reason:
+                out.append((str(stage.get("name") or "<unnamed>"), reason))
+        return out
 
     def check_handoff(self, result: SkillResult, ctx: SkillContext) -> list[Finding]:
         findings: list[Finding] = []
@@ -950,6 +999,14 @@ class TrainingPlannerSkill(BaseSkill):
             # it is an input-phase rule (see its RuleSpec description).
             "TR-IN-005": {"request": {"goal": {**vlm_goal, "lora_targets": None}}},
             "TR-IN-006": {"request": {"goal": {**vlm_goal, "video_frames": None}}},
+            # A4.4: 32 frames lies past the measured 16-frame envelope -> UNMEASURED with TR-PL-010
+            "TR-PL-010": {
+                "request": {"goal": {**vlm_goal, "video_frames": 32}},
+                "fake_plan": fake_plan(
+                    [vlm_stage(data={"format": "sft", "ready": True, "tokens": 1000,
+                                     "fs_columns": {"video_column": "video", "video_frames": 32, "overlong": "drop"}})]
+                ),
+            },
             "TR-IN-007": {"request": {"goal": {**vlm_goal, "lora_targets": ["  ", ""]}}},
             "TR-IN-008": {"request": {"goal": {**vlm_goal, "tp": 2, "cp": 2}}},
             "TR-PL-006": {

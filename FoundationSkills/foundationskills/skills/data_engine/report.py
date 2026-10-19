@@ -78,6 +78,8 @@ def _expected_columns(fmt: str | None, fs_columns: dict) -> set[str]:
         return base | {"messages", text_col, fs.get("image_column") or "image"}
     if fmt == "preference":
         return base | {"prompt", "chosen", "rejected"}
+    if fmt == "asr":  # FS speech-manifest rows carry no meta
+        return {"id", "audio", "answer", "duration"}
     if fmt == "rl":
         cols = base | {"conversations"}
         gold_key = fs.get("gold_key")
@@ -211,7 +213,12 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
 
     # DE-RDY-002: num_tokens >= min_tokens (approximate counts are unmeasured)
     min_tokens = reqs.get("min_tokens")
-    if num_tokens is None:
+    asr = fmt == "asr"
+    audio_extra = _extra(_first(by, "audio_sample_rate"))
+    if asr:
+        checks.append(_check("DE-RDY-002", True, "not applicable: asr is sized in measured audio seconds "
+                                                 f"({audio_extra.get('kept_seconds')} s kept), not tokens"))
+    elif num_tokens is None:
         checks.append(_check("DE-RDY-002", None, "num_tokens unknown (no tokenize op ran)"))
     elif approximate:
         checks.append(
@@ -267,7 +274,10 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
 
     # DE-RDY-006: pii_remaining <= max (unmeasured when no clean op ran)
     max_pii = reqs.get("max_pii_remaining", 0)
-    if clean is None:
+    if asr and max_pii is None:
+        checks.append(_check("DE-RDY-006", True, "PII check not required for asr (audio cannot be redacted by editing "
+                                                 "its transcript); set requirements.max_pii_remaining to require it"))
+    elif clean is None:
         checks.append(_check("DE-RDY-006", None, "no clean op ran; PII unmeasured"))
     elif pii_remaining is None:
         checks.append(_check("DE-RDY-006", None, "clean op ran but reported no pii_remaining figure"))
@@ -277,7 +287,9 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
 
     # DE-RDY-007: truncation_rate <= max
     max_trunc = reqs.get("max_truncation_rate", 0.02)
-    if truncation_rate is None:
+    if asr:
+        checks.append(_check("DE-RDY-007", True, "not applicable: asr rows are not tokenised or truncated"))
+    elif truncation_rate is None:
         checks.append(_check("DE-RDY-007", None, "truncation_rate unknown (no tokenize op ran)"))
     else:
         ok = truncation_rate <= max_trunc
@@ -347,6 +359,30 @@ def build_readiness(dataset: dict, stats: list[dict], requirements: dict) -> dic
                                  f"the tokenizer's generation prompt: {parity}"))
         else:
             checks.append(_check("DE-RDY-011", True, f"training targets match inference prompts: {parity}"))
+
+    if asr:
+        # DE-RDY-012: every kept row MEASURED at the required sample rate (absent measurement is never a pass)
+        want = audio_extra.get("sample_rate")
+        hist = dict(audio_extra.get("sample_rate_hist") or {})
+        audio_op = _first(by, "audio_sample_rate")
+        dropped = {k: v for k, v in ((audio_op or {}).get("dropped") or {}).items()}
+        if audio_op is None or not audio_extra.get("measured"):
+            checks.append(_check("DE-RDY-012", None, "audio sample rates unmeasured (no audio_sample_rate op measured a file)"))
+        elif num_records and str(want) in hist:
+            checks.append(_check("DE-RDY-012", True, f"all {num_records} kept row(s) measured at {want} Hz; "
+                                                     f"measured rates {hist}, dropped {dropped or 'none'}"))
+        else:
+            checks.append(_check("DE-RDY-012", False, f"no kept row measured at {want} Hz: rates {hist}, dropped {dropped}"))
+        # DE-RDY-013: FS's ManifestReport is ok for every speech source (duplicates and field problems make it not ok)
+        manifests = list(_extra(_first(by, "ingest")).get("speech_manifest") or [])
+        if not manifests:
+            checks.append(_check("DE-RDY-013", None, "no speech_manifest source was read; FS manifest report unmeasured"))
+        else:
+            bad = [m for m in manifests if not m.get("ok")]
+            detail = "; ".join(f"{m['uri']}: rows {m.get('rows_valid')}/{m.get('rows_read')} valid, problems "
+                               f"{m.get('problems')}, duplicate ids {m.get('duplicate_ids')}, duplicate audio paths "
+                               f"{m.get('duplicate_audio_paths')}" for m in manifests)
+            checks.append(_check("DE-RDY-013", not bad, ("FS manifest report not ok: " if bad else "FS manifest report ok: ") + detail))
 
     if any(c["passed"] is False for c in checks):
         verdict = "RED"

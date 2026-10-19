@@ -53,6 +53,7 @@ _FS_COLUMNS: dict[str, tuple[str | None, str | None, str | None]] = {
     "mm_sft": ("text", "image", None),
     "preference": (None, None, None),
     "rl": (None, None, "answer"),
+    "asr": (None, None, "answer"),
 }
 
 
