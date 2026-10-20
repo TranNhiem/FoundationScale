@@ -31,7 +31,7 @@
           "value": "family nemotron never served"
         }
       ],
-      "question": "I've observed that the family nemotron has never been served. I'd like to plan a serving deployment for the checkpoint at models/nemotron-nano on GPU-447bb30a, listening on port 18841. What is the outcome of that plan?",
+      "question": "I've observed that the nemotron family has never been served before. Please plan a serving launch for `models/nemotron-nano` on GPU `GPU-447bb30a` on port 18841. What's the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -40,32 +40,29 @@
       "rule_id": "DP-HO-002",
       "severity": "WARN",
       "phase": "handoff",
-      "description": "LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy",
+      "description": "LoRA deployment in a cell whose served-adapter fidelity is not measured - UNMEASURED even when healthy",
       "fixture": {
-        "expected": "UNMEASURED naming DP-HO-002",
+        "expected": "UNMEASURED naming DP-HO-002 (healthy, but served-LoRA fidelity unmeasured)",
+        "observed": "LoRA cell fidelity marked unmeasured",
         "request": {
-          "action": "plan",
-          "adapter": "runs/sft/final",
-          "gpu": "GPU-447bb30a",
-          "model": "models/gemma-4-12B-it",
-          "port": 18841
-        },
-        "simulated": "healthy LoRA deployment verified"
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.serve.json"
+        }
       },
-      "fixture_sha256": "ce9108e67954affd413582a7193a249f2983b99962d823e7d4e47a05b6555c44",
+      "fixture_sha256": "3b133d72fa4a198c4468e83da3fdee1ac8947cca336925f07ec1f461ce469b19",
       "expected_behavior": [
-        "Identifies the problem: LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy",
+        "Identifies the problem: LoRA deployment in a cell whose served-adapter fidelity is not measured - UNMEASURED even when healthy",
         "Reports it as a warning that travels with the result, without refusing on this alone",
         "Cites rule DP-HO-002"
       ],
-      "ground_truth": "deployment: rule DP-HO-002 (WARN, handoff phase) fires: LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy.",
+      "ground_truth": "deployment: rule DP-HO-002 (WARN, handoff phase) fires: LoRA deployment in a cell whose served-adapter fidelity is not measured - UNMEASURED even when healthy.",
       "trigger_facts": [
         {
-          "path": "simulated",
-          "value": "healthy LoRA deployment verified"
+          "path": "observed",
+          "value": "LoRA cell fidelity marked unmeasured"
         }
       ],
-      "question": "I want to serve the adapter at `runs/sft/final` on top of `models/gemma-4-12B-it`, confined to GPU `GPU-447bb30a`, with the vLLM container listening on port `18841` — the action I need planned is `plan`. I've already observed that simulated = \"healthy LoRA deployment verified\". What does the probe-first launch plan come out as, and what's the outcome?",
+      "question": "I saw that the LoRA cell fidelity is marked unmeasured. Please run the deployment verify step against artifacts/fs_launch_spec.serve.json and tell me exactly what the outcome is — served names, GPU placement, and the smoke completion result.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -96,7 +93,7 @@
           "value": "smoke completion returned empty text"
         }
       ],
-      "question": "I ran the verification against `artifacts/fs_launch_spec.serve.json` and the smoke completion returned empty text. What's the outcome for this verify run?",
+      "question": "I ran the serving probe from `artifacts/fs_launch_spec.serve.json` and the smoke completion returned empty text. I want to proceed with the verify action on that spec. Given that the smoke completion returned empty text, what is the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -127,7 +124,7 @@
           "value": "leased GPU-447bb30a, server on GPU-29098e5e"
         }
       ],
-      "question": "I observed \"leased GPU-447bb30a, server on GPU-29098e5e\" — so my lease is on GPU-447bb30a while the server is running on GPU-29098e5e. I want to run a verify action against `artifacts/fs_launch_spec.serve.json`. What is the outcome?",
+      "question": "I observed \"leased GPU-447bb30a, server on GPU-29098e5e\" — my lease is on GPU-447bb30a but the vLLM server is running on GPU-29098e5e. Please run the verify action on artifacts/fs_launch_spec.serve.json and check the served names, GPU placement, and smoke completion against the measured vLLM container. What is the outcome?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -160,7 +157,7 @@
           "value": "no config.json in model"
         }
       ],
-      "question": "I'm planning a vLLM serve of `merged/missing` on `GPU-447bb30a` bound to port 18841, and I observed that the model directory has no `config.json` in it (observed = \"no config.json in model\"). Given that, what's the outcome of the plan?",
+      "question": "I want to plan serving for the checkpoint at merged/missing on GPU-447bb30a, bound to port 18841. I've already observed that there's no config.json in the model directory. Given that, what's the outcome of the plan — can you still produce a probe-first fs_launch_spec, and if so what does it look like?",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -194,7 +191,7 @@
           "value": "adapter trained on gemma-4-31B-it"
         }
       ],
-      "question": "I want to plan serving for adapter `runs/sft/final` on GPU `GPU-447bb30a` with model `merged/gemma-4-12B-sft` on port 18841. One thing I've observed is that the adapter was trained on `gemma-4-31B-it`. What's the outcome of the plan?",
+      "question": "I want to plan a serving setup for the checkpoint at merged/gemma-4-12B-sft, confined to GPU-447bb30a, listening on port 18841, with the adapter at runs/sft/final. One thing I already know is that the adapter was trained on gemma-4-31B-it. Please produce the fs_launch_spec probe-first plan (I'll type the plan hash back before anything is launched) and tell me what the outcome is.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -221,7 +218,7 @@
       ],
       "ground_truth": "deployment: rule DP-IN-003 (BLOCK, input phase) fires: plan: no leased GPU UUID given, or the port is already in use (the server must be confined to one leased GPU).",
       "trigger_facts": [],
-      "question": "I want to plan serving for my merged checkpoint `merged/gemma-4-12B-sft` on port `18841` — action `plan`, probe-first with the measured vLLM container. Which GPU should I confine the `fs_launch_spec` probe to (e.g. `cuda:0`, or a specific UUID)? Once you give me the plan hash back I'll launch, and then we can verify served names, GPU placement, and a smoke completion before recording the `serving_spec`.",
+      "question": "I want to plan a vLLM serving launch for my merged checkpoint `merged/gemma-4-12B-sft` on port 18841. I don't have a GPU pinned yet, so pick an appropriate GPU-confined placement for it and tell me what you land on. Please produce the fs_launch_spec for this and give me the plan hash I need to type back before anything actually launches.",
       "question_model": "mimo-v2.6-pro"
     },
     {
@@ -252,7 +249,7 @@
           "value": "endpoint connection refused"
         }
       ],
-      "question": "I ran the probe-first serving launch and then tried to reach the endpoint, and I observed \"endpoint connection refused\" when attempting to connect. Please verify `artifacts/fs_launch_spec.serve.json` against the running endpoint and tell me what the outcome is.",
+      "question": "I tried to verify the serving endpoint described in `artifacts/fs_launch_spec.serve.json`, and what I observed is `endpoint connection refused`. Can you tell me what the outcome of that verify action is?",
       "question_model": "mimo-v2.6-pro"
     }
   ]

@@ -6,8 +6,8 @@ with a new measured row and its evidence.
 - ``mode``: ``full`` (base or merged full weights) or ``lora`` (base + adapter unmerged, ``--enable-lora``).
 - ``fidelity``: whether the served output was measured to reproduce the trained model.
   - ``measured`` only where it was.
-  - Served-LoRA fidelity is not measured yet: at the token level, bf16 noise (0.40 floor) dominates the comparison
-    (served LoRA sits at 0.63), so it needs a task-level held-out check.
+  - Served-LoRA fidelity is measured at the task level (held-out NLL), never from per-token logprobs, which bf16 noise
+    dominates (floor 0.40). gemma4 LoRA keeps 99.5% of the adapter's gain.
 """
 
 from __future__ import annotations
@@ -21,9 +21,10 @@ MEASURED_SERVING: tuple[dict[str, Any], ...] = (
      "evidence": "B2.2 + B6.1: Qwen3.5-4B and Qwen3.8-27B served as pi agent endpoints on GB200 (tool parser qwen3_coder)"},
     {"engine": ENGINE, "family": "gemma4_unified", "mode": "full", "modality": "text", "fidelity": "unmeasured",
      "evidence": "A4.9 a49/FINDINGS.md: gemma-4-12B-it served on GB200, prompt logprobs returned"},
-    {"engine": ENGINE, "family": "gemma4_unified", "mode": "lora", "modality": "text", "fidelity": "unmeasured",
-     "evidence": "A4.9 a49/FINDINGS.md: gemma-4-12B-it + A4.4 LoRA unmerged (--enable-lora, rank 16); LoRA applied "
-                 "(served LoRA vs base 0.91 nats/token); token-level fidelity inside bf16 noise, not established"},
+    {"engine": ENGINE, "family": "gemma4_unified", "mode": "lora", "modality": "text", "fidelity": "measured",
+     "evidence": "A4.9 a49/FINDINGS.md: gemma-4-12B-it + A4.4 LoRA unmerged (--enable-lora, rank 16); task-level held-out "
+                 "NLL over 1,080 unseen answer tokens: served LoRA keeps 99.5% of the local adapter's gain (pre-registered "
+                 "band 0.95-1.05; engine sanity 0.004 nats); served merged checkpoints keep 95.4%"},
 )
 
 

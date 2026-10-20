@@ -136,7 +136,16 @@ def test_verify_missing_served_name_is_red(tmp_path, monkeypatch):
     assert res.status is Status.RED and "DP-HO-003" in _rules(res)
 
 
-def test_verify_healthy_lora_is_unmeasured(tmp_path, monkeypatch):
+def test_verify_healthy_lora_in_a_fidelity_measured_cell_passes(tmp_path, monkeypatch):
+    # gemma4 x lora x text: served-LoRA fidelity measured at the task level (99.5% of the adapter's gain kept)
+    res = _run(monkeypatch, tmp_path, _verify_spec(tmp_path, mode="lora"))
+    assert res.status is Status.PASS and "DP-HO-002" not in _rules(res)
+
+
+def test_verify_healthy_lora_with_unmeasured_fidelity_is_unmeasured(tmp_path, monkeypatch):
+    import foundationskills.skills.deployment.skill as dep
+    monkeypatch.setattr(dep, "lookup", lambda *a, **k: {"family": "gemma4_unified", "mode": "lora", "modality": "text",
+                                                        "fidelity": "unmeasured"})
     res = _run(monkeypatch, tmp_path, _verify_spec(tmp_path, mode="lora"))
     assert res.status is Status.UNMEASURED and "DP-HO-002" in _rules(res)
 
