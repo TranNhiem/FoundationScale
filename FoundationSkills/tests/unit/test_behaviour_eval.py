@@ -193,7 +193,7 @@ def skill_md(index: list[dict]) -> str:
 
 
 def test_load_index_reads_real_packages(index: list[dict]) -> None:
-    assert len(index) == 17  # 4 lane + 4 discipline (A3.1) + 9 user-invoked (A3.2)
+    assert len(index) == 18  # 5 lane (A4.7 merging) + 4 discipline (A3.1) + 9 user-invoked (A3.2)
     for entry in index:
         assert entry["package"] and entry["name"]
         assert HEX64.fullmatch(str(entry["skill_md_sha256"])) is not None

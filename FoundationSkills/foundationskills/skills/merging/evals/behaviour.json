@@ -1,0 +1,284 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-merging-oracle-ME-HO-001",
+      "skill": "merging",
+      "rule_id": "ME-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "plan: bfloat16 storage requested; sub-precision LoRA updates are rounded away (measured)",
+      "fixture": {
+        "expected": "PASS with WARN ME-HO-001 (bf16 storage drops sub-precision updates)",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "base": "models/gemma-4-12B-it",
+          "out": "merged/m1",
+          "store_dtype": "bfloat16"
+        }
+      },
+      "fixture_sha256": "4c456c51c73ebabeaf54fe6da2c9e028f357bfd2667ce08a45310b01e601dfc8",
+      "expected_behavior": [
+        "Identifies the problem: plan: bfloat16 storage requested; sub-precision LoRA updates are rounded away (measured)",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule ME-HO-001"
+      ],
+      "ground_truth": "merging: rule ME-HO-001 (WARN, handoff phase) fires: plan: bfloat16 storage requested; sub-precision LoRA updates are rounded away (measured).",
+      "trigger_facts": [],
+      "question": "I want to fold the LoRA adapter at `runs/sft/final` into the base model `models/gemma-4-12B-it` and write the merged full weights to `merged/m1`, storing the merged checkpoint in `bfloat16`. Please run this as a plan only — do the probe-first checks first, then give me the `fs_launch_spec` for `merge_lora.py` along with the plan hash I need to type back before anything actually launches. I also want to see how the merged checkpoint gets verified structurally and by numeric logit parity against base + adapter before any checkpoint gets written. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-HO-002",
+      "skill": "merging",
+      "rule_id": "ME-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: a structural check of the merge script failed (parameter counts, LoRA weights left, processor) - RED",
+      "fixture": {
+        "expected": "RED naming ME-HO-002",
+        "observed": "no_lora_weights_left_on_disk is false",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.merge.json"
+        }
+      },
+      "fixture_sha256": "ba3d472d251a5add48b8db64a47046ef3af943c97afe0e0b1e19e548eff8d193",
+      "expected_behavior": [
+        "Identifies the problem: verify: a structural check of the merge script failed (parameter counts, LoRA weights left, processor) - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule ME-HO-002"
+      ],
+      "ground_truth": "merging: rule ME-HO-002 (BLOCK, handoff phase) fires: verify: a structural check of the merge script failed (parameter counts, LoRA weights left, processor) - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "no_lora_weights_left_on_disk is false"
+        }
+      ],
+      "question": "I ran the merge and observed that no_lora_weights_left_on_disk is false. I'd like to verify the merged checkpoint now using the spec at artifacts/fs_launch_spec.merge.json. What is the outcome of that verification?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-HO-003",
+      "skill": "merging",
+      "rule_id": "ME-HO-003",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: numeric parity outside tolerance (merged does not reproduce base + adapter) - RED",
+      "fixture": {
+        "expected": "RED naming ME-HO-003 (merged does not reproduce base + adapter)",
+        "observed": "parity ratio 0.237, agreement 0.915",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.merge.json"
+        }
+      },
+      "fixture_sha256": "472d523e185f30113549b719204eb3edf0349d11e05c6e7ff635b8741e255e4d",
+      "expected_behavior": [
+        "Identifies the problem: verify: numeric parity outside tolerance (merged does not reproduce base + adapter) - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule ME-HO-003"
+      ],
+      "ground_truth": "merging: rule ME-HO-003 (BLOCK, handoff phase) fires: verify: numeric parity outside tolerance (merged does not reproduce base + adapter) - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "parity ratio 0.237, agreement 0.915"
+        }
+      ],
+      "question": "I ran the merge verification and observed parity ratio 0.237 and agreement 0.915. Now I want to run the verify action against artifacts/fs_launch_spec.merge.json. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-HO-004",
+      "skill": "merging",
+      "rule_id": "ME-HO-004",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "verify: parity not run, or the adapter's effect too small to tell merged from base - UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED naming ME-HO-004 (parity not run)",
+        "request": {
+          "action": "verify",
+          "parity": false,
+          "spec": "artifacts/fs_launch_spec.merge.json"
+        }
+      },
+      "fixture_sha256": "ba7655c062f6f8f07d00b1914846722a28a593f380a96cb008ee49e479eb5879",
+      "expected_behavior": [
+        "Identifies the problem: verify: parity not run, or the adapter's effect too small to tell merged from base - UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule ME-HO-004"
+      ],
+      "ground_truth": "merging: rule ME-HO-004 (WARN, handoff phase) fires: verify: parity not run, or the adapter's effect too small to tell merged from base - UNMEASURED, never PASS.",
+      "trigger_facts": [],
+      "question": "I have a merge launch spec staged at `artifacts/fs_launch_spec.merge.json` and I want to run the verification step on it — structural checks only, no numeric logit parity against base + adapter (`parity` is `false`). This is for a LoRA adapter fold into its base model as merged full weights, not a model soup or a training run. What's the outcome of that verification?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-IN-001",
+      "skill": "merging",
+      "rule_id": "ME-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: base is not a model directory, or the adapter has no adapter_config.json/weights",
+      "fixture": {
+        "expected": "REFUSED naming ME-IN-001",
+        "observed": "adapter_config.json missing",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/missing",
+          "base": "models/gemma-4-12B-it",
+          "out": "merged/m1"
+        }
+      },
+      "fixture_sha256": "0fa1a9f01452328429d544a53e5f1a82f49fcea14c487423d2f2c8c6a3eff17d",
+      "expected_behavior": [
+        "Identifies the problem: plan: base is not a model directory, or the adapter has no adapter_config.json/weights",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ME-IN-001"
+      ],
+      "ground_truth": "merging: rule ME-IN-001 (BLOCK, input phase) fires: plan: base is not a model directory, or the adapter has no adapter_config.json/weights.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "adapter_config.json missing"
+        }
+      ],
+      "question": "I'm trying to plan a LoRA merge: base `models/gemma-4-12B-it`, adapter `runs/missing`, output `merged/m1`. When I looked at the adapter directory, I observed `adapter_config.json missing`. Given that, what's the outcome — can you still produce a merge plan and `fs_launch_spec`, or what do you need from me?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-IN-002",
+      "skill": "merging",
+      "rule_id": "ME-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: the adapter was trained on a different base than the one declared",
+      "fixture": {
+        "expected": "REFUSED naming ME-IN-002 (a different base)",
+        "observed": "adapter trained on gemma-4-26B-A4B-it",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "base": "models/gemma-4-12B-it",
+          "out": "merged/m1"
+        }
+      },
+      "fixture_sha256": "a84c869ad242491e43a350f25172af3a32d393ee23e8222b46db6612cd5ff651",
+      "expected_behavior": [
+        "Identifies the problem: plan: the adapter was trained on a different base than the one declared",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ME-IN-002"
+      ],
+      "ground_truth": "merging: rule ME-IN-002 (BLOCK, input phase) fires: plan: the adapter was trained on a different base than the one declared.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "adapter trained on gemma-4-26B-A4B-it"
+        }
+      ],
+      "question": "I want to fold my LoRA adapter at runs/sft/final into a merged full-weights checkpoint at merged/m1, with the plan going probe-first and then an fs_launch_spec for FoundationScale's merge_lora.py that I'll only launch once I type back the plan hash. The base model I've specified is models/gemma-4-12B-it. One thing I already know: the adapter was trained on gemma-4-26B-A4B-it. Can you tell me what the outcome of planning this merge is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-IN-003",
+      "skill": "merging",
+      "rule_id": "ME-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: the output directory exists and is not empty (a merge never overwrites)",
+      "fixture": {
+        "expected": "REFUSED naming ME-IN-003 (never overwrite)",
+        "observed": "merged/m1 already holds files",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "base": "models/gemma-4-12B-it",
+          "out": "merged/m1"
+        }
+      },
+      "fixture_sha256": "87486fdb7a8f158222c3ec8f58b5ed3c39207172bd75b928e3eec6a37c0657ca",
+      "expected_behavior": [
+        "Identifies the problem: plan: the output directory exists and is not empty (a merge never overwrites)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ME-IN-003"
+      ],
+      "ground_truth": "merging: rule ME-IN-003 (BLOCK, input phase) fires: plan: the output directory exists and is not empty (a merge never overwrites).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "merged/m1 already holds files"
+        }
+      ],
+      "question": "I want to plan (probe-first) folding the LoRA adapter at runs/sft/final into the base model models/gemma-4-12B-it, with the merged output going to merged/m1. One thing I've observed: merged/m1 already holds files. Please plan the merge and give me the fs_launch_spec plus the plan hash so I can type it back to launch merge_lora.py. Let me know what the outcome of the plan is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-IN-004",
+      "skill": "merging",
+      "rule_id": "ME-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: the merge cannot run here (FS merge script not found, peft/transformers/torch not importable, or not enough free disk)",
+      "fixture": {
+        "expected": "REFUSED naming ME-IN-004",
+        "observed": "peft not importable here",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "base": "models/gemma-4-12B-it",
+          "out": "merged/m1"
+        }
+      },
+      "fixture_sha256": "849a6b01939dd5dbca18ba668e3fdd56d3aaad69da3b0cea634fd293e76aa823",
+      "expected_behavior": [
+        "Identifies the problem: plan: the merge cannot run here (FS merge script not found, peft/transformers/torch not importable, or not enough free disk)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ME-IN-004"
+      ],
+      "ground_truth": "merging: rule ME-IN-004 (BLOCK, input phase) fires: plan: the merge cannot run here (FS merge script not found, peft/transformers/torch not importable, or not enough free disk).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "peft not importable here"
+        }
+      ],
+      "question": "I want to plan a LoRA merge: adapter `runs/sft/final` into base `models/gemma-4-12B-it`, writing the merged full weights to `merged/m1`. One thing I've observed here is that `peft` is not importable in this environment. Please do the probe-first planning and give me the `fs_launch_spec` for FoundationScale's `merge_lora.py` (I'll type back the plan hash to launch it), covering the structural check and numeric logit parity against base + adapter before anything is written. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-merging-oracle-ME-IN-005",
+      "skill": "merging",
+      "rule_id": "ME-IN-005",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the merge results JSON is missing or unreadable (the merge was not launched)",
+      "fixture": {
+        "expected": "REFUSED naming ME-IN-005",
+        "observed": "merge results file missing",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.merge.json"
+        }
+      },
+      "fixture_sha256": "0eb0dea817ec2e577f796b6adc57bc54c6abf143305471c59c6efc22f797a7f1",
+      "expected_behavior": [
+        "Identifies the problem: verify: the merge results JSON is missing or unreadable (the merge was not launched)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule ME-IN-005"
+      ],
+      "ground_truth": "merging: rule ME-IN-005 (BLOCK, input phase) fires: verify: the merge results JSON is missing or unreadable (the merge was not launched).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "merge results file missing"
+        }
+      ],
+      "question": "I ran a merge and when I went to check it, the merge results file is missing. I want to verify the run against the launch spec at artifacts/fs_launch_spec.merge.json. Can you walk me through what the verification outcome is for that spec?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

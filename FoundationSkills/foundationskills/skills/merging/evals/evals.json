@@ -1,0 +1,205 @@
+[
+  {
+    "id": "fskills-merging-positive-001",
+    "question": "We're done with the A4.4 adapter; fold it into gemma-4-12B-it and give me a merged checkpoint I can ship without the adapter files.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill and runs the plan action: it probes the merge via interfaces/fs/emit_merge.py and writes an fs_launch_spec that executes FoundationScale's merge_lora.py, without ever launching or echoing a hash (exit 96/ME-IN-001 if the model or adapter is missing).",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent emitted a probe-first plan and an fs_launch_spec rather than launching the merge itself",
+      "The agent named the launch steps (fskills hash --spec S, then fskills launch --spec S --confirm <hash> --no-submit)",
+      "The agent described verify as structural checks plus numeric parity (exit codes 0/5/95/96)"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-002",
+    "question": "The merge script reports all seven structural checks green. Good to deploy the merged checkpoint?",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill's verify action and explains that structure alone passes a merge that lost the adapter's effect, so numeric parity (parity.py) must also pass before exit 0/PASS with a written merged checkpoint.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent required numeric parity on top of the seven structural checks",
+      "The agent said structural PASS without parity is exit 95 UNMEASURED (ME-HO-004), not PASS",
+      "The agent said only structure AND parity passing yields exit 0 and a written checkpoint"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-003",
+    "question": "Is it safe to store the merged checkpoint in bfloat16 to save disk, or do we have to keep fp32?",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill and reports the measured bf16 warning: bf16 storage rounds away LoRA updates below the weight's precision (parity ratio 0.237, argmax agreement 0.915, 2.5% of the adapter's held-out gain lost on gemma-4-12B-it), so float32 storage is the default and bf16 is a WARN.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent cited the measured bf16 parity numbers (ratio 0.237 / agreement 0.915 vs fp32 4e-5 / 1.0)",
+      "The agent stated float32-stored merge is the default and bf16 storage is a WARN",
+      "The agent noted the loss comes from storage precision, not the merge arithmetic (bf16 vs fp32 math is bit-identical in loss)"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-004",
+    "question": "Fold our QLoRA training run's adapter back into the frozen 4-bit base and plan the merge job.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill's plan action and writes an fs_launch_spec around FoundationScale's merge_lora.py after probing (interfaces/fs/emit_merge.py), refusing with exit 96 and a named ME-IN rule if the QLoRA run has no adapter or the base is not a model directory.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent probed the base directory and adapter before planning the fold",
+      "The agent wrote an fs_launch_spec only after a successful probe and refused with the matching ME-IN-001..003 gap rule otherwise",
+      "The agent did not launch the merge and did not echo a launch hash"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-005",
+    "question": "Run the post-merge checks: did the fold keep the adapter's actual behaviour on the logits?",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill's verify action and runs parity.py, requiring the merged checkpoint to reproduce base plus adapter on the logits, with exit 5/ME-HO-003 when parity is outside tolerance and exit 95/ME-HO-004 when parity could not distinguish merged from base.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent measured numeric parity (logit-level ratio and argmax agreement) rather than trusting structure",
+      "The agent mapped out-of-tolerance parity to exit 5 (ME-HO-003) and an unmeasured/discriminating failure to exit 95 (ME-HO-004)",
+      "The agent wrote the merged checkpoint only on exit 0"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-006",
+    "question": "Our bf16-stored merge passed every structural check but parity ratio came back 0.237 with argmax agreement 0.915 — what's going on and how do we fix it?",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill and diagnoses the measured bf16 case: storage precision rounds away LoRA updates smaller than the weight's precision (bit-identical loss whether merge math ran in bf16 or fp32), so the fix is a float32-stored merge (parity 4e-5 / agreement 1.0) and the bf16-ratio result is exit 5/ME-HO-003 at default tolerance.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent attributed the low ratio to bf16 storage rounding away small adapter updates, not to broken merge arithmetic",
+      "The agent recommended a float32-stored merge as the fix",
+      "The agent classified the 0.237-ratio merge as exit 5 (ME-HO-003) rather than a PASS on structural checks alone"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-007",
+    "question": "Plan the merge for checkpoints/iter-12000, but I already deleted the adapter directory to free space — just proceed with what you have.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill and refuses because a merge requires the adapter's LoRA weights: the probe reports 'has no adapter' (or the base is not a model directory) and the run exits 96 naming the missing input under ME-IN-001, writing nothing.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent refused the request rather than proceeding 'with what it has'",
+      "The agent cited ME-IN-001 (missing adapter / base not a model directory) and exit 96 REFUSED",
+      "The agent stated nothing is written on refusal"
+    ]
+  },
+  {
+    "id": "fskills-merging-positive-008",
+    "question": "Our LoRA run on Qwen3.6-27B finished: fold the adapter in runs/qwen-sft/final into the base and check the merged weights still behave like base plus adapter before we hand them to the next stage.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the merging skill: fskills merge plan (probe-first, float32 storage), then fskills hash and fskills launch --confirm, then fskills merge verify for the structural checks and logit parity.",
+    "expected_behavior": [
+      "The agent read merging/SKILL.md before acting",
+      "The agent planned the merge probe-first (fskills merge plan) with float32 storage rather than merging directly",
+      "The agent named the launch steps (fskills hash --spec S, then fskills launch --spec S --confirm <hash> --no-submit)",
+      "The agent ran or named fskills merge verify (structural checks plus logit parity) before handing the merged weights on"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-001",
+    "question": "Start a QLoRA training run on gemma-4-12B-it with rank 16 and the rank-sweep config from last week.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Training (or fine-tuning) a LoRA/QLoRA adapter is the training skill's scope (fskills-training); merging only folds an already-trained adapter into its base, so fskills-merging must not trigger.",
+    "expected_behavior": [
+      "The agent used the training skill instead (or treated it as fskills-training scope)",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-002",
+    "question": "Score the merged checkpoint on the MMLU held-out split and give me the accuracy table.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Benchmark scoring and accuracy tables belong to the evaluation skill (fskills-evaluation); fskills-merging covers fold planning, structural checks and logits parity, not benchmark suites, so it must not trigger.",
+    "expected_behavior": [
+      "The agent used the evaluation skill instead (or treated it as fskills-evaluation scope)",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-003",
+    "question": "Combine our three fully fine-tuned model checkpoints with a TIES/SLERP soup and average the weights.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A model soup/weight-averaging of several full models is not a base + LoRA-adapter fold, so no FoundationSkills skill fits and fskills-merging must not trigger.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-004",
+    "question": "Build and clean the instruction-tuning dataset from the raw crawl and dedupe it before we train.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Dataset construction and cleaning is the data-engine skill's scope (fskills-data-engine); fskills-merging works only on checkpoints and adapters after training, so it must not trigger.",
+    "expected_behavior": [
+      "The agent used the data-engine skill instead (or treated it as fskills-data-engine scope)",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-005",
+    "question": "The timezone handling in our plain Python reporting service is wrong on CI — patch the bug and fix the test.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A timezone bug fix in a non-ML-training Python service is out of scope for every FoundationSkills skill, including merging.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-006",
+    "question": "Plan a three-day hiking itinerary around Taroko Gorge with one rest day and a budget under 300 USD.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Travel planning is not an ML-training request and matches no FoundationSkills package, so no skill should be loaded.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-007",
+    "question": "Set up the CI pipeline and Docker build for our TypeScript web dashboard.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "CI/Docker setup for a web app has nothing to do with checkpoint merging or adapter folds, so it matches no FoundationSkills skill's scope.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-008",
+    "question": "Write me a regex to extract timestamps and error codes from these nginx log lines.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Log-parsing regex help is a generic programming request outside ML training, evaluation, data or merging scope, so nothing should trigger.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-merging-negative-009",
+    "question": "For the serving stack, give me the merged-vs-adapter comparison on held-out NLL and tell me which one we should deploy.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Comparing held-out NLL of two checkpoints is evaluation work (fskills-evaluation held-out mode), not a merge; the merging skill does not score checkpoints.",
+    "expected_behavior": [
+      "The agent used the evaluation skill instead (held-out NLL comparison of two checkpoints is fskills-evaluation scope)",
+      "The agent did not read or activate merging/SKILL.md"
+    ]
+  }
+]

@@ -178,6 +178,18 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return _execute("training.planner", request, args.workdir or "fskills-plan")
 
 
+def _cmd_merge(args: argparse.Namespace) -> int:
+    """A4.7: plan a LoRA merge (emits a launch spec; never launches) or verify a launched merge (structure + parity)."""
+    if args.merge_cmd == "plan":
+        request: dict[str, Any] = {"action": "plan", "base": args.base, "adapter": args.adapter, "out": args.out,
+                                   "store_dtype": args.store_dtype, "device_map": args.device_map}
+    else:
+        request = {"action": "verify", "spec": args.spec, "parity": not args.no_parity, "device": args.device}
+        if args.max_ratio is not None:
+            request["max_ratio"] = args.max_ratio
+    return _execute("merging", request, args.workdir or "fskills-merge")
+
+
 def _cmd_experiments_index(args: argparse.Namespace) -> int:
     """A4.6: auto_research's read-only experiment index over run outputs, journals and campaign ledgers."""
     request = {"action": "index", "scan_roots": list(args.root)}
@@ -631,6 +643,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hardware", default=None)
     p.add_argument("--workdir", default=None)
     p.set_defaults(func=_cmd_plan)
+
+    p = sub.add_parser("merge", help="LoRA merge (A4.7): plan -> fskills launch --confirm -> verify")
+    merge_sub = p.add_subparsers(dest="merge_cmd", required=True)
+    p_mp = merge_sub.add_parser("plan", help="probe the merge and emit its fs_launch_spec (never launches)")
+    p_mp.add_argument("--base", required=True)
+    p_mp.add_argument("--adapter", required=True)
+    p_mp.add_argument("--out", required=True, help="merged checkpoint directory (must be absent or empty)")
+    p_mp.add_argument("--store-dtype", dest="store_dtype", default="float32", choices=["float32", "bfloat16"],
+                      help="float32 keeps the adapter's small updates; bfloat16 rounds them away (measured, ME-HO-001)")
+    p_mp.add_argument("--device-map", dest="device_map", default="cpu")
+    p_mp.add_argument("--workdir", default=None)
+    p_mp.set_defaults(func=_cmd_merge)
+    p_mv = merge_sub.add_parser("verify", help="structural checks + numeric parity of a launched merge; exit 0/5/95/96")
+    p_mv.add_argument("--spec", required=True, help="the merge fs_launch_spec written by `fskills merge plan`")
+    p_mv.add_argument("--device", default="cuda:0")
+    p_mv.add_argument("--no-parity", dest="no_parity", action="store_true", help="skip parity (verdict UNMEASURED)")
+    p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
+    p_mv.add_argument("--workdir", default=None)
+    p_mv.set_defaults(func=_cmd_merge)
 
     p = sub.add_parser("experiments", help="experiment management (auto_research, A4.6)")
     experiments_sub = p.add_subparsers(dest="experiments_cmd", required=True)

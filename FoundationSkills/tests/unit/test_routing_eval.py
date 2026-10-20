@@ -46,6 +46,7 @@ PACKAGE_NAMES = (
     "fskills-data-engine",
     "fskills-evaluation",
     "fskills-measured-or-unmeasured",
+    "fskills-merging",
     "fskills-probe-first",
     "fskills-refusal-surface",
     "fskills-training",

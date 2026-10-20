@@ -88,7 +88,7 @@ Warmup was clamped from the recipe's 100 to 10% of the run's 29 steps, and the s
 
 **RL**, `executable: false`. The spec names both blocking gaps:
 1. `FS RLTrainer does not persist the trained policy (no checkpoint)`;
-2. `merge the 'sft' LoRA adapter into the base model (FS writes adapter-only checkpoints; future merging skill)`.
+2. `merge the 'sft' LoRA adapter into the base model (FS writes adapter-only checkpoints): fskills merge plan ...`; the merging skill (`fskills merge plan` / `launch --confirm` / `merge verify`) closes it.
 
 The `rl_config` is ready (`dr_grpo`, group 8, lr 1e-6, gold key `answer`). An operator may run it with `fskills launch --measurement-only` to measure rewards and throughput.
 
@@ -104,5 +104,5 @@ Without the correct hash, the launch refuses with exit 96: "ask the user; never 
 
 - **Monitoring.** Training symptoms map to diagnoses via `TrainingPlannerSkill.diagnose_symptom(...)`: `loss_spike`, `divergence_nan`, `oom`, `reward_hacking`, `reward_saturation_unmeasured_steps`, `entropy_collapse`, `moe_router_imbalance`, `slow_throughput`, `fs_refused_96`.
 - **What this plan delivers today.** A CPT'd and SFT'd Llama-3.1-8B (the SFT output is a LoRA adapter on the CPT weights).
-- **What it needs for RL.** The merging skill (future), plus two FoundationScale core features: RL checkpoint persistence, and multi-GPU RL for scale.
+- **What it needs for RL.** The merging skill (`fskills merge`, A4.7) for the LoRA hand-off, plus two FoundationScale core features: RL checkpoint persistence, and multi-GPU RL for scale.
 - **After evaluation.** An `eval_report`, from the future benchmarking skill, goes back to the planner to recommend the next iteration.
