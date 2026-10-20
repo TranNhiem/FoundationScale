@@ -178,6 +178,19 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return _execute("training.planner", request, args.workdir or "fskills-plan")
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """A4.9: plan a GPU-confined vLLM deployment (emits a launch spec; never launches) or verify a running endpoint."""
+    if args.serve_cmd == "plan":
+        request: dict[str, Any] = {"action": "plan", "model": args.model, "gpu": args.gpu, "port": args.port,
+                                   "served_name": args.served_name, "modality": args.modality,
+                                   "max_model_len": args.max_model_len}
+        if args.adapter:
+            request["adapter"] = args.adapter
+    else:
+        request = {"action": "verify", "spec": args.spec}
+    return _execute("deployment", request, args.workdir or "fskills-serve")
+
+
 def _cmd_merge(args: argparse.Namespace) -> int:
     """A4.7: plan a LoRA merge (emits a launch spec; never launches) or verify a launched merge (structure + parity)."""
     if args.merge_cmd == "plan":
@@ -643,6 +656,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hardware", default=None)
     p.add_argument("--workdir", default=None)
     p.set_defaults(func=_cmd_plan)
+
+    p = sub.add_parser("serve", help="deployment (A4.9): plan -> fskills launch --confirm -> verify")
+    serve_sub = p.add_subparsers(dest="serve_cmd", required=True)
+    p_sp = serve_sub.add_parser("plan", help="probe a vLLM deployment and emit its GPU-confined fs_launch_spec")
+    p_sp.add_argument("--model", required=True, help="full or merged checkpoint (or the base, with --adapter)")
+    p_sp.add_argument("--adapter", default=None, help="LoRA adapter served unmerged (--enable-lora)")
+    p_sp.add_argument("--gpu", required=True, help="the leased GPU UUID (fs-gpus claim); the server is confined to it")
+    p_sp.add_argument("--port", type=int, default=18841)
+    p_sp.add_argument("--served-name", dest="served_name", default="model")
+    p_sp.add_argument("--modality", default="text", choices=["text", "vision"])
+    p_sp.add_argument("--max-model-len", dest="max_model_len", type=int, default=16384)
+    p_sp.add_argument("--workdir", default=None)
+    p_sp.set_defaults(func=_cmd_serve)
+    p_sv = serve_sub.add_parser("verify", help="health + placement + smoke of a running endpoint; exit 0/5/95/96")
+    p_sv.add_argument("--spec", required=True)
+    p_sv.add_argument("--workdir", default=None)
+    p_sv.set_defaults(func=_cmd_serve)
 
     p = sub.add_parser("merge", help="LoRA merge (A4.7): plan -> fskills launch --confirm -> verify")
     merge_sub = p.add_subparsers(dest="merge_cmd", required=True)

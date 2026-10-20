@@ -1,0 +1,187 @@
+[
+  {
+    "id": "fskills-deployment-positive-001",
+    "question": "The A4.8 merge landed at /models/gemma-4-12B-it-a48-merged a few hours ago. Put that directory behind an OpenAI-compatible endpoint on one of the GB200s in today's lease so I can start sending /v1/chat/completions traffic.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "This is the deployment skill's plan scope: it probes the checkpoint through interfaces/fs/emit_serve.py and writes an fs_launch_spec that starts the measured vllm031 server confined to the leased GPU UUID instead of serving anything directly.",
+    "expected_behavior": [
+      "The agent read deployment/SKILL.md before doing anything",
+      "The agent emitted a probe-first plan and an fs_launch_spec rather than launching the server or echoing a hash (96/DP-IN-001..004 on bad input)",
+      "The agent named the launch steps (fskills hash --spec S, then fskills launch --spec S --confirm <hash> --no-submit under nohup or an srun step)",
+      "The agent described verify as /v1/models plus per-name smoke completions plus GPU placement (codes 0/5/95/96)"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-002",
+    "question": "The serve job from this morning is answering on port 8012 — confirm for me that that endpoint is genuinely healthy and that every server-side GPU process is sitting on my leased GPU UUID, not somebody else's lease on that node.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Verifying a running endpoint's health and GPU placement is exactly the deployment skill's verify action, which writes a serving_spec record and exits 5 on DP-HO-003 or DP-HO-004 if something is wrong.",
+    "expected_behavior": [
+      "The agent routed the request to the deployment skill's verify action rather than planning a new serve",
+      "The agent checked /v1/models enumeration, per-server GPU UUID placement, and a smoke completion per served name",
+      "The agent stated the DP-HO-003 (health/smoke) and DP-HO-004 (wrong GPU) failure semantics"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-003",
+    "question": "Rather than the merged weights, I'd like the raw gemma-4-12B-it base served with the A4.8 rank-32 adapter hot-loaded at inference time. Set up the launch for that combo behind the OpenAI-compatible API.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Serving base weights plus a LoRA adapter behind the endpoint is deployment plan scope, and the skill must flag that the served fidelity of that variant is not measured (DP-HO-002).",
+    "expected_behavior": [
+      "The agent planned a serve of base plus adapter via the deployment skill and wrote an fs_launch_spec targeting the leased GPU",
+      "The agent raised the DP-HO-002 caveat (served LoRA fidelity is unmeasured, exit 95) up front",
+      "The agent did not attempt the merge itself or invoke the merging skill"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-004",
+    "question": "Before I pester anyone for another box: does the 35B checkpoint quantized to fp8 fit anywhere inside the measured serving envelope on GB200, or would a request like that have to be marked UNMEASURED?",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Deciding whether a target falls inside the measured serving envelope is the deployment skill's look-up against interfaces/fs/serving_envelope.py, which plans as UNMEASURED (exit 95 / DP-HO-001) when it does not.",
+    "expected_behavior": [
+      "The agent consulted the serving envelope lookup to classify the target as measured or UNMEASURED",
+      "The agent tied the out-of-envelope outcome to exit 95 and DP-HO-001 rather than refusing outright",
+      "The agent did not start or plan a launch that it could not bound as measured"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-005",
+    "question": "Our allocation got rescheduled and the vLLM frontend died with it. Redo the launch setup for the checkpoint at /models/gemma-4-12B-it-a48-merged on the GPU right we still hold, keeping the same two served names so my clients don't break.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Re-establishing a serve with a preserved served-name list is again the deployment skill's plan action producing an fs_launch_spec confined to the leased GPU UUID.",
+    "expected_behavior": [
+      "The agent wrote a fresh fs_launch_spec carrying both served names through the probe via emit_serve.py",
+      "The agent pinned the server to the leased GPU UUID and refused bad input with 96/DP-IN-003 if the UUID was invalid or already in use",
+      "The agent told the user to run fskills hash and then fskills launch --confirm <hash> --no-submit themselves"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-006",
+    "question": "Something on node gb200-sm07 is serving on 8012 but I don't trust the placement — isolate every GPU-bound process belonging to that server and tell me whether it maps to the UUID I leased or leaked onto a neighboring device.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Confirming that server GPU processes sit on the leased UUID is the placement half of the deployment skill's verify action, which reports DP-HO-004 and exits 5 if they do not.",
+    "expected_behavior": [
+      "The agent used the verify path to enumerate server GPU processes and compare them to the leased GPU UUID",
+      "The agent reported a placement mismatch as DP-HO-004 with exit 5 rather than as a generic warning",
+      "The agent wrote the serving_spec record as part of verify"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-007",
+    "question": "The live endpoint is registered under gemma-4-12b-it, gemma-a48-chat, and the legacy spelling gemma-4-12B-it. Run the health routine against it and prove each of those three names down to a smoke completion that actually returns text.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Enumerating /v1/models and exercising one smoke completion per served name is the deployment skill's verify action, exiting 5 under DP-HO-003 if any name fails.",
+    "expected_behavior": [
+      "The agent checked that all three served names appear in /v1/models",
+      "The agent ran a smoke completion per name and required returned text",
+      "The agent mapped any failure to DP-HO-003 and exit 5 (health or smoke failed)"
+    ]
+  },
+  {
+    "id": "fskills-deployment-positive-008",
+    "question": "I want gemma-4-6B-it with the A4.8 rank-32 adapter served today on GB200, but tell me up front whether that configuration is a measured cell or has to be labeled UNMEASURED before I sign anything.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": true,
+    "ground_truth": "Planning this serve and classifying its fidelity is the deployment skill's job, which must answer UNMEASURED (exit 95 / DP-HO-002) because served LoRA fidelity is not measured (logprobs inside bf16 noise).",
+    "expected_behavior": [
+      "The agent planned the serve through the deployment skill while checking the serving envelope",
+      "The agent returned the DP-HO-002 verdict with exit 95 and the cited noise-floor evidence rather than claiming a PASS",
+      "The agent still produced the launch plan and named the hash/launch confirmation steps"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-001",
+    "question": "Take the A4.8 rank-32 adapter and fold it straight into gemma-4-12B-it so I end up with one checkpoint directory and no adapter sidecar files to cart around.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": false,
+    "ground_truth": "Baking a trained adapter into its base weights is the merging skill's scope (plan via interfaces/fs/emit_merge.py), so the deployment skill must not trigger here.",
+    "expected_behavior": [
+      "The agent routed the request to the merging skill rather than deployment/SKILL.md",
+      "The agent planned a merge and never wrote a serve launch spec or mentioned endpoints"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-002",
+    "question": "Score the merged gemma checkpoint on the held-out benchmark and give me the accuracy numbers next to the noise floor so I can see whether the gain is real.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Producing benchmark scores and comparing them to the measured noise floor is the evaluation skill's scope, not deployment, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent used the evaluation skill to score the checkpoint",
+      "The agent did not read deployment/SKILL.md or plan any serve"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-003",
+    "question": "Fire up a QLoRA run on gemma-4-6B-it at rank 8 with the hyperparameter grid we swept last week, on whatever GPU the launcher hands us.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Launching a QLoRA fine-tuning run is the training skill's scope, since deployment only serves checkpoints after they exist, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent dispatched to the training skill instead of the deployment skill",
+      "The agent did not emit a serve launch spec or discuss an OpenAI-compatible endpoint"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-004",
+    "question": "Please build a cleaned SFT dataset for the next A4 iteration from the raw corpus dumped at /data/reddit-raw — dedupe, filter, and format it for training.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Constructing and cleaning a training corpus is the data engine's scope, and it happens before any checkpoint exists to serve, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent invoked the data-engine skill for the corpus build",
+      "The agent made no assumption about serving, endpoints, or vLLM"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-005",
+    "question": "Give me a shell one-liner that walks this repo, collects every TODO comment, and prints a count grouped by top-level directory.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "This is an ordinary shell/text-processing request with no model, checkpoint, or endpoint involved, so no foundation-skill package applies and fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent answered with shell or awk/grep commands directly",
+      "The agent did not read deployment/SKILL.md or contact any foundation-skill interface"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-006",
+    "question": "My git pre-commit hook on my fork keeps exiting with a stack trace before it reaches the formatter — help me figure out what's wrong with the hook script.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Debugging a local git hook is generic tooling troubleshooting unrelated to model serving, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent treated this as a general scripting/git debugging task",
+      "The agent did not probe a deployment interface or write an fs_launch_spec"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-007",
+    "question": "Turn these four bullet points I jotted down into a two-paragraph status email I can send to the team this afternoon.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Rewriting notes into an email is generic text composition with no model, checkpoint, or endpoint in scope, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent produced the requested prose directly",
+      "The agent invoked no foundation-skill package and did not mention anchors like DP-HO or serving specs"
+    ]
+  },
+  {
+    "id": "fskills-deployment-negative-008",
+    "question": "Set up a nightly cron entry that copies my home directory over to /mnt/backup and keeps only the last seven snapshots.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Scheduling a local backup with cron is system administration outside every skill boundary, so fskills-deployment must not trigger.",
+    "expected_behavior": [
+      "The agent answered with a crontab line and a rotation script or find -delete command",
+      "The agent did not read deployment/SKILL.md or route to any skill package"
+    ]
+  }
+]

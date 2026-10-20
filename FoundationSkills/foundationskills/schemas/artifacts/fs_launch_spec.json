@@ -22,7 +22,8 @@
       "enum": [
         "foundationscale-train",
         "fskills-rl",
-        "fskills-merge"
+        "fskills-merge",
+        "fskills-serve"
       ]
     },
     "argv": {

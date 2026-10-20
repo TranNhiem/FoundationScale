@@ -44,6 +44,7 @@ PACKAGE_NAMES = (
     "fskills-auto-research",
     "fskills-confirm-before-launch",
     "fskills-data-engine",
+    "fskills-deployment",
     "fskills-evaluation",
     "fskills-measured-or-unmeasured",
     "fskills-merging",

@@ -11,6 +11,7 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | `auto_research` | model | - | `auto_research_report`, `experiment_index` | `foundationskills/skills/auto_research/SKILL.md` |
 | `confirm_before_launch` | model | `fs_launch_spec` | `confirmation_record` | `foundationskills/skills/confirm_before_launch/SKILL.md` |
 | `data_engine` | model | `raw_data_ref` | `data_pipeline_spec`, `dataset`, `readiness_report` | `foundationskills/skills/data_engine/SKILL.md` |
+| `deployment` | model | `checkpoint` | `fs_launch_spec`, `serving_spec` | `foundationskills/skills/deployment/SKILL.md` |
 | `evaluation` | model | `checkpoint` | `eval_report` | `foundationskills/skills/evaluation/SKILL.md` |
 | `fs_data` | user | `raw_data_ref` | `workflow_record` | `foundationskills/skills/fs_data/SKILL.md` |
 | `fs_eval` | user | `checkpoint` | `workflow_record` | `foundationskills/skills/fs_eval/SKILL.md` |
