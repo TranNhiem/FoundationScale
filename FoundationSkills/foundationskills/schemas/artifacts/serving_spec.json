@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "required": [
+    "endpoint",
+    "served_names",
+    "family",
+    "mode",
+    "modality",
+    "engine",
+    "envelope",
+    "checks",
+    "verdict"
+  ],
+  "properties": {
+    "endpoint": {
+      "type": "string"
+    },
+    "served_names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "family": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "full",
+        "lora"
+      ]
+    },
+    "modality": {
+      "type": "string",
+      "enum": [
+        "text",
+        "vision"
+      ]
+    },
+    "engine": {
+      "type": "string"
+    },
+    "envelope": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "checks": {
+      "type": "object"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "RED",
+        "UNMEASURED"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

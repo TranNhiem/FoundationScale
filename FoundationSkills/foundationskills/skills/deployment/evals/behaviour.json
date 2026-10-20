@@ -1,0 +1,259 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-deployment-oracle-DP-HO-001",
+      "skill": "deployment",
+      "rule_id": "DP-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "the deployment target (engine x family x mode x modality) is outside the measured serving envelope - UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED naming DP-HO-001",
+        "observed": "family nemotron never served",
+        "request": {
+          "action": "plan",
+          "gpu": "GPU-447bb30a",
+          "model": "models/nemotron-nano",
+          "port": 18841
+        }
+      },
+      "fixture_sha256": "fd19082210e9f2fb93a7f57013ebea8e14183defebb658573821a3aa3f0ed220",
+      "expected_behavior": [
+        "Identifies the problem: the deployment target (engine x family x mode x modality) is outside the measured serving envelope - UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule DP-HO-001"
+      ],
+      "ground_truth": "deployment: rule DP-HO-001 (WARN, handoff phase) fires: the deployment target (engine x family x mode x modality) is outside the measured serving envelope - UNMEASURED, never PASS.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "family nemotron never served"
+        }
+      ],
+      "question": "I've observed that the family nemotron has never been served. I'd like to plan a serving deployment for the checkpoint at models/nemotron-nano on GPU-447bb30a, listening on port 18841. What is the outcome of that plan?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-HO-002",
+      "skill": "deployment",
+      "rule_id": "DP-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy",
+      "fixture": {
+        "expected": "UNMEASURED naming DP-HO-002",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "gpu": "GPU-447bb30a",
+          "model": "models/gemma-4-12B-it",
+          "port": 18841
+        },
+        "simulated": "healthy LoRA deployment verified"
+      },
+      "fixture_sha256": "ce9108e67954affd413582a7193a249f2983b99962d823e7d4e47a05b6555c44",
+      "expected_behavior": [
+        "Identifies the problem: LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule DP-HO-002"
+      ],
+      "ground_truth": "deployment: rule DP-HO-002 (WARN, handoff phase) fires: LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy.",
+      "trigger_facts": [
+        {
+          "path": "simulated",
+          "value": "healthy LoRA deployment verified"
+        }
+      ],
+      "question": "I want to serve the adapter at `runs/sft/final` on top of `models/gemma-4-12B-it`, confined to GPU `GPU-447bb30a`, with the vLLM container listening on port `18841` — the action I need planned is `plan`. I've already observed that simulated = \"healthy LoRA deployment verified\". What does the probe-first launch plan come out as, and what's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-HO-003",
+      "skill": "deployment",
+      "rule_id": "DP-HO-003",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: a served name is missing from /v1/models or a smoke completion returned no text - RED",
+      "fixture": {
+        "expected": "RED naming DP-HO-003",
+        "observed": "smoke completion returned empty text",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.serve.json"
+        }
+      },
+      "fixture_sha256": "8006d52ff8066233b48111297fbb0202d1c429d213100b7a66d66c6553a4f77b",
+      "expected_behavior": [
+        "Identifies the problem: verify: a served name is missing from /v1/models or a smoke completion returned no text - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule DP-HO-003"
+      ],
+      "ground_truth": "deployment: rule DP-HO-003 (BLOCK, handoff phase) fires: verify: a served name is missing from /v1/models or a smoke completion returned no text - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "smoke completion returned empty text"
+        }
+      ],
+      "question": "I ran the verification against `artifacts/fs_launch_spec.serve.json` and the smoke completion returned empty text. What's the outcome for this verify run?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-HO-004",
+      "skill": "deployment",
+      "rule_id": "DP-HO-004",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: a server GPU process is on a GPU other than the leased UUID - RED",
+      "fixture": {
+        "expected": "RED naming DP-HO-004 (not the leased GPU)",
+        "observed": "leased GPU-447bb30a, server on GPU-29098e5e",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.serve.json"
+        }
+      },
+      "fixture_sha256": "69a4b5309dc96e7e1e4ff13e5f27e8640f21e6d53f721a53f6b6318597e0020d",
+      "expected_behavior": [
+        "Identifies the problem: verify: a server GPU process is on a GPU other than the leased UUID - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule DP-HO-004"
+      ],
+      "ground_truth": "deployment: rule DP-HO-004 (BLOCK, handoff phase) fires: verify: a server GPU process is on a GPU other than the leased UUID - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "leased GPU-447bb30a, server on GPU-29098e5e"
+        }
+      ],
+      "question": "I observed \"leased GPU-447bb30a, server on GPU-29098e5e\" — so my lease is on GPU-447bb30a while the server is running on GPU-29098e5e. I want to run a verify action against `artifacts/fs_launch_spec.serve.json`. What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-IN-001",
+      "skill": "deployment",
+      "rule_id": "DP-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: the model is not a model directory, or the adapter has no adapter_config.json",
+      "fixture": {
+        "expected": "REFUSED naming DP-IN-001",
+        "observed": "no config.json in model",
+        "request": {
+          "action": "plan",
+          "gpu": "GPU-447bb30a",
+          "model": "merged/missing",
+          "port": 18841
+        }
+      },
+      "fixture_sha256": "9ea6d5070d7935f93b359de32119b6cb2903adf346c6e4b38b9cfc1d9e3cb1e2",
+      "expected_behavior": [
+        "Identifies the problem: plan: the model is not a model directory, or the adapter has no adapter_config.json",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DP-IN-001"
+      ],
+      "ground_truth": "deployment: rule DP-IN-001 (BLOCK, input phase) fires: plan: the model is not a model directory, or the adapter has no adapter_config.json.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "no config.json in model"
+        }
+      ],
+      "question": "I'm planning a vLLM serve of `merged/missing` on `GPU-447bb30a` bound to port 18841, and I observed that the model directory has no `config.json` in it (observed = \"no config.json in model\"). Given that, what's the outcome of the plan?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-IN-002",
+      "skill": "deployment",
+      "rule_id": "DP-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: the adapter was trained on a different base than the served model",
+      "fixture": {
+        "expected": "REFUSED naming DP-IN-002",
+        "observed": "adapter trained on gemma-4-31B-it",
+        "request": {
+          "action": "plan",
+          "adapter": "runs/sft/final",
+          "gpu": "GPU-447bb30a",
+          "model": "merged/gemma-4-12B-sft",
+          "port": 18841
+        }
+      },
+      "fixture_sha256": "80b7f854632ef6c8a4ec7a887b70069d7faa9953540869d773576bcdf561aa9c",
+      "expected_behavior": [
+        "Identifies the problem: plan: the adapter was trained on a different base than the served model",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DP-IN-002"
+      ],
+      "ground_truth": "deployment: rule DP-IN-002 (BLOCK, input phase) fires: plan: the adapter was trained on a different base than the served model.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "adapter trained on gemma-4-31B-it"
+        }
+      ],
+      "question": "I want to plan serving for adapter `runs/sft/final` on GPU `GPU-447bb30a` with model `merged/gemma-4-12B-sft` on port 18841. One thing I've observed is that the adapter was trained on `gemma-4-31B-it`. What's the outcome of the plan?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-IN-003",
+      "skill": "deployment",
+      "rule_id": "DP-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: no leased GPU UUID given, or the port is already in use (the server must be confined to one leased GPU)",
+      "fixture": {
+        "expected": "REFUSED naming DP-IN-003 (no leased GPU UUID)",
+        "request": {
+          "action": "plan",
+          "gpu": "",
+          "model": "merged/gemma-4-12B-sft",
+          "port": 18841
+        }
+      },
+      "fixture_sha256": "9d47f9fee52eee3c37dc21e0cf7b81b1ff0adf5f8a093c5ad45975f771e6c778",
+      "expected_behavior": [
+        "Identifies the problem: plan: no leased GPU UUID given, or the port is already in use (the server must be confined to one leased GPU)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DP-IN-003"
+      ],
+      "ground_truth": "deployment: rule DP-IN-003 (BLOCK, input phase) fires: plan: no leased GPU UUID given, or the port is already in use (the server must be confined to one leased GPU).",
+      "trigger_facts": [],
+      "question": "I want to plan serving for my merged checkpoint `merged/gemma-4-12B-sft` on port `18841` — action `plan`, probe-first with the measured vLLM container. Which GPU should I confine the `fs_launch_spec` probe to (e.g. `cuda:0`, or a specific UUID)? Once you give me the plan hash back I'll launch, and then we can verify served names, GPU placement, and a smoke completion before recording the `serving_spec`.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-deployment-oracle-DP-IN-004",
+      "skill": "deployment",
+      "rule_id": "DP-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the spec is unreadable or the endpoint does not answer /v1/models",
+      "fixture": {
+        "expected": "REFUSED naming DP-IN-004",
+        "observed": "endpoint connection refused",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.serve.json"
+        }
+      },
+      "fixture_sha256": "e82b1bc2647bfcae887c969bcc925a5f9ad598f99bd8db8a4c811444d93b793a",
+      "expected_behavior": [
+        "Identifies the problem: verify: the spec is unreadable or the endpoint does not answer /v1/models",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule DP-IN-004"
+      ],
+      "ground_truth": "deployment: rule DP-IN-004 (BLOCK, input phase) fires: verify: the spec is unreadable or the endpoint does not answer /v1/models.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "endpoint connection refused"
+        }
+      ],
+      "question": "I ran the probe-first serving launch and then tried to reach the endpoint, and I observed \"endpoint connection refused\" when attempting to connect. Please verify `artifacts/fs_launch_spec.serve.json` against the running endpoint and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

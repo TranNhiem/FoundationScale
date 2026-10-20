@@ -24,6 +24,7 @@
         "./skills/fskills-auto-research",
         "./skills/fskills-confirm-before-launch",
         "./skills/fskills-data-engine",
+        "./skills/fskills-deployment",
         "./skills/fskills-evaluation",
         "./skills/fskills-measured-or-unmeasured",
         "./skills/fskills-merging",
