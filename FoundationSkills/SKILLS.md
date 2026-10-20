@@ -21,6 +21,7 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | `fs_research` | user | `goal_spec`, `claim_set` | `research_findings` | `foundationskills/skills/fs_research/SKILL.md` |
 | `fs_status` | user | - | `status_explanation` | `foundationskills/skills/fs_status/SKILL.md` |
 | `measured_or_unmeasured` | model | `claim_set` | `claim_set` | `foundationskills/skills/measured_or_unmeasured/SKILL.md` |
+| `merging` | model | `checkpoint` | `fs_launch_spec`, `checkpoint` | `foundationskills/skills/merging/SKILL.md` |
 | `probe_first` | model | `training_plan` | `probe_report` | `foundationskills/skills/probe_first/SKILL.md` |
 | `refusal_surface` | model | `finding_set` | `finding_set` | `foundationskills/skills/refusal_surface/SKILL.md` |
 | `training.emit` | model | `training_plan`, `dataset` | `fs_launch_spec` | `foundationskills/skills/training/SKILL.md` |

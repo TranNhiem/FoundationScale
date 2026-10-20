@@ -307,11 +307,12 @@ def test_orchestrator_allow_unmeasured_and_final_status(tmp_path: Path) -> None:
 def test_confirmation_gate() -> None:
     plan = {"steps": [{"skill": "x"}]}
     token = plan_hash(plan)
-    with pytest.raises(ConfirmationRequired) as exc:
-        require_confirmation(plan, None)
-    assert token in str(exc.value) and "never auto-fill" in str(exc.value)
-    with pytest.raises(ConfirmationRequired):
-        require_confirmation(plan, "deadbeefdeadbeef")
+    for wrong in (None, "deadbeefdeadbeef"):
+        with pytest.raises(ConfirmationRequired) as exc:
+            require_confirmation(plan, wrong)
+        # CB-IN-001: the refusal never carries the hash (or any prefix of it) -- an agent could auto-fill it
+        assert token[:8] not in str(exc.value)
+        assert "never auto-fill" in str(exc.value) and "fskills hash" in str(exc.value)
     require_confirmation(plan, token)
 
 

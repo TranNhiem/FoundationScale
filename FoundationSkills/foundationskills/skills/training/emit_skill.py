@@ -381,7 +381,8 @@ class TrainingEmitSkill(BaseSkill):
                                      f"(FS RLTrainer does not save)")
                 elif previous["method"] in ("lora", "qlora"):
                     chain_missing = (f"missing: merge the {previous['name']!r} LoRA adapter into the base model "
-                                     f"(FS writes adapter-only checkpoints; future merging skill)")
+                                     f"(FS writes adapter-only checkpoints): `fskills merge plan --base <base> --adapter "
+                                     f"{previous['output_dir']}/final --out <dir>`, launch it, then `fskills merge verify`")
                 stage_model = f"{previous['output_dir']}/final"
 
             if str(stage.get("stage")) == "agentic_rl":

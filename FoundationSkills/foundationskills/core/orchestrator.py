@@ -27,8 +27,11 @@ class ConfirmationRequired(Exception):
 def require_confirmation(plan_payload: dict[str, Any], token: str | None) -> None:
     expected = plan_hash(plan_payload)
     if token != expected:
+        # The expected hash is never part of the message: a hash an agent reads from an error is a hash it can
+        # auto-fill, which turns the confirmation into a formality (CB-IN-001). The user reads it from `fskills hash`.
         raise ConfirmationRequired(
-            f"confirmation required for plan hash prefix {expected}; ask the user; never auto-fill"
+            "confirmation required: the plan hash was not given or does not match; the USER reads it with "
+            "`fskills hash --spec <spec>` (or --plan) and types it back; ask the user, never auto-fill"
         )
 
 
