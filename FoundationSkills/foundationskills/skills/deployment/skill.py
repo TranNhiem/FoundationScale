@@ -12,9 +12,10 @@ Actions:
 Exit contract:
 - 96 REFUSED: DP-IN-001..004.
 - 5 RED: health or smoke failed (DP-HO-003), or the server is on the wrong GPU (DP-HO-004).
-- 95 UNMEASURED: the target is outside the measured envelope (DP-HO-001), or this is a LoRA deployment whose served
-  fidelity is not measured yet (DP-HO-002).
-- 0 PASS only for a healthy, correctly placed, full-weights deployment in a measured cell.
+- 95 UNMEASURED: the target is outside the measured envelope (DP-HO-001), or a LoRA deployment in a cell whose served
+  fidelity is not measured (DP-HO-002).
+- 0 PASS only for a healthy, correctly placed deployment in a measured cell. A LoRA cell also needs its served fidelity
+  measured; gemma4 LoRA keeps 99.5% of the adapter's held-out gain.
 """
 
 from __future__ import annotations
@@ -44,8 +45,8 @@ from foundationskills.interfaces.fs.serving_envelope import ENGINE, lookup
 
 _GAP_RULES = (("not a model directory", "DP-IN-001"), ("no adapter_config", "DP-IN-001"),
               ("was trained on", "DP-IN-002"), ("not a GPU UUID", "DP-IN-003"), ("already in use", "DP-IN-003"))
-_LORA_FIDELITY = ("served-LoRA fidelity is not measured: token-level logprobs sit inside bf16 noise (floor 0.40, served "
-                  "0.63, a49/FINDINGS.md); a task-level held-out check is the follow-up")
+_LORA_FIDELITY = ("served-LoRA fidelity is not measured for this cell: it needs a task-level held-out NLL check through "
+                  "the server (per-token logprobs are dominated by bf16 noise; a49/FINDINGS.md)")
 
 
 def _http_json(url: str, body: dict[str, Any] | None = None, timeout: int = 120) -> dict[str, Any]:
@@ -121,7 +122,8 @@ class DeploymentSkill(BaseSkill):
                  "input"),
         RuleSpec("DP-HO-001", "the deployment target (engine x family x mode x modality) is outside the measured serving "
                  "envelope - UNMEASURED, never PASS", Severity.WARN, "handoff"),
-        RuleSpec("DP-HO-002", "LoRA deployment: served-adapter fidelity is not measured yet - UNMEASURED even when healthy",
+        RuleSpec("DP-HO-002", "LoRA deployment in a cell whose served-adapter fidelity is not measured - UNMEASURED even when "
+                 "healthy",
                  Severity.WARN, "handoff"),
         RuleSpec("DP-HO-003", "verify: a served name is missing from /v1/models or a smoke completion returned no text - "
                  "RED", Severity.BLOCK, "handoff"),
@@ -213,7 +215,7 @@ class DeploymentSkill(BaseSkill):
         if not red and cell is None:
             findings.append(self.finding("DP-HO-001", "target outside the measured serving envelope", {"target": serve},
                                          "add the measured row before claiming this deployment"))
-        if not red and serve["mode"] == "lora":
+        if not red and serve["mode"] == "lora" and (cell or {}).get("fidelity") != "measured":
             findings.append(self.finding("DP-HO-002", _LORA_FIDELITY, {"envelope": cell},
                                          "serve a float32-stored merged checkpoint (A4.7) for a measured full-weights "
                                          "cell, or wait for the task-level fidelity check"))
@@ -257,8 +259,8 @@ class DeploymentSkill(BaseSkill):
             "DP-IN-004": {"request": verify, "observed": "endpoint connection refused", "expected": "REFUSED naming DP-IN-004"},
             "DP-HO-001": {"request": {**plan, "model": "models/nemotron-nano"}, "observed": "family nemotron never served",
                           "expected": "UNMEASURED naming DP-HO-001"},
-            "DP-HO-002": {"request": {**plan, "model": "models/gemma-4-12B-it", "adapter": "runs/sft/final"},
-                          "simulated": "healthy LoRA deployment verified", "expected": "UNMEASURED naming DP-HO-002"},
+            "DP-HO-002": {"request": verify, "observed": "LoRA cell fidelity marked unmeasured",
+                          "expected": "UNMEASURED naming DP-HO-002 (healthy, but served-LoRA fidelity unmeasured)"},
             "DP-HO-003": {"request": verify, "observed": "smoke completion returned empty text",
                           "expected": "RED naming DP-HO-003"},
             "DP-HO-004": {"request": verify, "observed": "leased GPU-447bb30a, server on GPU-29098e5e",

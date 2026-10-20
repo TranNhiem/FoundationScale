@@ -20,8 +20,8 @@ config + matching base, GPU UUID, port) and emits an `fs_launch_spec` that start
 server on exactly one leased GPU UUID; nothing launches without the plan hash **you** read and
 type back to `fskills launch --confirm`. `verify` then checks the running endpoint: `/v1/models`
 is queried against HTTP, every server process is tied to its GPU UUID (`nvidia-smi`), and each
-served name gets a smoke completion. A target outside the measured serving envelope — or a LoRA
-deployment whose served fidelity is not measured — is UNMEASURED, never PASS.
+served name gets a smoke completion. A target outside the measured serving envelope, or a LoRA
+deployment in a cell whose served fidelity is not measured, is UNMEASURED, never PASS.
 
 ## When to use
 
@@ -83,7 +83,7 @@ UNMEASURED. Merging belongs to fskills-merging, training to fskills-training, sc
 | DP-IN-003 | input | BLOCK | plan: no leased GPU UUID given, or the port is already in use (the server must be confined to one leased GPU) |
 | DP-IN-004 | input | BLOCK | verify: the spec is unreadable or the endpoint does not answer /v1/models |
 | DP-HO-001 | handoff | WARN | the deployment target (engine x family x mode x modality) is outside the measured serving envelope — UNMEASURED, never PASS |
-| DP-HO-002 | handoff | WARN | LoRA deployment: served-adapter fidelity is not measured yet — UNMEASURED even when healthy |
+| DP-HO-002 | handoff | WARN | LoRA deployment in a cell whose served-adapter fidelity is not measured: UNMEASURED even when healthy |
 | DP-HO-003 | handoff | BLOCK | verify: a served name is missing from /v1/models or a smoke completion returned no text — RED |
 | DP-HO-004 | handoff | BLOCK | verify: a server GPU process is on a GPU other than the leased UUID — RED |
 
@@ -95,10 +95,13 @@ UNMEASURED. Merging belongs to fskills-merging, training to fskills-training, sc
 |---|---|---|---|---|
 | qwen3_5 | full | text | unmeasured | B2.2 + B6.1: Qwen3.5-4B and Qwen3.8-27B served as pi agent endpoints on GB200 |
 | gemma4_unified | full | text | unmeasured | A4.9 a49/FINDINGS.md: gemma-4-12B-it served on GB200, prompt logprobs returned |
-| gemma4_unified | lora | text | unmeasured | A4.9 a49/FINDINGS.md: gemma-4-12B-it + A4.4 LoRA unmerged (`--enable-lora`, rank 16); LoRA applied (0.91 nats/token vs base), token-level fidelity inside bf16 noise |
+| gemma4_unified | lora | text | measured | A4.9 a49/FINDINGS.md: gemma-4-12B-it + A4.4 LoRA unmerged; task-level held-out NLL: served LoRA keeps 99.5% of the adapter's gain (merged copies 95.4%) |
 
-Served-LoRA fidelity is not measured: token-level logprobs sit inside bf16 noise (floor 0.40, served 0.63,
-a49/FINDINGS.md); a task-level held-out check is the follow-up.
+Served-LoRA fidelity is measured at the **task level**: held-out NLL over 1,080 unseen answer tokens with identical token
+ids. Through vLLM, base + LoRA unmerged keeps **99.5%** of the local adapter's gain (pre-registered band 0.95–1.05;
+engine sanity 0.004 nats). Merged checkpoints (A4.7, float32- or bf16-stored) keep **95.4%**, because the server loads them
+in bf16, so unmerged LoRA is the higher-fidelity deployment. Per-token logprobs cannot measure fidelity: bf16 noise
+dominates them (floor 0.40).
 
 ## Failure handling
 
@@ -109,8 +112,8 @@ a49/FINDINGS.md); a task-level held-out check is the follow-up.
 - A server process on a GPU other than the leased UUID: RED (5) with DP-HO-004. Stop the server now and re-plan with the
   leased UUID — this is what happened on 2026-10-20 outside a step.
 - Outside the measured envelope (or placement unmeasurable, e.g. verify off the server host): UNMEASURED (95) with
-  DP-HO-001, never PASS. Unmerged LoRA: UNMEASURED with DP-HO-002 — serve an A4.7 float32-merged copy for a measured
-  full-weights cell.
+  DP-HO-001, never PASS. A LoRA deployment in a cell without measured fidelity: UNMEASURED with DP-HO-002. Measure it
+  with a task-level held-out check first.
 
 ## FS interface
 
@@ -127,7 +130,7 @@ a49/FINDINGS.md); a task-level held-out check is the follow-up.
 - **PASS:** `fskills serve plan --model merged/gemma-4-12B-it --gpu <leased GPU UUID> --port 18841`, hash, launch, then
   `fskills serve verify --spec <spec>`: both served names listed, smoke "OK", every server process on the leased UUID →
   `serving_spec` written with verdict PASS.
-- **UNMEASURED (LoRA):** `--model models/gemma-4-12B-it --adapter runs/sft/final`: both ids answer and placement is right,
-  → verify UNMEASURED with DP-HO-002 (served-LoRA fidelity not measured: 0.63 vs 0.40 bf16-noise floor).
+- **PASS (LoRA):** `--model models/gemma-4-12B-it --adapter runs/sft/final`. Both ids answer and placement is right, and
+  this cell's served fidelity is measured (99.5% of the adapter's gain), so verify gives PASS.
 - **UNMEASURED (family):** `--model models/nemotron-nano`: plan UNMEASURED with DP-HO-001 (the family was never served
   here); measure it first, then add a row to the envelope.
