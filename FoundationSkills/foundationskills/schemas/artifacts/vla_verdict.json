@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "required": [
+    "model_id",
+    "suite",
+    "card_value",
+    "tolerance",
+    "measured",
+    "verdict"
+  ],
+  "properties": {
+    "model_id": {
+      "type": "string"
+    },
+    "suite": {
+      "type": "string"
+    },
+    "card_value": {
+      "type": "number"
+    },
+    "tolerance": {
+      "type": "number"
+    },
+    "measured": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "gap": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "RED",
+        "UNMEASURED"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

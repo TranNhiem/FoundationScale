@@ -23,7 +23,8 @@
         "foundationscale-train",
         "fskills-rl",
         "fskills-merge",
-        "fskills-serve"
+        "fskills-serve",
+        "fskills-vla-eval"
       ]
     },
     "argv": {

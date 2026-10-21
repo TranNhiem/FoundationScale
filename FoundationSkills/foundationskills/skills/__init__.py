@@ -49,6 +49,14 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
         pass
 
     try:
+        from foundationskills.skills.vla.skill import VlaSkill
+
+        if VlaSkill.name not in registry.names():
+            registry.register(VlaSkill())
+    except ImportError:
+        pass
+
+    try:
         from foundationskills.skills.deployment.skill import DeploymentSkill
 
         if DeploymentSkill.name not in registry.names():
