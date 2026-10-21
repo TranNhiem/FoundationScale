@@ -1,0 +1,205 @@
+{
+  "allowlist": {
+    "publishers": [
+      "mattpocock"
+    ],
+    "sources": [
+      "https://github.com/mattpocock/skills"
+    ],
+    "spdx": [
+      "MIT",
+      "Apache-2.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "ISC",
+      "0BSD",
+      "CC0-1.0",
+      "CC-BY-4.0"
+    ]
+  },
+  "schema": "fskills.skills_lock/1",
+  "skills": {
+    "codebase-design": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "DEEPENING.md": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1",
+        "DESIGN-IT-TWICE.md": "52b52e75655a27aea59c6966b410bac82448968ad46ef1ebb9f07c274e3ae010",
+        "SKILL.md": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2",
+        "agents/openai.yaml": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/engineering/codebase-design",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "d22cd75d7bb786f5576dedbec3dd92dc5ab6dcc00a136341721fa9005c0f8485",
+          "kind": "advisory",
+          "reason": "The description matches the skill body's stated purpose exactly: it provides shared vocabulary (glossary of module, interface, depth, seam, adapter, leverage, locality) for designing deep modules, and covers interface design, deepening opportunities, seam placement, testability, and AI-navigability. The body's content and referenced follow-up topics (DEEPENING.md, DESIGN-IT-TWICE.md) align with the described use cases.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "domain-modeling": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "ADR-FORMAT.md": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
+        "GLOSSARY-FORMAT.md": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801",
+        "SKILL.md": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3",
+        "agents/openai.yaml": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/engineering/domain-modeling",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "afde9677985c3318fcb9c3dcda232ff717fb175d9fdedf1c1650e75cce89e363",
+          "kind": "advisory",
+          "reason": "The skill description matches the body's frontmatter verbatim and accurately summarizes the body's content: building/sharpening a domain model, discussing codebase terminology, and writing/editing GLOSSARY.md and ADRs. The body elaborates on these exact activities (challenging terms, sharpening language, updating GLOSSARY.md, offering ADRs) without introducing scope that contradicts the description.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "grill-with-docs": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "SKILL.md": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe",
+        "agents/openai.yaml": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/engineering/grill-with-docs",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "00a1109703301a20b9ca1cd0c5b5ed01a443123f717b1360f24467eeb789c71e",
+          "kind": "advisory",
+          "reason": "The body's frontmatter description matches the given description verbatim, and the body's implementation plausibly supports it: delegating to the 'grilling' skill covers the relentless interview to sharpen a plan/design, while 'domain-modeling' covers producing the accompanying documentation (glossary, and by extension design/ADR-style records). The doc-creation aspect (especially ADRs) is only implicit via delegation rather than explicitly implemented, but the two delegated skills together are consistent with the described behavior.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "grilling": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "SKILL.md": "befdff1e27a1dfe2a294d5871169ac1afe16d983911daa4f32627514a48c1e15",
+        "agents/openai.yaml": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/productivity/grilling",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "ce62be3279e82f767014ca9fc866706d676402d3f91996a99a174e1dc5d4d0f5",
+          "kind": "advisory",
+          "reason": "The description promises relentless questioning ('grilling') of a plan, decision, or idea to stress-test the user's thinking, and the body delivers exactly that: an intensive, multi-round interview process that interrogates every decision in a design tree until nothing is left unexamined. The structured frontier/rounds methodology is simply a concrete implementation of 'grilling relentlessly,' and the trigger conditions in the description match the skill's purpose. No contradictions exist between the two.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "pr": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "CREDITS.md": "a7a087127665d7298a72280ef6e19c41ad8404523712a788c8dc3ab414bc2497",
+        "SKILL.md": "ab63f1cf78647389edcd386c9427c5dfca27ed2836930c24773ffee834c19bcd",
+        "agents/openai.yaml": "2295b586624db4ef546f3fd4695492f039d941a46d8a1593a702ce3ca511b8ad"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/engineering/pr",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "af870147277cfe07215fed10bb6fa7aba891a97d4007c335afc018c0d60049e6",
+          "kind": "advisory",
+          "reason": "The description states the skill is used when writing a PR body, and the body provides a template and detailed guidance for writing PR bodies (Summary, Evidence, Merge Danger sections), which directly matches the stated purpose.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "retro": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "SKILL.md": "33fbc28568e3146f20fd908b12998bc0ab30aa4f4c87288199a40793efa94696",
+        "agents/openai.yaml": "cb6fb9d7e6b4be5975f41f6def1dd00a1255bad5d9b02696b124c924a8b8745c"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/engineering/retro",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "f0adca94c99c2815090df191119892b33c05c2f517b8b21d3ddf6651c5fb40a9",
+          "kind": "advisory",
+          "reason": "The description accurately summarizes the skill body, which details a process for conducting a retrospective on a coding session and suggesting environment improvements.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "wait-what": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "SKILL.md": "d961bb37defd975c539427edb8f450cdbccdcdd552e213c1ece46676a7970905",
+        "agents/openai.yaml": "b41faadf741d51e4ea184148b2d1854d93f947aaf754c7844f70a00f04194999"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/productivity/wait-what",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "bf8bed4e9bf7b7c864752657d4496a297e69df5370a84c4db0873a825df6f9df",
+          "kind": "advisory",
+          "reason": "The skill description matches the frontmatter description verbatim, and the body implements exactly what the description promises: it halts the current exchange and asks the assistant to re-pitch the previous message. The body adds concrete requirements (provide context, use ASD-STE100 Simplified Technical English, follow GLOSSARY-MAP.md to the correct GLOSSARY.md for ubiquitous language), which elaborate on but do not contradict the description. The disable-model-invocation flag is consistent with a user-triggered 'stop and re-pitch' command.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    },
+    "writing-for-agents": {
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "files": {
+        "SKILL-MECHANICS.md": "c768e6307c7c10728c401c213f2c4ba71c542127eeb7ad2956aabd15a0fa0059",
+        "SKILL.md": "551adca942227b44192edba88acd4e8db911f0121ce58ad16944ccf6a896a74a",
+        "agents/openai.yaml": "eacb24b2a618cfb81dacb0416f4fdd75ddf3a8060f8ddb99aae1b1e301907e4b"
+      },
+      "license": "MIT",
+      "license_evidence": "LICENSE (repository root) heading: 'MIT License'",
+      "path": "skills/productivity/writing-for-agents",
+      "publisher": "mattpocock",
+      "reviews": [
+        {
+          "date": "2026-10-21",
+          "decision": "approve",
+          "files_sha256": "823e45374d26a8d8ba989d451d865d0bd28f89c67461c3d91f5c30c76cc73dc2",
+          "kind": "advisory",
+          "reason": "The description matches the skill body's frontmatter description verbatim and accurately summarizes the content: the body is a reference for writing agent-consumed documents (skills, AGENTS.md/CLAUDE.md, pointed-to docs), covering context pointers, loads, information hierarchy, completion criteria, splitting, leading words, and pruning.",
+          "reviewer": "advisory:mimo-v2.6-pro (A6.2 intake)"
+        }
+      ],
+      "source": "https://github.com/mattpocock/skills"
+    }
+  }
+}
