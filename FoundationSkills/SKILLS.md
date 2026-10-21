@@ -9,6 +9,7 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | Skill | Invocation | Consumes | Produces | Guide |
 |---|---|---|---|---|
 | `auto_research` | model | - | `auto_research_report`, `experiment_index` | `foundationskills/skills/auto_research/SKILL.md` |
+| `compression` | model | `checkpoint` | `fs_launch_spec`, `compression_report` | `foundationskills/skills/compression/SKILL.md` |
 | `confirm_before_launch` | model | `fs_launch_spec` | `confirmation_record` | `foundationskills/skills/confirm_before_launch/SKILL.md` |
 | `data_engine` | model | `raw_data_ref` | `data_pipeline_spec`, `dataset`, `readiness_report` | `foundationskills/skills/data_engine/SKILL.md` |
 | `deployment` | model | `checkpoint` | `fs_launch_spec`, `serving_spec` | `foundationskills/skills/deployment/SKILL.md` |

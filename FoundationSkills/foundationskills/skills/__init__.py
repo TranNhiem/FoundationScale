@@ -73,6 +73,14 @@ def register_builtin_skills(registry: SkillRegistry = REGISTRY) -> list[str]:
         pass
 
     try:
+        from foundationskills.skills.compression.skill import CompressionSkill
+
+        if CompressionSkill.name not in registry.names():
+            registry.register(CompressionSkill())
+    except ImportError:
+        pass
+
+    try:
         from foundationskills.skills.auto_research.skill import AutoResearchSkill
 
         if AutoResearchSkill.name not in registry.names():
