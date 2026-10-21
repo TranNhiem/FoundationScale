@@ -32,7 +32,7 @@ Which training stage works for which model family today. Planned cells link to t
 
 | Stage | Speech | LLM | Multimodal LLM | VLA |
 |---|---|---|---|---|
-| Pre-training & CPT | Planned — [SP-1](#sp-1--speech-continued-pre-training) | Available (CPT) | Planned — [MM-1](#mm-1--multimodal-continued-pre-training) | Planned — [VLA-1](#vla-1--vla-pre-training) |
+| Pre-training & CPT | Partially met — [SP-1](#sp-1--speech-continued-pre-training) | Available (CPT) | Planned — [MM-1](#mm-1--multimodal-continued-pre-training) | Planned — [VLA-1](#vla-1--vla-pre-training) |
 | SFT | Available | Available | Available | Available |
 | Preference | Planned — [SP-2](#sp-2--speech-preference-optimization) | Available | Available | Planned — [VLA-2](#vla-2--vla-preference-optimization) |
 | RL | Planned — [SP-3](#sp-3--speech-rl) | Available | Available | Available |
@@ -52,10 +52,11 @@ An item becomes **Available** when:
 ## SP — Speech (ASR, TTS, Omni)
 
 #### SP-1 · Speech continued pre-training
-**Status:** Planned · **With:** PT
+**Status:** Partially met (2026-10-21) · **With:** PT
 - **Goal:** continued pre-training of audio-LLMs on large unlabeled or weakly labeled audio, before ASR/TTS fine-tuning.
 - **Start from:** the audio column in [src/foundationscale/train/audio.py](src/foundationscale/train/audio.py) and the CPT stage FoundationSkills emits ([emit_train.py](FoundationSkills/foundationskills/interfaces/fs/emit_train.py)).
 - **Done when:** CPT lowers held-out loss and, after the usual SFT, matches or beats the SFT-only baseline on WER.
+- **Result:** noisy-student CPT on Qwen3-ASR-0.6B (run as a campaign through the SFT objective): 8,118 unused Earnings-22 training clips (15.96 h, test calls excluded) pseudo-labelled by a teacher, 1 epoch of CPT, then the SP-4 SFT recipe. CPT lowers held-out loss 1.052 -> 0.463 (criterion 1 met). After SFT, WER is within ±0.3 of SFT-only with no gain: held-out 11.09, paired [-0.17, +0.55] with the zero-shot 1.7B teacher (27% label WER), and 10.98, [-0.19, +0.32] with the SP-2/3 stack as teacher (21%), vs 10.93 for SFT-only. The fixed validation rule keeps SFT-only (14.37 / 14.13 vs 14.09). Better labels narrowed the gap; the next lever is a larger unlabelled pool (13 of the 45 Earnings-22 train shards are on disk). Evidence: [validation_campaigns/speech_cpt](validation_campaigns/speech_cpt/EVIDENCE.md).
 
 #### SP-2 · Speech preference optimization
 **Status:** Done (2026-10-17) · **With:** RL
