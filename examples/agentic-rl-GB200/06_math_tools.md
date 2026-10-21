@@ -23,9 +23,10 @@ engine settings and `qwen_xml` tool parser for every row.
 | Seed 5, final | 0.855 | 0.408 |
 | Seed 7, final | 0.860 | 0.371 |
 | Seed 8, final | 0.873 | 0.404 |
+| Seed 9, final | 0.847 | 0.371 |
 
-Both benchmarks improve throughout the run. Four seeds end within two points of each other on
-MATH-500 (0.855 to 0.873, mean 0.862) and between 0.371 and 0.408 on AIME 2025 (mean 0.397);
+Both benchmarks improve throughout the run. Five seeds end within three points of each other on
+MATH-500 (0.847 to 0.873, mean 0.859) and between 0.371 and 0.408 on AIME 2025 (mean 0.392);
 AIME has only 30 problems, so a 3-point spread between seeds is expected.
 
 **Tools matter most on the hard problems.** An earlier run trained with the wrong tool-call parser

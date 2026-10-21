@@ -21,11 +21,12 @@ Held-out set: 24 tasks from three libraries the policy never trains on, 4 attemp
 | Seed 5, step 40 | 0.854 (82/96) |
 | Seed 5, step 80 | 0.854 (82/96) |
 | Seed 5, step 100 (final) | 0.813 (78/96) |
-| Final checkpoints, four seeds (5, 7, 8, 10) | 0.813, 0.917, 0.781, 0.854 (**mean 0.841**) |
+| Final checkpoints, eight seeds (5, 7, 8, 9, 10, 11, 12, 13) | 0.813, 0.917, 0.781, 0.854, 0.854, 0.875, 0.865, 0.802 (**mean 0.845**) |
 
 Every seed gains 11 to 19 points by step 20. Seed 5 peaks around 0.85 between steps 40 and 80
-and ends at 0.81. Seeds 7 and 8 crashed partway and were resumed from their latest checkpoint
-with a fresh optimizer; seeds 5 and 10 ran 100 steps uninterrupted. The base model scores the same
+and ends at 0.81. The seeds trained between about 64 and 100 steps;
+runs that crashed were resumed from their latest checkpoint with a fresh optimizer.
+Every seed ends 18 to 31 points above the base model. The base model scores the same
 with either attention backend described under engine hangs below (0.604 and 0.615).
 
 A run with a looser token budget (8,000 tokens per turn, 16,000 per episode) gained less at step
