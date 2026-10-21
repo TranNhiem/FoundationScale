@@ -51,6 +51,7 @@ PACKAGE_NAMES = (
     "fskills-probe-first",
     "fskills-refusal-surface",
     "fskills-training",
+    "fskills-vla",
     "using-foundationskills",
 )
 HEX64 = re.compile(r"[0-9a-f]{64}")

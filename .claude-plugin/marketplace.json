@@ -31,6 +31,7 @@
         "./skills/fskills-probe-first",
         "./skills/fskills-refusal-surface",
         "./skills/fskills-training",
+        "./skills/fskills-vla",
         "./skills/using-foundationskills"
       ]
     }

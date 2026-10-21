@@ -28,6 +28,7 @@ Read this first. It tells an agent which skills exist, how to chain them, and wh
 | `training.emit` | model | `training_plan`, `dataset` | `fs_launch_spec` | `foundationskills/skills/training/SKILL.md` |
 | `training.planner` | model | `goal_spec` | `training_plan` | `foundationskills/skills/training/SKILL.md` |
 | `using_foundationskills` | user | - | `skill_route` | `foundationskills/skills/using_foundationskills/SKILL.md` |
+| `vla` | model | `checkpoint` | `fs_launch_spec`, `vla_verdict` | `foundationskills/skills/vla/SKILL.md` |
 
 To find a chain from what you have to what you want, use `SkillRegistry.plan_chain(have, want)`.
 

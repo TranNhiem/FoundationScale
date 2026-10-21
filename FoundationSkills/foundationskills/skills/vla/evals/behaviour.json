@@ -1,0 +1,247 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-vla-oracle-VL-HO-001",
+      "skill": "vla",
+      "rule_id": "VL-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "verify: an episode raised instead of reaching a verdict (kept in the denominator as a failure, so the rate is a lower bound) - UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED naming VL-HO-001 (the rate is a lower bound)",
+        "observed": "12 episodes raised errors",
+        "request": {
+          "action": "verify",
+          "model_id": "openpi-pi05-libero",
+          "report": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "46e3c3b4a62e2bc2843edfa5516ac8fdf1bab2e72c90dca9c7637213c08c3083",
+      "expected_behavior": [
+        "Identifies the problem: verify: an episode raised instead of reaching a verdict (kept in the denominator as a failure, so the rate is a lower bound) - UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule VL-HO-001"
+      ],
+      "ground_truth": "vla: rule VL-HO-001 (WARN, handoff phase) fires: verify: an episode raised instead of reaching a verdict (kept in the denominator as a failure, so the rate is a lower bound) - UNMEASURED, never PASS.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "12 episodes raised errors"
+        }
+      ],
+      "question": "I ran the eval for `openpi-pi05-libero` and observed that 12 episodes raised errors. Can you verify the report at `vla/openpi_spatial.json` against the registry entry for this model and tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-HO-002",
+      "skill": "vla",
+      "rule_id": "VL-HO-002",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "fine-tune / RL / driving request, or a registry row that is not SUPPORTED: no reproduction or acceptance tolerance exists - UNMEASURED, never advertised",
+      "fixture": {
+        "expected": "UNMEASURED naming VL-HO-002 (no fine-tune reproduction)",
+        "request": {
+          "action": "plan",
+          "mode": "finetune",
+          "model_id": "openpi-pi05-libero",
+          "out": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "4d16db3da729ea7655dfd12366088bd90b29f10a3a0d2c28e83ed4e42cabf233",
+      "expected_behavior": [
+        "Identifies the problem: fine-tune / RL / driving request, or a registry row that is not SUPPORTED: no reproduction or acceptance tolerance exists - UNMEASURED, never advertised",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule VL-HO-002"
+      ],
+      "ground_truth": "vla: rule VL-HO-002 (WARN, handoff phase) fires: fine-tune / RL / driving request, or a registry row that is not SUPPORTED: no reproduction or acceptance tolerance exists - UNMEASURED, never advertised.",
+      "trigger_facts": [],
+      "question": "I want to plan a fine-tune run for the policy `openpi-pi05-libero`, with mode set to `finetune`, and write the plan out to `vla/openpi_spatial.json`. Please take this on as a `plan` action and tell me what you come back with.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-HO-003",
+      "skill": "vla",
+      "rule_id": "VL-HO-003",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: |measured - published| exceeds the row's tolerance - RED",
+      "fixture": {
+        "expected": "RED naming VL-HO-003 (outside the 1.4 tolerance)",
+        "observed": "measured 94.0, published 98.8",
+        "request": {
+          "action": "verify",
+          "model_id": "openpi-pi05-libero",
+          "report": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "f9c1c2ffbdaf28f31d58b4ae69b4308aa55d26d2e65b0655071addd613fb731a",
+      "expected_behavior": [
+        "Identifies the problem: verify: |measured - published| exceeds the row's tolerance - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule VL-HO-003"
+      ],
+      "ground_truth": "vla: rule VL-HO-003 (BLOCK, handoff phase) fires: verify: |measured - published| exceeds the row's tolerance - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured 94.0, published 98.8"
+        }
+      ],
+      "question": "I've got a verification request for the supported policy openpi-pi05-libero, with the report at vla/openpi_spatial.json. From the run I observed \"measured 94.0, published 98.8\". Please verify this against the registry and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-IN-001",
+      "skill": "vla",
+      "rule_id": "VL-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the policy has no row in FoundationScale's VLA registry (the refusal names the SUPPORTED ids)",
+      "fixture": {
+        "expected": "REFUSED naming VL-IN-001",
+        "request": {
+          "action": "plan",
+          "mode": "eval",
+          "model_id": "octo-base-libero",
+          "out": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "07f5c9cafe32787c4493dd731f5770faca85c506cc85eacf2479a2f9dea8b7f6",
+      "expected_behavior": [
+        "Identifies the problem: the policy has no row in FoundationScale's VLA registry (the refusal names the SUPPORTED ids)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule VL-IN-001"
+      ],
+      "ground_truth": "vla: rule VL-IN-001 (BLOCK, input phase) fires: the policy has no row in FoundationScale's VLA registry (the refusal names the SUPPORTED ids).",
+      "trigger_facts": [],
+      "question": "I want to plan an eval for model_id `octo-base-libero`, with action `plan`, mode `eval`, and the output going to `vla/openpi_spatial.json`. The registry I know of covers LIBERO reproductions of gr00t, openpi, and Long-WAM on GB200. Can you tell me what the outcome of this request is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-IN-002",
+      "skill": "vla",
+      "rule_id": "VL-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "FoundationScale's VLA registry is not importable here, or registry_problems(VLA_MODELS) is non-empty",
+      "fixture": {
+        "expected": "REFUSED naming VL-IN-002",
+        "observed": "foundationscale not importable here",
+        "request": {
+          "action": "plan",
+          "mode": "eval",
+          "model_id": "openpi-pi05-libero",
+          "out": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "1a071940dd396769860f1230da86adc0cec5ae13aa84c6f3a033cece0c52457f",
+      "expected_behavior": [
+        "Identifies the problem: FoundationScale's VLA registry is not importable here, or registry_problems(VLA_MODELS) is non-empty",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule VL-IN-002"
+      ],
+      "ground_truth": "vla: rule VL-IN-002 (BLOCK, input phase) fires: FoundationScale's VLA registry is not importable here, or registry_problems(VLA_MODELS) is non-empty.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "foundationscale not importable here"
+        }
+      ],
+      "question": "I've observed that foundationscale is not importable here. I want to plan an eval of openpi-pi05-libero and write the output to vla/openpi_spatial.json. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-IN-003",
+      "skill": "vla",
+      "rule_id": "VL-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan eval: no report path (out), or out is an existing directory",
+      "fixture": {
+        "expected": "REFUSED naming VL-IN-003 (no report path)",
+        "request": {
+          "action": "plan",
+          "mode": "eval",
+          "model_id": "openpi-pi05-libero",
+          "out": ""
+        }
+      },
+      "fixture_sha256": "97c289019aea734295681bda9a0f2f60afe0e5fad377c21dacdd09aabbc1bfec",
+      "expected_behavior": [
+        "Identifies the problem: plan eval: no report path (out), or out is an existing directory",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule VL-IN-003"
+      ],
+      "ground_truth": "vla: rule VL-IN-003 (BLOCK, input phase) fires: plan eval: no report path (out), or out is an existing directory.",
+      "trigger_facts": [],
+      "question": "I want to plan an eval run of the openpi-pi05-libero policy on LIBERO — action `plan`, mode `eval`, model_id `openpi-pi05-libero`, and I don't have an output path set yet (`out` is empty). Please check whether this policy is one of the reproduced ones in the VLA registry and produce the launch spec tied to the plan hash. Also tell me what published success rate and tolerance the eventual report will be judged against, so I know the target before we run anything.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-IN-004",
+      "skill": "vla",
+      "rule_id": "VL-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the report is missing or unreadable, or lacks success_rate_pct/episode_errors",
+      "fixture": {
+        "expected": "REFUSED naming VL-IN-004",
+        "observed": "report lacks success_rate_pct",
+        "request": {
+          "action": "verify",
+          "model_id": "openpi-pi05-libero",
+          "report": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "3036c8786ca75f1728ac170196797984c6bc6126b18c8323491694a1518b320f",
+      "expected_behavior": [
+        "Identifies the problem: verify: the report is missing or unreadable, or lacks success_rate_pct/episode_errors",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule VL-IN-004"
+      ],
+      "ground_truth": "vla: rule VL-IN-004 (BLOCK, input phase) fires: verify: the report is missing or unreadable, or lacks success_rate_pct/episode_errors.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "report lacks success_rate_pct"
+        }
+      ],
+      "question": "I'm verifying openpi-pi05-libero against the VLA registry using the report at vla/openpi_spatial.json. I observed that the report lacks success_rate_pct. Given that observation, what is the outcome of this verification?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-vla-oracle-VL-IN-005",
+      "skill": "vla",
+      "rule_id": "VL-IN-005",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the report's backend or suite does not match the registry row being judged",
+      "fixture": {
+        "expected": "REFUSED naming VL-IN-005",
+        "observed": "report backend is gr00t",
+        "request": {
+          "action": "verify",
+          "model_id": "openpi-pi05-libero",
+          "report": "vla/openpi_spatial.json"
+        }
+      },
+      "fixture_sha256": "93f2f42cfa95cad05a396366089b3782652f0b552ba49f8cca8c404f4d088533",
+      "expected_behavior": [
+        "Identifies the problem: verify: the report's backend or suite does not match the registry row being judged",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule VL-IN-005"
+      ],
+      "ground_truth": "vla: rule VL-IN-005 (BLOCK, input phase) fires: verify: the report's backend or suite does not match the registry row being judged.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "report backend is gr00t"
+        }
+      ],
+      "question": "I want to verify the policy `openpi-pi05-libero` against the report at `vla/openpi_spatial.json`. One thing I observed: the report's backend is `gr00t`, not openpi. The report is what I have on hand and I'd like it checked against the published success rate and tolerance for `openpi-pi05-libero` on LIBERO. What's the verdict here?",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

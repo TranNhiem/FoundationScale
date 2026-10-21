@@ -178,6 +178,18 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return _execute("training.planner", request, args.workdir or "fskills-plan")
 
 
+def _cmd_vla(args: argparse.Namespace) -> int:
+    """A4.10: plan a VLA eval of a SUPPORTED registry row (spec behind the hash) or judge its report."""
+    if args.vla_cmd == "plan":
+        request: dict[str, Any] = {"action": "plan", "model_id": args.model_id, "mode": args.mode}
+        for key in ("checkpoint", "out", "serve_cmd"):
+            if getattr(args, key):
+                request[key] = getattr(args, key)
+    else:
+        request = {"action": "verify", "model_id": args.model_id, "report": args.report}
+    return _execute("vla", request, args.workdir or "fskills-vla")
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """A4.9: plan a GPU-confined vLLM deployment (emits a launch spec; never launches) or verify a running endpoint."""
     if args.serve_cmd == "plan":
@@ -656,6 +668,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hardware", default=None)
     p.add_argument("--workdir", default=None)
     p.set_defaults(func=_cmd_plan)
+
+    p = sub.add_parser("vla", help="VLA planning (A4.10): plan an eval of a SUPPORTED policy, or judge its report")
+    vla_sub = p.add_subparsers(dest="vla_cmd", required=True)
+    p_vp = vla_sub.add_parser("plan", help="render FS's Level 3 eval step for a SUPPORTED VLA row (never launches)")
+    p_vp.add_argument("--model-id", dest="model_id", required=True, help="a foundationscale.upstream.vla_models id")
+    p_vp.add_argument("--mode", default="eval", choices=["eval", "finetune", "rl", "driving"])
+    p_vp.add_argument("--checkpoint", default=None, help="checkpoint the policy server serves (default: the row's)")
+    p_vp.add_argument("--out", default=None, help="report path foundationscale.vla.eval writes")
+    p_vp.add_argument("--serve-cmd", dest="serve_cmd", default=None, help="policy server command ({model}, {port})")
+    p_vp.add_argument("--workdir", default=None)
+    p_vp.set_defaults(func=_cmd_vla)
+    p_vv = vla_sub.add_parser("verify", help="judge an eval report against the row's published rate; exit 0/5/95/96")
+    p_vv.add_argument("--model-id", dest="model_id", required=True)
+    p_vv.add_argument("--report", required=True)
+    p_vv.add_argument("--workdir", default=None)
+    p_vv.set_defaults(func=_cmd_vla)
 
     p = sub.add_parser("serve", help="deployment (A4.9): plan -> fskills launch --confirm -> verify")
     serve_sub = p.add_subparsers(dest="serve_cmd", required=True)

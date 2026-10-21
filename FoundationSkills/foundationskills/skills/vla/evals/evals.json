@@ -1,0 +1,194 @@
+[
+  {
+    "id": "fskills-vla-positive-001",
+    "question": "OpenPI shows 94.8% success on LIBERO-LONG in its paper. We just got GB200 time and I want to know if we reproduce that rate — set up the LIBERO eval run for the openpi checkpoint so it goes through the same entry point as everything else in the VLA lane.",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "Reproducing an upstream VLA's published LIBERO rate on GB200 is exactly the VLA skill's eval mode, which plans the foundationscale.vla.eval Level 3 step and renders it as an fs_launch_spec.",
+    "expected_behavior": [
+      "The agent read skills/vla/skill.py (or its SKILL.md) before planning anything",
+      "The agent planned an eval and produced an fs_launch_spec for the foundationscale.vla.eval entry point rather than launching anything itself",
+      "The agent named the launch path (fskills hash --spec S, then fskills launch --spec S --confirm <hash>) as the only way to run it",
+      "The agent described verify as judging |measured - card| against the two-sample binomial tolerance via levels.judge"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-002",
+    "question": "Before I burn a day of GPU queue time — is longwam actually SUPPORTED on our own registry, i.e. did we reproduce its published LIBERO number on GB200 within tolerance, or is it just an adapter we have code for?",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "Judging whether a VLA has a SUPPORTED row in VLA_MODELS is the VLA skill's registry-backed scope, where SUPPORTED means FS reproduced the upstream LIBERO rate within a two-sample binomial tolerance.",
+    "expected_behavior": [
+      "The agent consulted the foundationscale.upstream.vla_models.VLA_MODELS registry via the skill rather than answering from general knowledge",
+      "The agent stated the SUPPORTED criterion (FS reproduced the published LIBERO rate on GB200 within two-sample binomial tolerance)", 
+      "The agent distinguished a SUPPORTED registry row from merely having an adapter/renderer in foundationscale.vla.adapters",
+      "If longwam had no SUPPORTED row, the agent flagged the measurement gap instead of claiming support"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-003",
+    "question": "The VLA eval finished and wrote its report — judge it against the model card number and tell me if it passes. Anything suspicious about episodes that blew up, tell me that too.",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "Reading the report foundationscale.vla.eval wrote and judging it with levels.judge (and treating any episode that raised as UNMEASURED) is the VLA skill's verify mode, which writes a vla_verdict.",
+    "expected_behavior": [
+      "The agent ran the skill's verify scope on the report instead of eyeballing the raw numbers",
+      "The agent applied the |measured - card| <= tolerance judgment via levels.judge and wrote a vla_verdict",
+      "The agent explained that an episode which raised stays in the denominator as a failure, so the rate is only a lower bound and the result is UNMEASURED (VL-HO-001/002)",
+      "The agent gave out-of-tolerance as RED per VL-HO-003 rather than calling anything a PASS"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-004",
+    "question": "I want to fine-tune GR00T on our own pick-and-place demos and run it under the same bench protocol so I can compare against its LIBERO number. What can you set up for me?",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "A fine-tune of a VLA policy is answered by the VLA skill as UNMEASURED since no fine-tune row is SUPPORTED, naming the FS adapter (gr00t finetune) and the measurement gap with no spec rendered.",
+    "expected_behavior": [
+      "The agent surfaced the GR00T fine-tune adapter (foundationscale.vla.adapters.gr00t.finetune.Gr00tFinetuneSpec) by name",
+      "The agent returned UNMEASURED and named the gap (no fine-tune row with a SUPPORTED measurement and no acceptance tolerance)",
+      "The agent rendered no fs_launch_spec and did not hand back a launch hash",
+      "The agent still described how an eval of the resulting policy would be planned and verified"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-005",
+    "question": "Can we do RL post-training on a driving policy through this lane, or is this thing eval-only? Also what would I get back if I asked for it?",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "An RL/driving request is in the VLA skill's plan scope but always answered as UNMEASURED, naming the VerlVLA RL and Alpamayo SFT adapters and the measurement gap without rendering a spec.",
+    "expected_behavior": [
+      "The agent identified RL and driving as modes the skill accepts but reports as UNMEASURED",
+      "The agent named the RL adapter (foundationscale.vla.adapters.verlvla.rl.VerlVlaRlSpec) and/or the Alpamayo SFT adapter with their unmapped measurement gaps",
+      "The agent confirmed no fs_launch_spec and no hash would be produced for these modes",
+      "The agent contrasted this with eval mode, which is the only mode that renders a spec"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-006",
+    "question": "Someone dropped a 'moss-grasp-9B' policy name in the planning doc and wants it evaluated on LIBERO. Does it even exist on our VLA registry, and if not what should I tell them we can actually run?",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "A policy with no registry row must be REFUSED by the VLA skill, naming the SUPPORTED ids, which is exactly the registry-checking part of its plan scope.",
+    "expected_behavior": [
+      "The agent checked the VLA_MODELS registry through the skill instead of assuming the policy exists",
+      "The agent returned a REFUSED diagnosis (VL-IN-001..005) with no fs_launch_spec rendered",
+      "The agent listed the SUPPORTED ids that can actually be run as alternatives",
+      "The agent did not plan an eval or emit a hash for an unknown model"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-007",
+    "question": "Here's the report our LIBERO eval run left behind. Before I publish anything: is the measured rate within the two-sample binomial tolerance of the model card value, and what verdict code do we get?",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "Judging an existing eval report against the model card tolerance and producing a verdict code is the VLA skill's verify scope, which writes a vla_verdict with codes 0/5/95.",
+    "expected_behavior": [
+      "The agent used verify rather than re-planning the eval",
+      "The agent computed or reported the judgment against the two-sample binomial tolerance via levels.judge",
+      "The agent explained the code semantics (0 only for in-tolerance with no failed episodes, 5 for out of tolerance, 95 for UNMEASURED) as defined by the skill's exit contract",
+      "The agent wrote a vla_verdict artifact rather than just chatting the answer"
+    ]
+  },
+  {
+    "id": "fskills-vla-positive-008",
+    "question": "OpenVLA checkpoints are sitting in the upstream dir and I want the LIBERO-90 number checked today. Plan the eval through the VLA lane, and if the run's report is already out there, tell me whether it holds up.",
+    "expected_skill": "fskills-vla",
+    "should_trigger": true,
+    "ground_truth": "Planning an eval of a registered VLA policy and then judging its report are both the VLA skill's scopes (plan then verify), sharing one registry-backed measurement criterion.",
+    "expected_behavior": [
+      "The agent first confirmed the OpenVLA policy has a registry row, planning an fs_launch_spec only if it does",
+      "The agent named the launches steps (fskills hash --spec S, fskills launch --spec S --confirm <hash>) as the run path",
+      "The agent treated the existing-or-future report through verify against the card value with the binomial tolerance",
+      "The agent never launched anything or edited model weights itself"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-001",
+    "question": "Take the Qwen2.5-VL image-text adapter we trained and run LoRA fine-tuning on the next tranche of captioned frames — merge-free, rank 32 like last time.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "VLM image-text LoRA training is the training skill's job, and the VLA skill only covers robot policy eval/judging and must stay quiet here.",
+    "expected_behavior": [
+      "The agent routed to the training skill rather than skills/vla",
+      "The agent planned a scaled LoRA training run and never mentioned LIBERO, registries of policies, or a vla_verdict"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-002",
+    "question": "Score the new instruct checkpoint on MMLU, GSM8K, and BBH and give me the per-benchmark table against the model card.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Text benchmark scoring is the evaluation skill's scope, with no VLA policy or LIBERO protocol involved, so the VLA skill must not trigger.",
+    "expected_behavior": [
+      "The agent routed to the evaluation skill rather than the VLA skill",
+      "The agent produced text-benchmark plan/tables and never referenced fs_launch_spec, registry SUPPORTED rows for policies, or episode-level robot eval"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-003",
+    "question": "Put the merged chat checkpoint behind a vLLM OpenAI endpoint on the leased GPU so the team can POST /v1/chat/completions against it tonight.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": false,
+    "ground_truth": "Standing up a chat-serving endpoint is the deployment skill's scope, and the VLA skill's plan/verify lanes cover neither serving nor endpoints.",
+    "expected_behavior": [
+      "The agent routed to the deployment skill rather than skills/vla",
+      "The agent planned a serve launch (probe-first, confined to the leased GPU) and never mentioned VLA eval, UNMEASURED gaps, or vla_verdict"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-004",
+    "question": "Filter and dedupe the captioned image-text shard, re-shard it on the large-machine filesystem, and hand me the finished dataset manifest for training.",
+    "expected_skill": "fskills-data-engine",
+    "should_trigger": false,
+    "ground_truth": "Preparing and QA-ing an image-text dataset is the data-engine skill's scope; dataset prep is not the VLA skill's eval/judge work.",
+    "expected_behavior": [
+      "The agent routed to the data-engine skill rather than skills/vla",
+      "The agent planned filtering/QA/dedup and manifest output and never produced an fs_launch_spec or policy eval verdict"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-005",
+    "question": "The nightly training job died at step 41200 with a NCCL timeout in the srun step of the scheduler log. Figure out what happened and how to recover the checkpoint shards.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Debugging a training NCCL failure is a general distributed-training troubleshooting request with no VLA policy or LIBERO eval in play, so no skill here should claim it.",
+    "expected_behavior": [
+      "The agent did not invoke the VLA skill",
+      "The agent analyzed scheduler/NCCL logs and recovery steps and never discussed registry SUPPORTED rows, eval tolerances, or a vla_verdict"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-006",
+    "question": "Why is our effective FLOPs utilization dropping as we push context length past 32k on the trainer? I want a write-up on the likely causes and what to instrument.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A performance/telemetry investigation of training throughput is out of the VLA skill's registry-backed eval and judging scope entirely.",
+    "expected_behavior": [
+      "The agent did not load skills/vla or plan a VLA eval",
+      "The agent discussed FLOPs/utilization instrumentation and attributed causes without touching LIBERO rates, adapters, or verdict codes"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-007",
+    "question": "Rebase the gb200-runtime branch onto the a4.8 merge tag, resolve the conflicts in the memory planner, and push a reviewable branch.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "A git rebase and code-merge request is pure software engineering work with no VLA evaluation, judging, or registry check, so the VLA skill must stay quiet.",
+    "expected_behavior": [
+      "The agent did not trigger the VLA skill",
+      "The agent planned git rebase/conflict-resolution steps and never emitted an fs_launch_spec or spoke of policy reproduction tolerances"
+    ]
+  },
+  {
+    "id": "fskills-vla-negative-008",
+    "question": "Give me a quick math sketch of the two-sample binomial test and when its normal approximation breaks down — good to paste into the methodology note.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "An abstract statistics explanation is a general question; the VLA skill consumes such tolerances in its judge but is not the right handler for a math write-up.",
+    "expected_behavior": [
+      "The agent answered as a general explanation and did not invoke skills/vla",
+      "The agent gave the statistics sketch without planning, verifying, or writing any eval artifact"
+    ]
+  }
+]
