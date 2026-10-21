@@ -1,0 +1,41 @@
+Third-party skills vendored under third_party/skills/ (see skills.lock for the pinned bytes).
+
+codebase-design
+  Source:    https://github.com/mattpocock/skills (skills/engineering/codebase-design @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+domain-modeling
+  Source:    https://github.com/mattpocock/skills (skills/engineering/domain-modeling @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+grill-with-docs
+  Source:    https://github.com/mattpocock/skills (skills/engineering/grill-with-docs @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+grilling
+  Source:    https://github.com/mattpocock/skills (skills/productivity/grilling @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+pr
+  Source:    https://github.com/mattpocock/skills (skills/engineering/pr @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+retro
+  Source:    https://github.com/mattpocock/skills (skills/engineering/retro @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+wait-what
+  Source:    https://github.com/mattpocock/skills (skills/productivity/wait-what @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
+
+writing-for-agents
+  Source:    https://github.com/mattpocock/skills (skills/productivity/writing-for-agents @ 49dd158d1076134a641b33efb035946536778336)
+  Licence:   MIT (LICENSE (repository root) heading: 'MIT License')
+  Copyright: Copyright (c) 2026 Matt Pocock (full text: third_party/licenses/mattpocock-skills.MIT.txt)
