@@ -22,6 +22,7 @@
         "./skills/fs-research",
         "./skills/fs-status",
         "./skills/fskills-auto-research",
+        "./skills/fskills-compression",
         "./skills/fskills-confirm-before-launch",
         "./skills/fskills-data-engine",
         "./skills/fskills-deployment",

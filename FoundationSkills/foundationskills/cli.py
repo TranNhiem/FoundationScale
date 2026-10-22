@@ -215,6 +215,22 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_compress(args: argparse.Namespace) -> int:
+    """A4.8: preflight check, plan an RTN weight-only measurement (emits a launch spec; never launches), or verify it."""
+    if args.compress_cmd == "check":
+        request: dict[str, Any] = {"action": "check", "model": args.model, "artifact_root": args.artifact_root,
+                                   "bits": args.bits}
+    elif args.compress_cmd == "plan":
+        request = {"action": "plan", "model": args.model, "text_file": args.text_file, "bits": args.bits,
+                   "group_size": args.group_size, "budget_ppl_ratio": args.budget_ppl_ratio, "results": args.results,
+                   "artifact_root": args.artifact_root, "format": args.format}
+    else:
+        request = {"action": "verify", "spec": args.spec}
+    if getattr(args, "python", None):
+        request["python"] = args.python
+    return _execute("compression", request, args.workdir or "fskills-compress")
+
+
 def _cmd_experiments_index(args: argparse.Namespace) -> int:
     """A4.6: auto_research's read-only experiment index over run outputs, journals and campaign ledgers."""
     request = {"action": "index", "scan_roots": list(args.root)}
@@ -720,6 +736,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("compress", help="compression (A4.8 v1, RTN weight-only): check | plan -> fskills launch --confirm -> verify")
+    compress_sub = p.add_subparsers(dest="compress_cmd", required=True)
+    p_cc = compress_sub.add_parser("check", help="run the vendored preflight.py; exit 0/95/96")
+    p_cp = compress_sub.add_parser("plan", help="preflight, probe and emit the fskills-compress fs_launch_spec (never launches)")
+    for q in (p_cc, p_cp):
+        q.add_argument("--model", required=True, help="local HF checkpoint directory")
+        q.add_argument("--artifact-root", dest="artifact_root", required=True, help="where preflight writes cap.json")
+        q.add_argument("--bits", type=int, default=4, choices=[4, 8])
+        q.add_argument("--python", default=None, help="interpreter that will run the worker (default: this one)")
+        q.add_argument("--workdir", default=None)
+        q.set_defaults(func=_cmd_compress)
+    p_cp.add_argument("--text-file", dest="text_file", required=True, help="held-out .txt/.jsonl for the ppl ratio")
+    p_cp.add_argument("--group-size", dest="group_size", type=int, default=128)
+    p_cp.add_argument("--budget-ppl-ratio", dest="budget_ppl_ratio", type=float, default=None,
+                      help="pre-registered max compressed/base ppl ratio in (1.0, 2.0]; absent -> REFUSED (CP-IN-004)")
+    p_cp.add_argument("--results", required=True, help="results JSON the worker writes (must not exist)")
+    p_cp.add_argument("--format", default="rtn", help="v1 supports only rtn; anything else is REFUSED (CP-IN-003)")
+    p_cv = compress_sub.add_parser("verify", help="judge the worker's results against the plan; exit 0/5/95/96")
+    p_cv.add_argument("--spec", required=True, help="the fs_launch_spec written by `fskills compress plan`")
+    p_cv.add_argument("--workdir", default=None)
+    p_cv.set_defaults(func=_cmd_compress)
 
     p = sub.add_parser("experiments", help="experiment management (auto_research, A4.6)")
     experiments_sub = p.add_subparsers(dest="experiments_cmd", required=True)

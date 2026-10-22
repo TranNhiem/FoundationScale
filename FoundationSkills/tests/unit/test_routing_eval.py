@@ -42,6 +42,7 @@ PACKAGE_NAMES = (
     "fs-research",
     "fs-status",
     "fskills-auto-research",
+    "fskills-compression",
     "fskills-confirm-before-launch",
     "fskills-data-engine",
     "fskills-deployment",

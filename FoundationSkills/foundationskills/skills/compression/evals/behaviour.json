@@ -1,0 +1,452 @@
+{
+  "schema": "fskills.oracle_cases/1",
+  "cases": [
+    {
+      "id": "fskills-compression-oracle-CP-HO-001",
+      "skill": "compression",
+      "rule_id": "CP-HO-001",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "verify: ppl harness A vs B disagree by more than 2% on the base model - UNMEASURED",
+      "fixture": {
+        "expected": "UNMEASURED naming CP-HO-001",
+        "observed": "measured, instrument_rel_diff 0.031",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "5114d827c6da90ac37df5549c6c7c3778446f70b76021b0fac482b59734bd913",
+      "expected_behavior": [
+        "Identifies the problem: verify: ppl harness A vs B disagree by more than 2% on the base model - UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule CP-HO-001"
+      ],
+      "ground_truth": "compression: rule CP-HO-001 (WARN, handoff phase) fires: verify: ppl harness A vs B disagree by more than 2% on the base model - UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured, instrument_rel_diff 0.031"
+        }
+      ],
+      "question": "I've got a measured run back and observed \"measured, instrument_rel_diff 0.031\". Please run the verify action against artifacts/fs_launch_spec.compress.json and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-002",
+      "skill": "compression",
+      "rule_id": "CP-HO-002",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: the base ppl is not finite or <= 1 - RED",
+      "fixture": {
+        "expected": "RED naming CP-HO-002",
+        "observed": "measured, certified, base_ppl NaN",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "45931b5a90d795df8b6227c472029387e5d5db07edcceeea5c7bbc0a639fe341",
+      "expected_behavior": [
+        "Identifies the problem: verify: the base ppl is not finite or <= 1 - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule CP-HO-002"
+      ],
+      "ground_truth": "compression: rule CP-HO-002 (BLOCK, handoff phase) fires: verify: the base ppl is not finite or <= 1 - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured, certified, base_ppl NaN"
+        }
+      ],
+      "question": "I ran the compression flow and the status came back \"measured, certified, base_ppl NaN\". Now I want to run `verify` against `artifacts/fs_launch_spec.compress.json`. What is the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-003",
+      "skill": "compression",
+      "rule_id": "CP-HO-003",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "verify: the worker did not measure (CPU fallback, crash) - UNMEASURED",
+      "fixture": {
+        "expected": "UNMEASURED naming CP-HO-003",
+        "observed": "worker status UNMEASURED: no CUDA device",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "09e47a6a9789237ccfa135e1214a9ddfbfa640f322ddc667d0acf0a14a9827e9",
+      "expected_behavior": [
+        "Identifies the problem: verify: the worker did not measure (CPU fallback, crash) - UNMEASURED",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule CP-HO-003"
+      ],
+      "ground_truth": "compression: rule CP-HO-003 (WARN, handoff phase) fires: verify: the worker did not measure (CPU fallback, crash) - UNMEASURED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "worker status UNMEASURED: no CUDA device"
+        }
+      ],
+      "question": "I ran the RTN quantization worker and observed \"worker status UNMEASURED: no CUDA device\". Please go ahead and run the verify step against artifacts/fs_launch_spec.compress.json. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-005",
+      "skill": "compression",
+      "rule_id": "CP-HO-005",
+      "severity": "INFO",
+      "phase": "handoff",
+      "description": "every verify: efficiency is never measured by v1 (quantize-dequantize keeps bf16; W3)",
+      "fixture": {
+        "expected": "PASS with INFO CP-HO-005 (efficiency not measured)",
+        "observed": "measured, certified, base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.04, budget 1.15",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "a6b81e1135b8df64c87024ee62f598c535a37a5ad8363aa8337491e704ff4e5f",
+      "expected_behavior": [
+        "Identifies the problem: every verify: efficiency is never measured by v1 (quantize-dequantize keeps bf16; W3)",
+        "Records it as information only; it neither blocks nor fails the run",
+        "Cites rule CP-HO-005"
+      ],
+      "ground_truth": "compression: rule CP-HO-005 (INFO, handoff phase) fires: every verify: efficiency is never measured by v1 (quantize-dequantize keeps bf16; W3).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured, certified, base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.04, budget 1.15"
+        }
+      ],
+      "question": "I've got the run back from the RTN quantize-dequantize job and I can see the status is measured and certified, with base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.04, and budget 1.15. Please go ahead and verify against artifacts/fs_launch_spec.compress.json and tell me what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-006",
+      "skill": "compression",
+      "rule_id": "CP-HO-006",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: the quantization was a no-op (nothing quantized or changed) - RED",
+      "fixture": {
+        "expected": "RED naming CP-HO-006",
+        "observed": "measured, certified, base_ppl 9.8, changed_fraction 0.0",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "a7165789c9dd0e927b72501e8a9c595ccc5cc239781b5679e3d9a5eaf2751486",
+      "expected_behavior": [
+        "Identifies the problem: verify: the quantization was a no-op (nothing quantized or changed) - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule CP-HO-006"
+      ],
+      "ground_truth": "compression: rule CP-HO-006 (BLOCK, handoff phase) fires: verify: the quantization was a no-op (nothing quantized or changed) - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured, certified, base_ppl 9.8, changed_fraction 0.0"
+        }
+      ],
+      "question": "I've got the measured, certified results back — base_ppl 9.8, changed_fraction 0.0. Now I want to run the verify step against artifacts/fs_launch_spec.compress.json and find out what the outcome is.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-010",
+      "skill": "compression",
+      "rule_id": "CP-HO-010",
+      "severity": "WARN",
+      "phase": "handoff",
+      "description": "check: preflight PROBE_ERROR (exit 2) or a check it could not evaluate (UNKN) - UNMEASURED, never PASS",
+      "fixture": {
+        "expected": "UNMEASURED naming CP-HO-010",
+        "observed": "preflight exit 0 with an UNKN check",
+        "request": {
+          "action": "check",
+          "artifact_root": "runs/a48",
+          "bits": 4,
+          "budget_ppl_ratio": 1.15,
+          "model": "models/gemma-4-E4B-it",
+          "results": "runs/a48/rtn.json",
+          "text_file": "data/wikitext2_test.txt"
+        }
+      },
+      "fixture_sha256": "ca1f8b28d81e36045cfd17a1a8fbd2e0f0ddb16e04fd0d50bc1b476bb3631c1d",
+      "expected_behavior": [
+        "Identifies the problem: check: preflight PROBE_ERROR (exit 2) or a check it could not evaluate (UNKN) - UNMEASURED, never PASS",
+        "Reports it as a warning that travels with the result, without refusing on this alone",
+        "Cites rule CP-HO-010"
+      ],
+      "ground_truth": "compression: rule CP-HO-010 (WARN, handoff phase) fires: check: preflight PROBE_ERROR (exit 2) or a check it could not evaluate (UNKN) - UNMEASURED, never PASS.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "preflight exit 0 with an UNKN check"
+        }
+      ],
+      "question": "Preflight came back exit 0 but with an UNKN check, so I'm not sure what to make of the host status. I want to run RTN weight-only int4 quantization (group-wise) on `models/gemma-4-E4B-it` with `bits=4`, `text_file=data/wikitext2_test.txt`, `artifact_root=runs/a48`, `results=runs/a48/rtn.json`, and a pre-registered `budget_ppl_ratio=1.15`. What's the outcome here — can I proceed to the probe-first plan and the fs_launch_spec for rtn_worker.py on one GPU, and what do I need to type back to launch it?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-HO-011",
+      "skill": "compression",
+      "rule_id": "CP-HO-011",
+      "severity": "BLOCK",
+      "phase": "handoff",
+      "description": "verify: the ppl ratio is above the plan's pre-registered budget - RED",
+      "fixture": {
+        "expected": "RED naming CP-HO-011",
+        "observed": "measured, certified, base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.31, budget 1.15",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "e6f6d6c342bb0d3194772b8ec734e18d2d280fb5a247e3751f68ca477f8ae4ce",
+      "expected_behavior": [
+        "Identifies the problem: verify: the ppl ratio is above the plan's pre-registered budget - RED",
+        "Does not report success: the result is RED (failed), neither PASS nor a refusal",
+        "Cites rule CP-HO-011"
+      ],
+      "ground_truth": "compression: rule CP-HO-011 (BLOCK, handoff phase) fires: verify: the ppl ratio is above the plan's pre-registered budget - RED.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "measured, certified, base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.31, budget 1.15"
+        }
+      ],
+      "question": "The run came back measured and certified: base_ppl 9.8, changed_fraction 0.93, ppl_ratio 1.31 against the pre-registered budget of 1.15. Now go ahead and run the verify step against artifacts/fs_launch_spec.compress.json using those numbers. What's the outcome — does it hold, and what does the compression_report end up saying?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-001",
+      "skill": "compression",
+      "rule_id": "CP-IN-001",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the model directory is missing or not a HF checkpoint, or a plan probe failed",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-001",
+        "observed": "no config.json",
+        "request": {
+          "action": "plan",
+          "artifact_root": "runs/a48",
+          "bits": 4,
+          "budget_ppl_ratio": 1.15,
+          "model": "models/missing",
+          "results": "runs/a48/rtn.json",
+          "text_file": "data/wikitext2_test.txt"
+        }
+      },
+      "fixture_sha256": "d6dfec70ab885359e0701f08b3969809e3e1c654268465a471cf6c8ef2173875",
+      "expected_behavior": [
+        "Identifies the problem: the model directory is missing or not a HF checkpoint, or a plan probe failed",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-001"
+      ],
+      "ground_truth": "compression: rule CP-IN-001 (BLOCK, input phase) fires: the model directory is missing or not a HF checkpoint, or a plan probe failed.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "no config.json"
+        }
+      ],
+      "question": "I want to plan an RTN weight-only int4 quantization run with a perplexity-ratio budget of 1.15, targeting model `models/missing`, writing plans under `runs/a48`, with results at `runs/a48/rtn.json` and eval text from `data/wikitext2_test.txt`. When I looked at the model directory I saw `no config.json`. What's the outcome here?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-002",
+      "skill": "compression",
+      "rule_id": "CP-IN-002",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "check: preflight.py exited 1 (FAIL)",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-002",
+        "observed": "preflight exit 1: real_gpu_execution FAIL",
+        "request": {
+          "action": "check",
+          "artifact_root": "runs/a48",
+          "bits": 4,
+          "budget_ppl_ratio": 1.15,
+          "model": "models/gemma-4-E4B-it",
+          "results": "runs/a48/rtn.json",
+          "text_file": "data/wikitext2_test.txt"
+        }
+      },
+      "fixture_sha256": "43a8f5af13dd8f583cca5ba80873fbe35fb3c4a20a002b4e44d6df6c628d0e57",
+      "expected_behavior": [
+        "Identifies the problem: check: preflight.py exited 1 (FAIL)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-002"
+      ],
+      "ground_truth": "compression: rule CP-IN-002 (BLOCK, input phase) fires: check: preflight.py exited 1 (FAIL).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "preflight exit 1: real_gpu_execution FAIL"
+        }
+      ],
+      "question": "I ran a preflight and it came back with exit code 1 and \"real_gpu_execution FAIL\". I want to run a check on the RTN results at runs/a48/rtn.json for models/gemma-4-E4B-it in runs/a48, using 4-bit quantization on data/wikitext2_test.txt, and verify the measured perplexity ratio against my pre-registered budget_ppl_ratio of 1.15. What's the outcome?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-003",
+      "skill": "compression",
+      "rule_id": "CP-IN-003",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan: a format outside v1 RTN weight-only int4/int8 (deferred: gptq, awq, nvfp4, mxfp4, fp8, modelopt, llm-compressor, kv-cache quantization, QAT/distillation recovery)",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-003 (deferred)",
+        "request": {
+          "action": "plan",
+          "artifact_root": "runs/a48",
+          "bits": 4,
+          "budget_ppl_ratio": 1.15,
+          "format": "gptq",
+          "model": "models/gemma-4-E4B-it",
+          "results": "runs/a48/rtn.json",
+          "text_file": "data/wikitext2_test.txt"
+        }
+      },
+      "fixture_sha256": "fb13caa09fdb538145593e5802677e1f6c441e7bb14733f9afa645eef211902d",
+      "expected_behavior": [
+        "Identifies the problem: plan: a format outside v1 RTN weight-only int4/int8 (deferred: gptq, awq, nvfp4, mxfp4, fp8, modelopt, llm-compressor, kv-cache quantization, QAT/distillation recovery)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-003"
+      ],
+      "ground_truth": "compression: rule CP-IN-003 (BLOCK, input phase) fires: plan: a format outside v1 RTN weight-only int4/int8 (deferred: gptq, awq, nvfp4, mxfp4, fp8, modelopt, llm-compressor, kv-cache quantization, QAT/distillation recovery).",
+      "trigger_facts": [],
+      "question": "I want to plan a 4-bit quantization run on `models/gemma-4-E4B-it` in gptq format, writing the outputs under `runs/a48` with results at `runs/a48/rtn.json` and eval text from `data/wikitext2_test.txt`. My pre-registered perplexity ratio budget is 1.15. Can you run the host preflight and give me the probe-first plan plus the fs_launch_spec for `rtn_worker.py` on one GPU? Once I see the plan hash I'll type it back to launch, and after that I want the perplexity ratio verified against the 1.15 budget and a compression_report written. What's the outcome of the planning step?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-004",
+      "skill": "compression",
+      "rule_id": "CP-IN-004",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "plan/verify: no pre-registered ppl-ratio budget, or the budget is outside (1.0, 2.0]",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-004 (no pre-registered budget)",
+        "request": {
+          "action": "plan",
+          "artifact_root": "runs/a48",
+          "bits": 4,
+          "model": "models/gemma-4-E4B-it",
+          "results": "runs/a48/rtn.json",
+          "text_file": "data/wikitext2_test.txt"
+        }
+      },
+      "fixture_sha256": "7acb61b9aea3a49bcef22253bd98c436c2b4e9f5fd9bf56e41b4f885c746bdee",
+      "expected_behavior": [
+        "Identifies the problem: plan/verify: no pre-registered ppl-ratio budget, or the budget is outside (1.0, 2.0]",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-004"
+      ],
+      "ground_truth": "compression: rule CP-IN-004 (BLOCK, input phase) fires: plan/verify: no pre-registered ppl-ratio budget, or the budget is outside (1.0, 2.0].",
+      "trigger_facts": [],
+      "question": "Please plan an RTN weight-only quantize-dequantize run on the HF checkpoint at `models/gemma-4-E4B-it` at 4 bits, group-wise, writing outputs under `runs/a48` with the results at `runs/a48/rtn.json`. I want the probe-first plan and the `fs_launch_spec` that runs `rtn_worker.py` on one GPU, and I'll type the plan hash back to launch it. Evaluate the measured perplexity ratio on `data/wikitext2_test.txt` against the pre-registered budget and write the `compression_report` at the end.",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-005",
+      "skill": "compression",
+      "rule_id": "CP-IN-005",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the spec or the worker results are missing, unreadable or of the wrong schema",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-005",
+        "observed": "results file missing",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "a5ea00545e460b68a3dccfcdc85641dfbcca0feadf37b43ec338046035389e5d",
+      "expected_behavior": [
+        "Identifies the problem: verify: the spec or the worker results are missing, unreadable or of the wrong schema",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-005"
+      ],
+      "ground_truth": "compression: rule CP-IN-005 (BLOCK, input phase) fires: verify: the spec or the worker results are missing, unreadable or of the wrong schema.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "results file missing"
+        }
+      ],
+      "question": "I want to run the verify step against `artifacts/fs_launch_spec.compress.json`, but I observed that the results file is missing — the `observed` value I got back is exactly `\"results file missing\"`. Can you tell me what the outcome of the verification is given that observation?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-006",
+      "skill": "compression",
+      "rule_id": "CP-IN-006",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "verify: the results are not from this plan (model, bits, group_size or text hash)",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-006",
+        "observed": "results bits 8, plan bits 4",
+        "request": {
+          "action": "verify",
+          "spec": "artifacts/fs_launch_spec.compress.json"
+        }
+      },
+      "fixture_sha256": "c6fba6bff57a8021054af41714dce0045f37847ccc49fe564c81821d43dbc7e8",
+      "expected_behavior": [
+        "Identifies the problem: verify: the results are not from this plan (model, bits, group_size or text hash)",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-006"
+      ],
+      "ground_truth": "compression: rule CP-IN-006 (BLOCK, input phase) fires: verify: the results are not from this plan (model, bits, group_size or text hash).",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "results bits 8, plan bits 4"
+        }
+      ],
+      "question": "I ran the compression flow and observed \"results bits 8, plan bits 4\" — the results came back at 8 bits while the plan was for 4 bits. I want to verify the run now with action \"verify\" against spec artifacts/fs_launch_spec.compress.json. Can you tell me what the outcome is?",
+      "question_model": "mimo-v2.6-pro"
+    },
+    {
+      "id": "fskills-compression-oracle-CP-IN-007",
+      "skill": "compression",
+      "rule_id": "CP-IN-007",
+      "severity": "BLOCK",
+      "phase": "input",
+      "description": "the action is not check, plan or verify",
+      "fixture": {
+        "expected": "REFUSED naming CP-IN-007",
+        "observed": "the request's action field is 'quantize' (not check, plan or verify)",
+        "request": {
+          "action": "quantize",
+          "model": "models/gemma-4-E4B-it"
+        }
+      },
+      "fixture_sha256": "936e291651b2df3406c21754ad298830b77e3284ea7a2161ffe8f21ccebe1942",
+      "expected_behavior": [
+        "Identifies the problem: the action is not check, plan or verify",
+        "Refuses before doing any work (status REFUSED, nothing written) instead of running",
+        "Cites rule CP-IN-007"
+      ],
+      "ground_truth": "compression: rule CP-IN-007 (BLOCK, input phase) fires: the action is not check, plan or verify.",
+      "trigger_facts": [
+        {
+          "path": "observed",
+          "value": "the request's action field is 'quantize' (not check, plan or verify)"
+        }
+      ],
+      "question": "I'm calling the compression skill with action \"quantize\" and model \"models/gemma-4-E4B-it\", and I observed that the request's action field is \"quantize\" (not check, plan or verify). What actually happens here — does this go straight into RTN int4/int8 group-wise quantization on one GPU, or does the flow need me to do something else first? Please tell me the outcome and what I should do next to get a compression_report with the measured perplexity ratio checked against the pre-registered budget.",
+      "question_model": "mimo-v2.6-pro"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "required": [
+    "model",
+    "bits",
+    "group_size",
+    "budget_ppl_ratio",
+    "ppl_ratio",
+    "instrument_certified",
+    "verdict"
+  ],
+  "properties": {
+    "model": {
+      "type": "string"
+    },
+    "bits": {
+      "type": "integer",
+      "enum": [
+        4,
+        8
+      ]
+    },
+    "group_size": {
+      "type": "integer"
+    },
+    "budget_ppl_ratio": {
+      "type": "number"
+    },
+    "base_ppl": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "compressed_ppl": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "ppl_ratio": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "instrument_certified": {
+      "type": "boolean"
+    },
+    "effective_bits_total": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "efficiency": {
+      "type": "string",
+      "enum": [
+        "UNMEASURED"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "RED",
+        "UNMEASURED"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,205 @@
+[
+  {
+    "id": "fskills-compression-positive-001",
+    "question": "Plan an RTN int4 weight-only round trip on /models/gemma-4-12B-it with group_size 128 and a pre-registered ppl-ratio budget of 1.05 (compressed_ppl/base_ppl). The held-out text is /data/heldout/en-wiki-50M.txt (non-empty, sha256 9f2a...c71b) and /runs/compression-rtn-int4/results.json does not exist yet. Just emit the plan — do not launch anything.",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill and runs the plan action: it confirms the pre-registered budget is in (1.0, 2.0], runs check (vendored preflight.py, forge.preflight.v1, 17 named checks), probes model dir + safetensors, non-empty held-out text, bits, absent results path, importable torch+transformers and a present worker, then emits an fs_launch_spec with entry fskills-compress running rtn_worker.py on ONE GPU — no launch, no echoed hash.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent required the pre-registered ppl-ratio budget and ran check (preflight) plus the plan probes before emitting anything",
+      "The agent emitted an fs_launch_spec executing rtn_worker.py for the single v1 method (RTN, int4, group_size 128, embeddings/lm_head/vision/audio kept bf16) instead of launching it",
+      "The agent named the launch steps (fskills hash --spec S, then fskills launch --spec S --confirm <hash>) and said verify afterwards maps to exit codes 0/5/95/96, without echoing a hash"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-002",
+    "question": "The plan's check step came back with this preflight output: 'hardware-format gates: UNKN (no probe result on h20-07)' and preflight.py exited 0; every other line is a pass. How do I classify this run and what exit code should the skill report?",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill and reports that any UNKN check (or preflight exit 2/PROBE_ERROR) is classified UNMEASURED under CP-HO-010: preflight itself exits 0 on UNKN, but the skill does not turn that into a PASS — it exits 95.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent mapped the UNKN check to CP-HO-010 and exit 95 UNMEASURED",
+      "The agent explained that preflight exiting 0 on UNKN is not a pass signal — the skill itself refuses to call it PASS, because skips are failures",
+      "The agent contrasted this with preflight exit 1 (FAIL) which would be REFUSED CP-IN-002 exit 96"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-003",
+    "question": "rtn_worker.py printed: harness A base ppl 7.412, harness B (labels= loss) base ppl 8.031 on /data/heldout/en-wiki-50M.txt, then it went on to quantize and re-measure with harness A and the ratio came back 1.08. What does verify say?",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill's verify action and reports the instrument is not certified: base ppl harness A vs harness B disagree by an 8.3% relative difference, beyond the 2% threshold, so the run is UNMEASURED under CP-HO-001 (exit 95) regardless of how the measured ratio looks, because the measurement chain is not certified.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent required base ppl harness A vs harness B to agree within 2% relative difference before trusting any ratio",
+      "The agent classified the 8.3% disagreement as CP-HO-001 instrument-not-certified, exit 95 UNMEASURED, not PASS and not RED",
+      "The agent said the quantized re-measure with harness A cannot certify the run while the instrument is uncertified"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-004",
+    "question": "Verify results for spec /runs/compression-rtn-int4/spec.json: base_ppl 6.890, compressed_ppl 7.640 (ratio 1.109), text_sha256 9f2a...c71b, bits 4, group_size 128 all matching the plan, instrument certified. Pre-registered budget was 1.05. What's the verdict?",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill's verify action and reads off CP-HO-011: measured ppl_ratio 1.109 exceeds the pre-registered budget 1.05, so the result is RED with exit 5, not PASS — budgets are checked, not tuned after the fact.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent computed the observed ppl_ratio (7.640/6.890 = 1.109) and compared it against the pre-registered budget 1.05",
+      "The agent classified it as CP-HO-011 ratio-above-budget, exit 5 RED",
+      "The agent said identity checks (model, bits, group_size, text_sha256) passing does not convert CP-HO-011 into a PASS"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-005",
+    "question": "Verify on spec /runs/compression-rtn-int4/spec.json came back green: instrument certified (harness A base 6.891 vs harness B 6.895, rel diff 0.06%), base_ppl 6.890, compressed_ppl 7.010, ratio 1.017 against budget 1.20, changed_fraction 0.998, effective bits 4.62, non-zeroo results schema, matching model/bits/group_size/text. Can I call this a PASS and does it tell me the throughput improvement?",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill and reports PASS/exit 0 with a written compression_report that still carries the non-blocking CP-HO-005 finding: efficiency (tok/s, latency, memory, energy) was never measured in v1, so no throughput improvement can be read off the result, and effective bits are a computed figure rather than a shipped file.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent confirmed PASS/exit 0 because the ratio 1.017 is within budget 1.20 with a certified instrument and matching identity fields",
+      "The agent still reported CP-HO-005 efficiency UNMEASURED as a finding on this PASS, per the rule that every verify result carries it",
+      "The agent stated tok/s and latency were not measured and that disk-size savings are not realized either (effective bits is computed, not shipped)"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-006",
+    "question": "Quantize gemma-4-12B-it to GPTQ int4 with AutoGPTQ (and if that fails, NVFP4 via ModelOpt) so the checkpoint shards shrink on disk. Budget-wise we're happy with anything under 1.3.",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill and refuses under CP-IN-003 (exit 96): v1 supports exactly one method (RTN weight-only int4/int8), and formats outside it — gptq, awq, nvfp4, mxfp4, fp8, modelopt, llm-compressor — are deferred because they need an isolated env install the operator has not approved, and GPTQ/AWQ tooling pins transformers 4.x, which cannot load Gemma-4-class models.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent refused with CP-IN-003 (exit 96) instead of attempting GPTQ or NVFP4",
+      "The agent named the deferral reasons: pending isolated-env install approval and the GPTQ/AWQ transformers 4.x pin that cannot load Gemma-4-class models",
+      "The agent offered only the in-scope RTN int4/int8 path as the alternative"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-007",
+    "question": "Just plan the job on /models/gemma-4-12B-it with int4 group_size 128 and figure out an acceptable perplexity ratio yourself as you go — we never wrote one down.",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads compression's plan action and refuses under CP-IN-004 (exit 96): the ppl-ratio budget must be PRE-REGISTERED and fall in (1.0, 2.0], and the skill will not invent or tune one mid-run; nothing is planned or launched, and no launch hash exists to echo.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent refused the request rather than choosing a budget, citing CP-IN-004 and exit 96",
+      "The agent stated the budget must be pre-registered as compressed_ppl/base_ppl in (1.0, 2.0] by the operator before plan runs",
+      "The agent wrote no fs_launch_spec and echoed no hash on refusal"
+    ]
+  },
+  {
+    "id": "fskills-compression-positive-008",
+    "question": "I need this run to prove the int4 round trip makes inference 2× faster and show tok/s, latency and memory numbers so I can put them in the write-up. Add that to the verify output.",
+    "expected_skill": "fskills-compression",
+    "should_trigger": true,
+    "ground_truth": "The agent loads the compression skill and refuses to satisfy the speed claim under CP-HO-005: v1 never measures efficiency (tok/s, latency, memory, energy) because quantize-dequantize keeps bf16 weights at execution time, so a speed claim would be fake (estate wall W3); the finding is non-blocking and attached to every verify result, PASS included, and the effective bits figure is computed rather than a smaller shipped file.",
+    "expected_behavior": [
+      "The agent read compression/SKILL.md before acting",
+      "The agent refused to emit throughput, latency or memory numbers, citing CP-HO-005 efficiency UNMEASURED",
+      "The agent explained that quantize-dequantize keeps bf16 weights so a measured speedup claim would be fake (estate wall W3), and that no disk-size saving is realized either",
+      "The agent kept verify scoped to perplexity ratio against the pre-registered budget instead of a benchmark harness"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-001",
+    "question": "Start a QLoRA fine-tuning run on gemma-4-12B-it with rank 16 and the rank-sweep config from last week, then keep the loss curves.",
+    "expected_skill": "fskills-training",
+    "should_trigger": false,
+    "ground_truth": "Fine-tuning (LoRA/QLoRA training with loss curves) is the training skill's scope (fskills-training); fskills-compression only does RTN check/plan/verify on an existing checkpoint, so it must not trigger.",
+    "expected_behavior": [
+      "The agent used the training skill instead (or treated it as fskills-training scope)",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-002",
+    "question": "The QLoRA run finished — fold runs/qwen-sft/final into its base checkpoint and give me a merged fp32 artifact I can ship without the adapter files.",
+    "expected_skill": "fskills-merging",
+    "should_trigger": false,
+    "ground_truth": "Folding a trained LoRA adapter into its base (fskills-merging, structural checks plus logit parity) is a different skill from weight-only quantize-dequantize round trips, so fskills-compression must not trigger.",
+    "expected_behavior": [
+      "The agent used the merging skill instead (or treated it as fskills-merging scope)",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-003",
+    "question": "Serve gemma-4-12B-it with vLLM on one A100 and show me batch-8 tokens/sec and p99 latency so I can hand it to the on-call rotation.",
+    "expected_skill": "fskills-deployment",
+    "should_trigger": false,
+    "ground_truth": "Serving a model (vLLM config, on-call traffic numbers, deployment latency) belongs to the deployment skill (fskills-deployment); fskills-compression never measures serving performance, so it must not trigger.",
+    "expected_behavior": [
+      "The agent used the deployment skill instead (or treated it as fskills-deployment scope)",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-004",
+    "question": "Score gemma-4-12B-it on the MMLU held-out split for every subject and give me the accuracy table plus the confidence intervals.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Benchmark scoring and accuracy tables belong to the evaluation skill (fskills-evaluation); fskills-compression only measures perplexity ratio against a pre-registered budget, so it must not trigger.",
+    "expected_behavior": [
+      "The agent used the evaluation skill instead (or treated it as fskills-evaluation scope)",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-005",
+    "question": "Our Postgres nightly backup job silently skips two tables; find out why from the cron log and fix the dump command.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Off-domain request: no FoundationSkills skill applies, so the router returns no skill.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-006",
+    "question": "Translate this product FAQ from English into Traditional Chinese, keeping the markdown headings intact.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Off-domain request: no FoundationSkills skill applies, so the router returns no skill.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-007",
+    "question": "Draft a polite email asking the facilities team to fix the air conditioning in meeting room 4B.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Off-domain request: no FoundationSkills skill applies, so the router returns no skill.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-008",
+    "question": "Write a bash one-liner that lists the ten largest files under /var/log, sorted by size.",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "Off-domain request: no FoundationSkills skill applies, so the router returns no skill.",
+    "expected_behavior": [
+      "The agent used no FoundationSkills skill",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  },
+  {
+    "id": "fskills-compression-negative-009",
+    "question": "For the release review, put our base checkpoint and an existing 8-bit RTN checkpoint side by side on MMLU and BLEU and tell me which one we should ship.",
+    "expected_skill": "fskills-evaluation",
+    "should_trigger": false,
+    "ground_truth": "Comparing two ready checkpoints on benchmark suites (accuracy/benchmark reporting) is evaluation work (fskills-evaluation), not a compression run; fskills-compression does not score benchmark suites and must not trigger just because one of the two inputs happens to be quantized.",
+    "expected_behavior": [
+      "The agent used the evaluation skill instead (benchmark comparison of two checkpoints is fskills-evaluation scope)",
+      "The agent did not read or activate compression/SKILL.md"
+    ]
+  }
+]

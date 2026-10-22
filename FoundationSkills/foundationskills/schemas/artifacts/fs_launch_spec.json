@@ -24,7 +24,8 @@
         "fskills-rl",
         "fskills-merge",
         "fskills-serve",
-        "fskills-vla-eval"
+        "fskills-vla-eval",
+        "fskills-compress"
       ]
     },
     "argv": {
