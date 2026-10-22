@@ -78,8 +78,8 @@ class CompressionSkill(BaseSkill):
         "then "
         "verifies the measured perplexity ratio against a pre-registered budget into a compression_report. GPTQ/AWQ/"
         "NVFP4/FP8/modelopt/llm-compressor or speedup requests also come here and are refused as deferred (CP-IN-003). "
-        "Do NOT use for LoRA merges (fskills-merging), serving (fskills-deployment) or benchmarks "
-        "(fskills-evaluation)."
+        "Do NOT use for serving a checkpoint, already-quantized ones included (fskills-deployment), LoRA merges "
+        "(fskills-merging) or benchmarks (fskills-evaluation)."
     )
     scope = Scope(model_types=("llm", "vlm"), families="any", stages=("sft", "preference", "rl"), algorithms=(),
                   methods=("full", "lora", "qlora"), hardware=("gb200", "dgx-h100", "local"))
