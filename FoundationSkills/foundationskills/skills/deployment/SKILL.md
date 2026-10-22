@@ -1,7 +1,7 @@
 ---
 name: fskills-deployment
 license: MIT
-description: "Serves a checkpoint (full or merged weights, or base + LoRA adapter unmerged) with the measured vLLM container: plans a GPU-confined serving fs_launch_spec probe-first (launched only with the plan hash the user types back), then verifies the running endpoint (served names, GPU placement, smoke completion) and records a serving_spec. Targets outside the measured serving envelope are UNMEASURED, never PASS. Do NOT use to merge adapters (fskills-merging), train (fskills-training) or benchmark checkpoints (fskills-evaluation)."
+description: "Serves a checkpoint (full or merged weights, an already-quantized checkpoint such as fp8, or base + LoRA adapter unmerged) with the measured vLLM container: plans a GPU-confined serving fs_launch_spec probe-first (launched only with the plan hash the user types back), then verifies the running endpoint (served names, GPU placement, smoke completion) and records a serving_spec. Whether a target fits the measured serving envelope is answered here; targets outside it are UNMEASURED, never PASS. Do NOT use to quantize or compress weights (fskills-compression), merge adapters (fskills-merging), train (fskills-training) or benchmark checkpoints (fskills-evaluation)."
 compatibility: "Needs Python>=3.10 and the foundationskills package (fskills CLI), a leased GB200 GPU, and the vllm031 enroot container (vLLM 0.31.0, arm64). Planning probes a model dir, an optional adapter, the GPU UUID and the port and writes a spec; verifying needs the endpoint answering on this host (HTTP) and pgrep/nvidia-smi for GPU placement. The skill never starts the server and never echoes a hash — launching goes through `fskills launch --confirm`."
 metadata:
   version: "0.1.0"

@@ -85,11 +85,13 @@ class DeploymentSkill(BaseSkill):
     name = "deployment"
     version = "0.1.0"
     description = (
-        "Serves a checkpoint (full or merged weights, or base + LoRA adapter unmerged) with the measured vLLM container: "
-        "plans a GPU-confined serving fs_launch_spec probe-first (launched only with the plan hash the user types "
-        "back), then verifies the running endpoint (served names, GPU placement, smoke completion) and records a "
-        "serving_spec. Targets outside the measured serving envelope are UNMEASURED, never PASS. Do NOT use to merge "
-        "adapters (fskills-merging), train (fskills-training) or benchmark checkpoints (fskills-evaluation)."
+        "Serves a checkpoint (full or merged weights, an already-quantized checkpoint such as fp8, or base + LoRA "
+        "adapter unmerged) with the measured vLLM container: plans a GPU-confined serving fs_launch_spec probe-first "
+        "(launched only with the plan hash the user types back), then verifies the running endpoint (served names, GPU "
+        "placement, smoke completion) and records a serving_spec. Whether a target fits the measured serving envelope "
+        "is answered here; targets outside it are UNMEASURED, never PASS. Do NOT use to quantize or compress weights "
+        "(fskills-compression), merge adapters (fskills-merging), train (fskills-training) or benchmark checkpoints "
+        "(fskills-evaluation)."
     )
     scope = Scope(model_types=("llm", "vlm"), families="any", stages=("sft", "preference", "rl"), algorithms=(),
                   methods=("full", "lora", "qlora"), hardware=("gb200",))
