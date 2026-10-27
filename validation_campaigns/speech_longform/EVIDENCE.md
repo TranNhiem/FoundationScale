@@ -206,3 +206,44 @@ WER is reported separately, as the product-level number.
 calls + the cap-3 guard. On whole held-out Earnings-22 calls it scores **12.18 WER against base
 17.36 (-5.2 points)**. The raw-output gate stays the disclosure that this model still loops on
 one disfluent speaker. Fixing that in the decoder (a repetition-aware beam search) remains open.
+
+## Qwen3-ASR-0.6B cut and merge and a length-robust stage (2026-10-27)
+
+Hardware: GB200, one GPU per run. Models: the SP-4 Qwen3-ASR-0.6B checkpoint (step 250; "clip-trained"),
+and a length-robust model trained from the base checkpoint with the same recipe (lr 1e-5, global
+batch 16 as `BS=4 GA=4`, seed 0, 750 steps, `MAXLEN=8192`) on the Earnings-22 training clips plus
+60-300 s concatenations of consecutive training clips (`build_concat.py`); its checkpoint (step 250) was
+picked on clip validation, as SP-4's was. Decoding: `eval_qwen3_asr.py`, beam 4, length penalty 0.8.
+Scoring: FoundationScale's normalizer (`score_longform.py` on whole calls, `speech_metrics` elsewhere).
+
+Sets:
+- whole calls: the 6 test calls above (5.6 h, 50,400 words), cut by `pause_cut_merge.py` at pauses
+  (pieces of at most 28 s) or into fixed 30 s chunks, then merged;
+- joined clips: 69 recordings of 60-300 s, each a run of consecutive test clips (`build_concat.py`,
+  47,865 words), decoded in one pass (up to 4,096 new tokens) or cut and merged;
+- clips: the 2,504-clip test set the SP-4 numbers use.
+
+| WER % | clip-trained | length-robust |
+|---|---|---|
+| whole calls, fixed 30 s chunks | 15.74 | 11.78 |
+| whole calls, cut at pauses | **10.51** | **9.45** |
+| joined clips, one pass | 15.42 | **9.40** |
+| joined clips, cut at pauses | **12.87** | 10.37 |
+| clips | **10.36** | 10.55 |
+
+- Cutting at pauses beats fixed 30 s chunks for both models on whole calls (-5.23 and -2.33 points);
+  the runaway and repetition-loop gates pass on every call.
+- A clip-trained model breaks down when it reads 1-5 minutes in one pass (15.42); cutting at pauses
+  recovers most of it (12.87). The length-robust stage reverses the order: one pass is now its best
+  long-audio mode (9.40, against 10.37 cut and merged).
+- The length-robust stage costs a little on clips: 10.36 -> 10.55, paired +0.19 [0.02, 0.36]
+  (2,000 resamples, seed 0).
+- So the long-audio default depends on the model: one pass for a length-robust model up to about
+  5 minutes, cut at pauses for a clip-trained one and for anything longer.
+
+In use (a Vietnamese medical ASR campaign, internal data, numbers only): the same tools on a 1.7B model
+gave 6.46 cut and merged against 12.06 in one pass for a clip-trained model on 471 joined test
+recordings, and 5.35 in one pass for its length-robust version (clip test 3.18 -> 3.21 greedy).
+
+WHAT IS NOT CLAIMED: more than one seed; that 28 s and the pause rule are the best cut settings; one
+pass on whole calls (27-73 minutes each), which was not run.
