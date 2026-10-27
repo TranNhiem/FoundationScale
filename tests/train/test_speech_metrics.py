@@ -886,11 +886,27 @@ def test_structured_references_are_refused_not_scored() -> None:
     WER from about 16% to about 30% before this refusal existed. MUST_PASS: transcripts that only
     start with a bracket, and JSON scalars or lists of strings, are transcripts.
     """
-    turns = json.dumps([{"speaker": "Doctor", "text": "how are you"}, {"speaker": "Patient", "text": "fine"}])
-    assert structured_reference(turns) == "JSON list of objects", "MUST_FIRE: speaker turns are a structure"
-    assert structured_reference('  {"text": "hello world"} ') == "JSON object", "MUST_FIRE: an object is a structure"
-    for transcript in ("[laughter] yes we can", "[inaudible]", "hello world", "", "[1, 2]", '["a", "b"]', "{not json"):
-        assert structured_reference(transcript) is None, f"MUST_PASS: {transcript!r} is a transcript"
+    turns = json.dumps(
+        [{"speaker": "Doctor", "text": "how are you"}, {"speaker": "Patient", "text": "fine"}]
+    )
+    assert structured_reference(turns) == "JSON list of objects", (
+        "MUST_FIRE: speaker turns are a structure"
+    )
+    assert structured_reference('  {"text": "hello world"} ') == "JSON object", (
+        "MUST_FIRE: an object is a structure"
+    )
+    for transcript in (
+        "[laughter] yes we can",
+        "[inaudible]",
+        "hello world",
+        "",
+        "[1, 2]",
+        '["a", "b"]',
+        "{not json",
+    ):
+        assert structured_reference(transcript) is None, (
+            f"MUST_PASS: {transcript!r} is a transcript"
+        )
 
     good = [("how are you fine", "how are you fine")]
     for pairs in ([(turns, "how are you fine")], good + [(turns, "how are you fine")]):
@@ -905,7 +921,9 @@ def test_structured_references_are_refused_not_scored() -> None:
         try:
             paired_bootstrap(pairs, pairs, resamples=10)
         except ValueError as exc:
-            assert "JSON list of objects" in str(exc), "MUST_FIRE: the paired comparison refuses it too"
+            assert "JSON list of objects" in str(exc), (
+                "MUST_FIRE: the paired comparison refuses it too"
+            )
         else:
             raise AssertionError("MUST_FIRE: paired_bootstrap scored a structured reference")
     assert corpus_error_rate(good, metric="wer", expected=1).rate() == 0.0, (

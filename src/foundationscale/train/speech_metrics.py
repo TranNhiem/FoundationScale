@@ -334,7 +334,7 @@ def structured_reference(text: str) -> str | None:
 
 
 def _refuse_structured_references(pairs: Sequence[tuple[str, str]]) -> None:
-    """Raise on the first reference that is a serialized structure (see ``structured_reference``)."""
+    """Raise on the first reference that is a serialized structure (``structured_reference``)."""
     for index, (reference, _) in enumerate(pairs):
         kind = structured_reference(reference)
         if kind is not None:
