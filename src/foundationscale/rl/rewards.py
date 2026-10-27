@@ -302,8 +302,10 @@ class KeywordWERReward:
 
     def __post_init__(self) -> None:
         if not isinstance(self.keywords, Mapping):
-            got = type(self.keywords).__name__
-            raise ValueError(f"KeywordWERReward.keywords: a mapping gold -> terms, got {got}")
+            raise ValueError(
+                "KeywordWERReward.keywords: a mapping gold -> terms, "
+                f"got {type(self.keywords).__name__}"
+            )
         if isinstance(self.alpha, bool) or not isinstance(self.alpha, (int, float)):
             raise ValueError(f"KeywordWERReward.alpha={self.alpha!r}: a number >= 0")
         if not math.isfinite(self.alpha) or self.alpha < 0:
