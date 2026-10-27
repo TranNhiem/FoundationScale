@@ -1,7 +1,8 @@
-"""Decoding options of validation_campaigns/speech_repro/eval_qwen3_asr.py, without a model or a GPU.
+"""Decoding options of speech_repro/eval_qwen3_asr.py, without a model or a GPU.
 
-Greedy stays the default and its generate() call is unchanged; --num-beams > 1 switches to beam search; the
-threaded audio prefetch yields exactly the batches and waveforms the serial loader yields, in manifest order.
+Greedy stays the default and its generate() call is unchanged; --num-beams > 1 switches to beam
+search; the threaded audio prefetch yields exactly the batches and waveforms the serial loader
+yields, in manifest order.
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ from pathlib import Path
 import pytest
 import torch
 
-_PATH = Path(__file__).resolve().parents[2] / "validation_campaigns" / "speech_repro" / "eval_qwen3_asr.py"
+_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "validation_campaigns"
+    / "speech_repro"
+    / "eval_qwen3_asr.py"
+)
 _SPEC = importlib.util.spec_from_file_location("eval_qwen3_asr", _PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 ev = importlib.util.module_from_spec(_SPEC)
@@ -34,8 +40,13 @@ def test_greedy_generate_kwargs_are_the_published_setting():
 
 def test_beam_generate_kwargs():
     kw = ev.generate_kwargs(_args(num_beams=4, length_penalty=0.8))
-    assert kw == {"max_new_tokens": 64, "do_sample": False, "num_beams": 4, "length_penalty": 0.8,
-                  "early_stopping": True}
+    assert kw == {
+        "max_new_tokens": 64,
+        "do_sample": False,
+        "num_beams": 4,
+        "length_penalty": 0.8,
+        "early_stopping": True,
+    }
 
 
 @pytest.mark.parametrize("beams", [0, -2])
@@ -52,8 +63,14 @@ def _slow_load(path):
 @pytest.mark.parametrize("batch_size", [1, 3, 7, 50])
 def test_prefetch_yields_the_serial_batches_in_order(batch_size):
     rows = [{"id": i, "audio": f"a{i}.flac"} for i in range(23)]
-    serial = [([r["id"] for r in b], w) for b, w in ev.iter_audio_batches(rows, batch_size, _slow_load, workers=0)]
-    threaded = [([r["id"] for r in b], w) for b, w in ev.iter_audio_batches(rows, batch_size, _slow_load, workers=6)]
+    serial = [
+        ([r["id"] for r in b], w)
+        for b, w in ev.iter_audio_batches(rows, batch_size, _slow_load, workers=0)
+    ]
+    threaded = [
+        ([r["id"] for r in b], w)
+        for b, w in ev.iter_audio_batches(rows, batch_size, _slow_load, workers=6)
+    ]
     assert serial == threaded
     assert [i for ids, _ in serial for i in ids] == list(range(23))
     assert all(w == [f"wave:a{i}.flac" for i in ids] for ids, w in serial)
@@ -98,8 +115,17 @@ class _Model:
 
 def test_step_generate_passes_beam_settings_and_counts_truncation():
     model = _Model()
-    hyps, truncated = ev.step_generate(model, _Proc(), ["w0", "w1"], _args(num_beams=4, length_penalty=0.8))
-    assert model.calls == [{"max_new_tokens": 64, "do_sample": False, "num_beams": 4, "length_penalty": 0.8,
-                            "early_stopping": True}]
+    hyps, truncated = ev.step_generate(
+        model, _Proc(), ["w0", "w1"], _args(num_beams=4, length_penalty=0.8)
+    )
+    assert model.calls == [
+        {
+            "max_new_tokens": 64,
+            "do_sample": False,
+            "num_beams": 4,
+            "length_penalty": 0.8,
+            "early_stopping": True,
+        }
+    ]
     assert hyps == ["5-9", "5-6"]
     assert truncated == 1
