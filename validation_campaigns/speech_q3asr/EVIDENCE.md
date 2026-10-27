@@ -107,3 +107,33 @@ Decode health on the test set: runaway hypotheses 0, repetition-loop rows 0 (bas
 The 0.6B peaks earlier than the 1.7B (step 250 vs 500) and then drifts up slightly on validation.
 Two decodes had to be rerun after a tray's shared filesystem went read-only mid-run; the reruns are
 the reported numbers.
+
+## Beam search for the Qwen3-ASR evaluator (2026-10-27)
+
+`speech_repro/eval_qwen3_asr.py` gained `--num-beams` / `--length-penalty` (greedy stays the default,
+and its `generate()` call is unchanged at `--num-beams 1`) and `--prefetch-workers`, which loads the
+next batch's audio in threads while the GPU decodes the current one. `decode.sh` passes `NUM_BEAMS`,
+`LENGTH_PENALTY`, `BATCH` and `MNT` through. Same SP-4 checkpoint (step 250), same rows, FS normalizer.
+
+The refactor changes nothing it should not: the greedy re-decode of validation and test matches the
+original SP-4 decodes **row for row** (1,000/1,000 and 2,504/2,504 identical hypotheses, 14.09 and
+10.93).
+
+| `earnings_validation1000` (choose the setting here) | FS-normalizer WER |
+|---|---|
+| greedy | 14.09 |
+| beam 4, length penalty 0.8 | **13.31** |
+| beam 4, length penalty 1.0 | 13.31 |
+
+The length penalty does not matter on clips this short; 0.8 is used below.
+
+| `ood_earnings223000_conv` (2,503 scored rows, 6 unseen calls) | FS-normalizer WER | truncated rows |
+|---|---|---|
+| greedy (SP-4) | 10.93 | 9 |
+| **beam 4** | **10.36** | 0 |
+
+Paired bootstrap (2,000 resamples, seed 0): **-0.57 points, 95% CI [-0.75, -0.39]**. Beam search also
+removes the 9 greedy rows that spent the whole token budget. The same setting measured on a
+different language and domain (a Vietnamese medical test, 82k clips, Qwen3-ASR-1.7B) moved WER from
+3.18 to 3.02, so the gain is not specific to Earnings-22. Cost: beam 4 at batch 16 decodes the 1,000
+validation clips in about 6 minutes on one GB200 GPU.
