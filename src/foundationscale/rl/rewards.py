@@ -19,17 +19,18 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from foundationscale.train.speech_metrics import (
+    align,
     is_runaway,
     loop_words,
     normalize_transcript,
-    word_errors,
 )
 
-__all__ = ("MCQLetterReward", "WERReward")
+__all__ = ("KeywordWERReward", "MCQLetterReward", "WERReward", "keyword_score")
 
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -164,6 +165,14 @@ class WERReward:
     and the detectors' own thresholds (``RUNAWAY_RATIO``/``RUNAWAY_SLACK_WORDS``,
     ``LOOP_MIN_RUN``) live with the detectors and travel in their manifests.
 
+    A benchmark scored under ANOTHER normalizer (a challenge's official one)
+    makes the FS rate the wrong objective: the policy is then paid for what
+    that benchmark does not count. ``normalizer`` swaps the word lists the rate
+    is computed on, and ``normalizer_id`` names it -- the two are declared
+    together or not at all, for the reason the FS id exists. The runaway and
+    loop detectors stay the speech side's own either way: they are decode-health
+    gates, not the objective.
+
     WHAT IS NOT CLAIMED: that this is any published implementation's WER
     reward; that the penalty magnitudes are tuned; or that a flagged response
     is punished by any particular amount beyond what the caller declared.
@@ -171,6 +180,8 @@ class WERReward:
 
     runaway_penalty: float = 0.0
     loop_penalty: float = 0.0
+    normalizer: Callable[[str], Sequence[str]] | None = field(default=None, compare=False)
+    normalizer_id: str | None = None
 
     # 1 - WER is unbounded below: a runaway transcript of 256 tokens against a
     # 3-word gold reads about -85, and under group-relative advantages that one
@@ -187,6 +198,20 @@ class WERReward:
             if not math.isfinite(value) or value < 0:
                 # A negative penalty would REWARD the degeneration it names.
                 raise ValueError(f"WERReward.{name}={value!r}: finite and >= 0")
+        if (self.normalizer is None) != (self.normalizer_id is None):
+            raise ValueError(
+                "WERReward.normalizer and normalizer_id are declared together: a rate "
+                "without the id of its normalizer is not reproducible"
+            )
+        if self.normalizer_id is not None and (
+            not isinstance(self.normalizer_id, str) or not self.normalizer_id.strip()
+        ):
+            raise ValueError(f"WERReward.normalizer_id={self.normalizer_id!r}: a non-empty name")
+
+    def words(self, text: str) -> list[str]:
+        """``text`` as the word list this reward's rate is computed on."""
+        normalize = normalize_transcript if self.normalizer is None else self.normalizer
+        return list(normalize(text))
 
     def score(self, *, response: str, gold: str) -> float | None:
         """Score one generated transcript; ``None`` means abstain, never ``0.0``.
@@ -197,11 +222,102 @@ class WERReward:
         nothing. An empty RESPONSE is scored, not abstained: it deletes every
         gold word, WER 1.0, reward 0.0.
         """
-        if not normalize_transcript(gold):
+        gold_words = self.words(gold)
+        if not gold_words:
             return None
-        score = max(1.0 - word_errors(gold, response).rate(), self.WER_FLOOR)
+        score = max(1.0 - align(gold_words, self.words(response)).rate(), self.WER_FLOOR)
         if is_runaway(gold, response):
             score -= self.runaway_penalty
         if loop_words(normalize_transcript(response)) > 0:
             score -= self.loop_penalty
         return score
+
+
+def _occurrences(words: Sequence[str], term: Sequence[str]) -> int:
+    """How many times ``term`` occurs in ``words`` as a contiguous run (overlaps count)."""
+    n = len(term)
+    return sum(1 for i in range(len(words) - n + 1) if list(words[i : i + n]) == list(term))
+
+
+def keyword_score(
+    response: str,
+    gold: str,
+    terms: Sequence[str],
+    *,
+    normalize: Callable[[str], Sequence[str]] = normalize_transcript,
+) -> float | None:
+    """(precision + recall) / 2 over the occurrences of ``terms``, or ``None``.
+
+    Text and terms go through the same ``normalize``. Only terms the gold says
+    are targets; per term the matches are ``min(gold count, response count)``,
+    so a term said twice for one is a missed occurrence (recall) and a term
+    repeated four times for one is three spurious ones (precision). Counts pool
+    over the terms. A response that says none of them has precision 0, not an
+    undefined one. ``None`` -- nothing to measure -- when the gold says none of
+    the terms.
+    """
+    gold_words, response_words = list(normalize(gold)), list(normalize(response))
+    in_gold = in_response = matched = 0
+    for term in terms:
+        term_words = list(normalize(term))
+        if not term_words:
+            continue
+        gold_count = _occurrences(gold_words, term_words)
+        if gold_count == 0:
+            continue
+        response_count = _occurrences(response_words, term_words)
+        in_gold += gold_count
+        in_response += response_count
+        matched += min(gold_count, response_count)
+    if in_gold == 0:
+        return None
+    precision = matched / in_response if in_response else 0.0
+    return (precision + matched / in_gold) / 2
+
+
+@dataclass(frozen=True, slots=True)
+class KeywordWERReward:
+    """:class:`WERReward` minus a declared price for the gold's KEYWORDS it gets wrong.
+
+    ``score = wer.score - alpha * (1 - keyword_score)`` when the gold carries
+    terms (domain words: drug names, diagnoses, product names) and says at least
+    one of them; otherwise exactly ``wer.score``. A missed keyword already costs
+    one word of WER; ``alpha`` prices it again, because on a domain test the
+    term is the word that matters and one term among forty words barely moves
+    the rate. Keywords are normalized by ``wer``'s own normalizer.
+
+    ``keywords`` maps a gold transcript to its terms: ``score`` sees only
+    ``(response, gold)``, so the per-row terms are looked up by the gold text,
+    and two rows with the same gold share them. Abstention is ``wer``'s.
+
+    WHAT IS NOT CLAIMED: that a keyword term improves held-out WER under every
+    decoder. On a Vietnamese medical test it lowered greedy WER and did not
+    beat the supervised model under beam-4 decoding (validation_campaigns/
+    speech_pref/EVIDENCE.md).
+    """
+
+    keywords: Mapping[str, Sequence[str]]
+    alpha: float = 0.5
+    wer: WERReward = field(default_factory=WERReward)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.keywords, Mapping):
+            got = type(self.keywords).__name__
+            raise ValueError(f"KeywordWERReward.keywords: a mapping gold -> terms, got {got}")
+        if isinstance(self.alpha, bool) or not isinstance(self.alpha, (int, float)):
+            raise ValueError(f"KeywordWERReward.alpha={self.alpha!r}: a number >= 0")
+        if not math.isfinite(self.alpha) or self.alpha < 0:
+            raise ValueError(f"KeywordWERReward.alpha={self.alpha!r}: finite and >= 0")
+        if not isinstance(self.wer, WERReward):
+            raise ValueError(f"KeywordWERReward.wer: a WERReward, got {type(self.wer).__name__}")
+
+    def score(self, *, response: str, gold: str) -> float | None:
+        """``wer.score`` minus the keyword price; ``None`` when ``wer`` abstains."""
+        base = self.wer.score(response=response, gold=gold)
+        terms = self.keywords.get(gold)
+        if base is None or not terms:
+            return base
+        found = keyword_score(response, gold, terms, normalize=self.wer.words)
+        if found is None:
+            return base
+        return base - self.alpha * (1.0 - found)

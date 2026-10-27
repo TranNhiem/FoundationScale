@@ -1421,3 +1421,127 @@ def test_encode_audio_prompts_refuses_rows_with_disagreeing_key_sets(capsys: Any
     assert any(
         set_name in message for set_name in ("input_ids", "attention_mask", "input_features")
     ), message
+
+
+# ---------------------------------------------------------------------------
+# 1b. WERReward under a declared custom normalizer, and KeywordWERReward.
+# ---------------------------------------------------------------------------
+
+
+def _split(text: str) -> list[str]:
+    """A case-sensitive normalizer that differs from the FS one on purpose."""
+    return text.split()
+
+
+def test_wer_reward_custom_normalizer_is_declared_with_its_id() -> None:
+    for bad in ({"normalizer": _split}, {"normalizer_id": "split/v1"}):
+        with pytest.raises(ValueError, match="normalizer and normalizer_id"):
+            rewards.WERReward(**bad)
+    with pytest.raises(ValueError, match="normalizer_id"):
+        rewards.WERReward(normalizer=_split, normalizer_id="")
+    with pytest.raises(ValueError, match="normalizer_id"):
+        rewards.WERReward(normalizer=_split, normalizer_id=3)  # type: ignore[arg-type]
+    reward = rewards.WERReward(normalizer=_split, normalizer_id="split/v1")
+    assert (reward.normalizer, reward.normalizer_id) == (_split, "split/v1")
+    assert rewards.WERReward().normalizer is None and rewards.WERReward().normalizer_id is None
+
+
+def test_wer_reward_scores_under_the_declared_normalizer() -> None:
+    fs, custom = rewards.WERReward(), rewards.WERReward(normalizer=_split, normalizer_id="split/v1")
+    # the FS normalizer folds case; the declared one does not, so one of two words is wrong
+    assert fs.score(response="Hello world", gold="hello world") == pytest.approx(1.0)
+    assert custom.score(response="Hello world", gold="hello world") == pytest.approx(0.5)
+    assert custom.score(response="hello world", gold="hello world") == pytest.approx(1.0)
+    # abstention follows the declared normalizer: "..." is one token for split, nothing for FS
+    assert fs.score(response="x", gold="...") is None
+    assert custom.score(response="x", gold="...") == pytest.approx(0.0)
+    assert custom.score(response="x", gold="   ") is None
+    # the floor still holds under a declared normalizer
+    assert custom.score(response=" ".join(["z"] * 40), gold="a") == pytest.approx(
+        rewards.WERReward.WER_FLOOR
+    )
+
+
+def test_wer_reward_custom_normalizer_keeps_the_fs_detectors() -> None:
+    custom = rewards.WERReward(normalizer=_split, normalizer_id="split/v1", loop_penalty=0.5)
+    plain = rewards.WERReward(normalizer=_split, normalizer_id="split/v1")
+    assert custom.score(response=_LOOPY, gold="hello world") == pytest.approx(
+        plain.score(response=_LOOPY, gold="hello world") - 0.5
+    )
+
+
+def test_keyword_score_is_mean_of_clipped_precision_and_recall() -> None:
+    assert "keyword_score" in rewards.__all__ and "KeywordWERReward" in rewards.__all__
+    # gold says "b" twice, response once: precision 1/1, recall 1/2
+    assert rewards.keyword_score("a b c", "a b c b", ["b"]) == pytest.approx(0.75)
+    # response repeats the term four times against one: precision 1/4, recall 1/1
+    assert rewards.keyword_score("b b b b", "a b", ["b"]) == pytest.approx(0.625)
+    # a two-word term counts as one occurrence, and terms are normalized like the text
+    assert rewards.keyword_score(
+        "x Mitral Valve y", "mitral valve", ["MITRAL valve"]
+    ) == pytest.approx(1.0)
+    # missing the term entirely: precision 0 (nothing said), recall 0
+    assert rewards.keyword_score("a c", "a b c", ["b"]) == pytest.approx(0.0)
+    # two terms pooled: b hit 1/1, d missed 0/1 -> precision 1/1, recall 1/2
+    assert rewards.keyword_score("a b c", "a b c d", ["b", "d"]) == pytest.approx(0.75)
+    # a term the gold does not say is not a target, and an empty term is ignored
+    assert rewards.keyword_score("q b", "a b", ["b", "q", "  "]) == pytest.approx(1.0)
+    assert rewards.keyword_score("a b", "a b", ["zz"]) is None
+    assert rewards.keyword_score("a b", "a b", []) is None
+    # occurrences may overlap ("a a" occurs twice in "a a a")
+    assert rewards.keyword_score("a a", "a a a", ["a a"]) == pytest.approx((1.0 + 0.5) / 2)
+
+
+def test_keyword_score_uses_the_given_normalizer() -> None:
+    assert rewards.keyword_score("B c", "b c", ["b"], normalize=_split) == pytest.approx(0.0)
+    assert rewards.keyword_score("b c", "b c", ["b"], normalize=_split) == pytest.approx(1.0)
+
+
+def test_keyword_wer_reward_prices_missed_and_repeated_keywords() -> None:
+    gold = "the mitral valve is fine"
+    reward = rewards.KeywordWERReward(keywords={gold: ("mitral valve",)}, alpha=0.5)
+    base = rewards.WERReward()
+    exact = "the mitral valve is fine"
+    missed = "the metal valve is fine"
+    assert reward.score(response=exact, gold=gold) == pytest.approx(1.0)
+    # WER 0.2 -> 0.8; keyword score 0 -> minus 0.5 * (1 - 0)
+    assert reward.score(response=missed, gold=gold) == pytest.approx(
+        base.score(response=missed, gold=gold) - 0.5
+    )
+    assert reward.score(response=missed, gold=gold) == pytest.approx(0.3)
+    # a gold with no declared terms scores exactly like WERReward
+    assert reward.score(response="a x", gold="a b") == pytest.approx(
+        base.score(response="a x", gold="a b")
+    )
+    # declared terms the gold does not say leave the score unchanged
+    odd = rewards.KeywordWERReward(keywords={"a b": ("zz",)})
+    assert odd.score(response="a x", gold="a b") == pytest.approx(0.5)
+    # abstention outranks the keyword term
+    assert rewards.KeywordWERReward(keywords={"": ("b",)}).score(response="b", gold="") is None
+    # alpha 0 is plain WER; the default is 0.5
+    assert rewards.KeywordWERReward(keywords={gold: ("mitral valve",)}, alpha=0.0).score(
+        response=missed, gold=gold
+    ) == pytest.approx(0.8)
+    assert rewards.KeywordWERReward(keywords={}).alpha == 0.5
+
+
+def test_keyword_wer_reward_uses_the_wer_rewards_normalizer_and_penalties() -> None:
+    wer = rewards.WERReward(normalizer=_split, normalizer_id="split/v1", loop_penalty=0.25)
+    reward = rewards.KeywordWERReward(keywords={"b c": ("b",)}, alpha=1.0, wer=wer)
+    # case-sensitive: "B" is a substitution AND a missed keyword
+    assert reward.score(response="B c", gold="b c") == pytest.approx(0.5 - 1.0)
+    assert reward.score(response="b c", gold="b c") == pytest.approx(1.0)
+    assert reward.wer is wer
+
+
+def test_keyword_wer_reward_refuses_bad_settings() -> None:
+    for alpha in (-0.1, float("nan"), float("inf"), True, "0.5"):
+        with pytest.raises(ValueError, match="alpha"):
+            rewards.KeywordWERReward(keywords={}, alpha=alpha)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="keywords"):
+        rewards.KeywordWERReward(keywords=[("a", ("b",))])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="wer"):
+        rewards.KeywordWERReward(keywords={}, wer="WERReward")  # type: ignore[arg-type]
+    reward = rewards.KeywordWERReward(keywords={})
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        reward.alpha = 1.0  # type: ignore[misc]
