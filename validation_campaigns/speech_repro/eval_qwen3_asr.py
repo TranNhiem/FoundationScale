@@ -6,7 +6,10 @@ Qwen's published LibriSpeech numbers (1.7B: clean 1.63 / other 3.38, percent).  
 same manifest eval_wer.py reads (JSON lines: id, audio, answer) and writes the same output JSON
 (the "all" list of {id, reference, hypothesis} plus the WER/CER manifests computed with the very
 helpers eval_wer.py imports), so score_repro.py can score this run unchanged.  Greedy decoding,
-bfloat16, max_new_tokens 1024 -- the published eval setting.
+bfloat16, max_new_tokens 1024 -- the published eval setting.  ``--num-beams N`` (N > 1) switches to
+beam search with ``--length-penalty``; the greedy generate() call is unchanged when N is 1.
+``--prefetch-workers`` loads the next batch's audio in threads while the GPU decodes the current one;
+the batches and waveforms are identical to the serial loader's.
 
 Runs in the hf-26.10 profile (transformers 5.19; venv ~/envs/hf-cand-519). Qwen3-ASR trains as an
 audio_llm, but the generic audio-LLM eval would build a chat prompt; decoding must go through the
@@ -24,6 +27,8 @@ import json
 import sys
 import time
 import traceback
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +74,39 @@ def step_load(args: argparse.Namespace) -> tuple[Any, Any]:
     return model, processor
 
 
+def generate_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    """The generate() arguments: greedy (the published setting) unless --num-beams > 1."""
+    if args.num_beams < 1:
+        raise ValueError(f"--num-beams {args.num_beams}: must be >= 1")
+    kwargs: dict[str, Any] = {"max_new_tokens": args.max_new_tokens, "do_sample": False}
+    if args.num_beams > 1:
+        kwargs.update(num_beams=args.num_beams, length_penalty=args.length_penalty, early_stopping=True)
+    return kwargs
+
+
+def iter_audio_batches(
+    rows: list[dict[str, Any]], batch_size: int, load: Callable[[str], Any], workers: int
+) -> Iterator[tuple[list[dict[str, Any]], list[Any]]]:
+    """Yield (batch, waveforms) in manifest order.
+
+    With workers > 0 the next batch's audio is loaded in a thread pool while the caller decodes
+    the current batch; the batches and waveforms are the same as with workers == 0. Waveforms are
+    not kept on the rows, so each batch's audio is freed once it has been decoded.
+    """
+    if workers <= 0:
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            yield batch, [load(r["audio"]) for r in batch]
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = [pool.submit(load, r["audio"]) for r in rows[:batch_size]]
+        for start in range(0, len(rows), batch_size):
+            batch, current = rows[start : start + batch_size], pending
+            nxt = rows[start + batch_size : start + 2 * batch_size]
+            pending = [pool.submit(load, r["audio"]) for r in nxt]
+            yield batch, [f.result() for f in current]
+
+
 def step_generate(
     model: Any, processor: Any, waves: list[Any], args: argparse.Namespace
 ) -> tuple[list[str], int]:
@@ -83,7 +121,7 @@ def step_generate(
         model.device, model.dtype
     )
     prompt_len = int(inputs["input_ids"].shape[1])
-    out = model.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
+    out = model.generate(**inputs, **generate_kwargs(args))
     # per row: only Qwen3ASRProcessor.decode honours return_format (transformers 5.19);
     # batch_decode ignores it and returns "language English<asr_text>..." verbatim
     texts = [
@@ -113,7 +151,11 @@ def main() -> None:
     ap.add_argument("--max-new-tokens", type=int, default=1024)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--language", default=None)
+    ap.add_argument("--num-beams", type=int, default=1, help="1 = greedy (published setting); >1 = beam search")
+    ap.add_argument("--length-penalty", type=float, default=1.0, help="beam search only")
+    ap.add_argument("--prefetch-workers", type=int, default=8, help="threads loading the next batch's audio; 0 = serial")
     args = ap.parse_args()
+    generate_kwargs(args)  # refuse a bad --num-beams before loading anything
 
     helpers = _eval_wer_helpers()
     results: dict[str, Any] = {
@@ -152,13 +194,13 @@ def main() -> None:
         results["n_rows"] = len(rows)
 
         truncated_total = 0
-        for start in range(0, len(rows), args.batch_size):
-            batch = rows[start : start + args.batch_size]
-            for r in batch:
-                wave, _ = helpers.step_audio(r["audio"], sampling_rate)
-                r["_wave"] = wave
+
+        def load(path: str) -> Any:
+            return helpers.step_audio(path, sampling_rate)[0]
+
+        for batch, waves in iter_audio_batches(rows, args.batch_size, load, args.prefetch_workers):
             with torch.inference_mode():
-                hyps, trun = step_generate(model, processor, [r["_wave"] for r in batch], args)
+                hyps, trun = step_generate(model, processor, waves, args)
             truncated_total += trun
             for i, r in enumerate(batch):
                 ref = r["answer"]
