@@ -43,6 +43,7 @@ this module is part of that plane.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from collections.abc import Iterable, Sequence
@@ -67,6 +68,7 @@ __all__ = [
     "loop_words",
     "normalize_transcript",
     "paired_bootstrap",
+    "structured_reference",
     "word_errors",
 ]
 
@@ -306,6 +308,43 @@ class CorpusErrorRate:
         }
 
 
+def structured_reference(text: str) -> str | None:
+    """What kind of serialized structure ``text`` is, or None when it is a transcript.
+
+    A reference that parses as a JSON object, or as a JSON list holding an object, is a data
+    structure (speaker turns, segment metadata), not a transcript. Scored as text, its keys and
+    labels ("speaker", "text", speaker names) become reference words that no model can say, and
+    every error rate on it is silently inflated: a long-form WER measured as about 30% was about
+    16% once the turns' text was scored instead. Transcripts that merely start with a bracket
+    ("[laughter] yes") are not valid JSON, and JSON scalars or lists of strings carry no keys, so
+    all of those are transcripts.
+    """
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "[{":
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        return None
+    if isinstance(parsed, dict):
+        return "JSON object"
+    if isinstance(parsed, list) and any(isinstance(item, dict) for item in parsed):
+        return "JSON list of objects"
+    return None
+
+
+def _refuse_structured_references(pairs: Sequence[tuple[str, str]]) -> None:
+    """Raise on the first reference that is a serialized structure (see ``structured_reference``)."""
+    for index, (reference, _) in enumerate(pairs):
+        kind = structured_reference(reference)
+        if kind is not None:
+            raise ValueError(
+                f"reference {index} is a {kind}, not a transcript ({reference[:80]!r}): score the "
+                "transcript text it holds (for speaker turns, the joined 'text' fields), not its "
+                "serialization"
+            )
+
+
 def corpus_error_rate(
     pairs: Sequence[tuple[str, str]],
     *,
@@ -321,7 +360,8 @@ def corpus_error_rate(
     corpus should have carried -- it is what turns a silently short list into an
     UNDERCOVERED verdict instead of a clean score.
 
-    Raises on a metric this module does not measure.
+    Raises on a metric this module does not measure, and on a reference that is a
+    serialized structure rather than a transcript (``structured_reference``).
     """
     if metric == "wer":
         per_utterance = word_errors
@@ -329,6 +369,7 @@ def corpus_error_rate(
         per_utterance = char_errors
     else:
         raise ValueError(f'unknown speech error metric {metric!r}: expected "wer" or "cer"')
+    _refuse_structured_references(pairs)
 
     substitutions = 0
     deletions = 0
@@ -491,6 +532,8 @@ def paired_bootstrap(
             f"paired bootstrap refuses confidence {confidence!r}: the level must be "
             "strictly between 0 and 1"
         )
+    _refuse_structured_references(pairs_base)
+    _refuse_structured_references(pairs_tuned)
     if len(pairs_base) != len(pairs_tuned):
         raise ValueError(
             f"paired comparison misaligned: {len(pairs_base)} base pairs against "

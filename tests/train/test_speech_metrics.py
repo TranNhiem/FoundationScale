@@ -32,6 +32,7 @@ from foundationscale.train.speech_metrics import (
     loop_words,
     normalize_transcript,
     paired_bootstrap,
+    structured_reference,
     word_errors,
 )
 
@@ -874,4 +875,39 @@ def test_loop_manifest_names_the_run_length_arm() -> None:
     )
     assert json.loads(json.dumps(manifest)) == manifest, (
         "MUST_PASS: the manifest round-trips through JSON unchanged"
+    )
+
+
+def test_structured_references_are_refused_not_scored() -> None:
+    """MUST_FIRE: a reference that is a serialized structure is refused, never scored as text.
+
+    A JSON list of speaker turns scored as text puts its keys and labels ("speaker", "text",
+    the speaker names) into the reference: words no model can say, which inflated a long-form
+    WER from about 16% to about 30% before this refusal existed. MUST_PASS: transcripts that only
+    start with a bracket, and JSON scalars or lists of strings, are transcripts.
+    """
+    turns = json.dumps([{"speaker": "Doctor", "text": "how are you"}, {"speaker": "Patient", "text": "fine"}])
+    assert structured_reference(turns) == "JSON list of objects", "MUST_FIRE: speaker turns are a structure"
+    assert structured_reference('  {"text": "hello world"} ') == "JSON object", "MUST_FIRE: an object is a structure"
+    for transcript in ("[laughter] yes we can", "[inaudible]", "hello world", "", "[1, 2]", '["a", "b"]', "{not json"):
+        assert structured_reference(transcript) is None, f"MUST_PASS: {transcript!r} is a transcript"
+
+    good = [("how are you fine", "how are you fine")]
+    for pairs in ([(turns, "how are you fine")], good + [(turns, "how are you fine")]):
+        try:
+            corpus_error_rate(pairs, metric="wer", expected=len(pairs))
+        except ValueError as exc:
+            assert "JSON list of objects" in str(exc) and "reference" in str(exc), (
+                "MUST_FIRE: the refusal names what the reference is"
+            )
+        else:
+            raise AssertionError("MUST_FIRE: corpus_error_rate scored a structured reference")
+        try:
+            paired_bootstrap(pairs, pairs, resamples=10)
+        except ValueError as exc:
+            assert "JSON list of objects" in str(exc), "MUST_FIRE: the paired comparison refuses it too"
+        else:
+            raise AssertionError("MUST_FIRE: paired_bootstrap scored a structured reference")
+    assert corpus_error_rate(good, metric="wer", expected=1).rate() == 0.0, (
+        "MUST_PASS: plain transcripts still score"
     )
