@@ -122,3 +122,34 @@ checkpoint plus the 0.6B processor files). Checkpoints were picked on validation
 The gains add up: every seed beats both the SFT model and the RPO model it started from, with
 0 runaway and 0 repetition-loop rows. The full recipe (SFT -> RPO -> GRPO) takes held-out WER from
 16.09 (zero-shot) to 10.93 (SFT) to 10.39 (mean of three seeds).
+
+## The same winners under beam-4 decoding (2026-10-27)
+
+Every number above is greedy decoding. Beam search alone takes the SFT model from 10.93 to 10.36
+(`eval_qwen3_asr.py --num-beams 4`, length penalty 0.8 picked on validation; paired -0.57
+[-0.75, -0.39], see speech_q3asr/EVIDENCE.md). That is more than any preference or RL recipe here
+gained under greedy decoding, so each validation winner was re-decoded with beam 4 on the same test
+rows and compared with the SFT model decoded the same way (paired bootstrap, 2,000 resamples).
+
+| recipe (beam 4) | seed 0 | seed 1 | seed 2 | mean | mean under greedy |
+|---|---|---|---|---|---|
+| SFT | 10.36 | | | **10.36** | 10.93 |
+| SP-2 RPO, 2 epochs (step 525) | 10.53 [-0.01, 0.34] | 10.45 [-0.08, 0.26] | 10.49 [-0.06, 0.30] | 10.49 | 10.58 |
+| SP-3 GRPO + KL, 16 clips x 8 (step 50 / 150 / 50) | 10.31 [-0.19, 0.11] | 10.24 [-0.28, 0.05] | 10.34 [-0.19, 0.14] | 10.30 | 10.47 |
+| RPO -> GRPO (step 100 / 150 / 150) | 10.25 [-0.28, 0.06] | 10.28 [-0.26, 0.09] | 10.46 [-0.08, 0.28] | 10.33 | 10.39 |
+
+(brackets: 95% CI of the gap to SFT under beam 4.)
+
+- Under beam 4, no seed of any recipe beats the SFT model significantly. GRPO and the stack sit
+  0.03-0.12 below it with intervals that cross zero; RPO is 0.09-0.17 above it on every seed.
+- The greedy gains were real gains of greedy decoding: GRPO and RPO sharpen the model toward the
+  sequences beam search already finds. A recipe that improves greedy WER has to be compared with the
+  SFT model under the decoder that will be used, or the comparison measures the decoder.
+- The same held on a second campaign (Vietnamese medical ASR, internal data, Qwen3-ASR 0.6B and
+  1.7B): six GRPO arms with a WER reward under the benchmark's own normalizer, one with a medical
+  keyword term (`KeywordWERReward`), improved greedy development WER by 0.01-0.14 and none beat its
+  SFT model under beam 4 (1.7B: 3.10 vs 3.10; keyword arm 3.15 vs 3.10).
+
+What this does not refute: that preference or RL training helps where beam search is not used
+(streaming, latency-bound greedy serving), or with a reward that measures something beam search
+does not optimize.
