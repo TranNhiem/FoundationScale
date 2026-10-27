@@ -86,6 +86,7 @@ An item becomes **Available** when:
 - **Start from:** the speech guide [examples/speech-2xH200](examples/speech-2xH200/README.md).
 - **Done when:** a measured WER improvement over the base model, added to the guide.
 - **Result:** Earnings-22 held-out WER 16.09 -> 10.93 (paired -5.16 [-5.60, -4.75]), no runaway or loop rows; in the [speech guide](examples/speech-2xH200/README.md#qwen3-asr-on-real-world-speech-earnings-22).
+- **Decoding (2026-10-27):** beam 4 in `eval_qwen3_asr.py --num-beams 4` takes the same checkpoint to 10.36 on the Earnings-22 test (paired -0.57 [-0.75, -0.39]; greedy re-decode identical row for row), see [speech_q3asr EVIDENCE](validation_campaigns/speech_q3asr/EVIDENCE.md#beam-search-for-the-qwen3-asr-evaluator-2026-10-27).
 
 #### SP-5 · Multi-speaker TTS fine-tuning
 **Status:** Done (2026-10-17), with VoxCPM2
