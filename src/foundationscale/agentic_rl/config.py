@@ -372,6 +372,10 @@ class RolloutConfig:
     # was an engine infra failure (a hung engine) may restart the fleet, re-push the
     # last published checkpoint and re-run. 0 (the default) keeps recovery off.
     engine_recovery_retries: int = 0
+    # RolloutHost.recovery_rerun: which rows a recovery retry re-runs -- "all" (the
+    # default, the original behaviour) or "engine_rows" (only the ENGINE infra rows;
+    # measured rows are kept, refused if the re-run changed the served policy version).
+    recovery_rerun: str = "all"
 
 
 @dataclass(frozen=True)
@@ -1028,6 +1032,7 @@ def _build_rollout(
             "seed",
             "max_infra_rate",
             "engine_recovery_retries",
+            "recovery_rerun",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1111,6 +1116,20 @@ def _build_rollout(
         required=False,
         provenance=provenance,
     )
+    recovery_rerun = _resolve_scalar(
+        dotted_key="rollout.recovery_rerun",
+        field_name="recovery_rerun",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="all",
+        required=False,
+        provenance=provenance,
+    )
+    if recovery_rerun not in ("all", "engine_rows"):
+        raise AgenticConfigRefusal(
+            f"rollout.recovery_rerun: {recovery_rerun!r} is not one of 'all', 'engine_rows'"
+        )
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1120,6 +1139,7 @@ def _build_rollout(
         seed=seed,
         max_infra_rate=max_infra_rate,
         engine_recovery_retries=engine_recovery_retries,
+        recovery_rerun=recovery_rerun,
     )
 
 

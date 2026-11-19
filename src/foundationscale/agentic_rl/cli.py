@@ -361,6 +361,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         sharding=config.trainer["sharding"],
         declared_max_infra_rate=config.rollout.max_infra_rate,
         engine_recovery_retries=config.rollout.engine_recovery_retries,
+        recovery_rerun=config.rollout.recovery_rerun,
         declared_max_lag=config.engine.max_policy_lag,
         servable_base_model_dir=(
             config.policy.model_path if config.policy.servable_publish else None

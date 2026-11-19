@@ -139,6 +139,9 @@ def _all_engine_infra(trajectories: Sequence[Trajectory]) -> bool:
     return True
 
 
+_RECOVERY_RERUN = ("all", "engine_rows")
+
+
 def _is_engine_infra(trajectory: Trajectory) -> bool:
     """True iff this row is an ENGINE infra failure (same reading as ``_all_engine_infra``)."""
     reason = trajectory.abstention_reason
@@ -243,6 +246,17 @@ class RolloutHost:
     # every attempt was an ENGINE infra failure (0 = recovery OFF; see the class
     # docstring). Needs `fleet`.
     engine_recovery_retries: int = 0
+    # Which rows an engine-recovery retry re-runs: "all" re-gathers every attempt of the
+    # step (the original behaviour); "engine_rows" re-runs ONLY the rows that ended as
+    # ENGINE infra failures and keeps every other row as measured -- a recovery re-pushes
+    # the SAME checkpoint, so kept and re-run rows share one policy version (checked, and
+    # refused if they do not; see ``_merge_recovered``).
+    recovery_rerun: str = "all"
+    # The policy version the fleet serves when it is LAUNCHED (cli.py launches every
+    # server from policy.model_path, the version-0 weights the trainer starts from). Seeds
+    # the per-server version ledger (``_state["server_versions"]``) that ``publish`` and
+    # ``_recover_engines`` advance from their own push reports.
+    fleet_launch_version: int = 0
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -307,6 +321,12 @@ class RolloutHost:
         _real_int_at_least(
             self.engine_recovery_retries, 0, where=where, name="engine_recovery_retries"
         )
+        if self.recovery_rerun not in _RECOVERY_RERUN:
+            raise RolloutHostRefusal(
+                f"{where}: field 'recovery_rerun' is {_described(self.recovery_rerun)}: it "
+                f"must be one of {', '.join(repr(v) for v in _RECOVERY_RERUN)}"
+            )
+        _real_int_at_least(self.fleet_launch_version, 0, where=where, name="fleet_launch_version")
         if self.engine_recovery_retries > 0 and self.fleet is None:
             raise RolloutHostRefusal(
                 f"{where}: field 'engine_recovery_retries' is {self.engine_recovery_retries} "
@@ -321,6 +341,57 @@ class RolloutHost:
         assert self.fleet is not None  # __post_init__ guarantees exactly one is set
         return self.fleet.client_for(session_index)
 
+    def _server_count(self) -> int | None:
+        """How many servers sessions are round-robined over, or ``None`` when this
+        host cannot know (an injected ``client_factory`` with no fleet anywhere)."""
+        # Only a fleet's round-robin (``session_index % len(servers)``) maps a session
+        # to a server this host can name; an injected client_factory routes opaquely.
+        # A fleet that does not expose its servers (a test double) cannot be mapped either.
+        servers = getattr(self.fleet, "servers", None) if self.fleet is not None else None
+        return len(servers) if servers else None
+
+    def _server_versions(self) -> list[int] | None:
+        """The per-server policy-version ledger, seeded on first use from
+        ``fleet_launch_version``; ``None`` when the server count is unknowable.
+
+        Entry ``i`` is the version of the checkpoint server ``i`` last COMPLETED
+        loading, advanced only from push reports (``publish``, ``_recover_engines``)
+        -- the same evidence the push itself is judged on, never the trainer's own
+        step counter. Sessions read their version from the server they ran on, so
+        ``StalenessGate`` checks what each session was actually served."""
+        ledger = self._state.get("server_versions")
+        if ledger is None:
+            count = self._server_count()
+            if count is None:
+                return None
+            ledger = [self.fleet_launch_version] * count
+            self._state["server_versions"] = ledger
+        return ledger
+
+    def _record_push(self, report: SyncReport | None, version: int) -> None:
+        """Advance the ledger after a push: every server the report names as
+        transferred now serves ``version``. ``report is None`` (a fleet restart
+        with nothing re-pushed) means every server relaunched from its declared
+        command, i.e. serves ``fleet_launch_version`` again."""
+        ledger = self._server_versions()
+        if ledger is None:
+            return
+        if report is None:
+            ledger[:] = [self.fleet_launch_version] * len(ledger)
+            return
+        for name in report.transferred:
+            index = int(name.rsplit("_", 1)[1])  # DiskWeightSync names servers "server_<i>"
+            ledger[index] = version
+
+    def _session_version(self, session_index: int, step: int) -> int:
+        """The policy version the server for ``session_index`` serves (ledger), or
+        ``step`` -- the legacy asserted value, recorded as unmeasured -- when no
+        ledger exists."""
+        ledger = self._server_versions()
+        if ledger is None:
+            return step
+        return ledger[session_index % len(ledger)]
+
     async def _run_episode(
         self,
         task: EpisodeTask,
@@ -331,6 +402,7 @@ class RolloutHost:
     ) -> Trajectory:
         async with semaphore:
             client = self._client_for(session_index)
+            version = self._session_version(session_index, step)
             if isinstance(self.env_backend, TaskAwareEnvBackend):
                 instance = self.env_backend.create_for_task(
                     self.env_spec, task, instance_id=session_id
@@ -376,7 +448,7 @@ class RolloutHost:
                     harness=self.harness.name,
                     reward=reward_value,
                     abstention_reason=abstention,
-                    versions=(step, step),
+                    versions=(version, version),
                     extra_metadata=extra_metadata,
                 )
             except _INFRA_EXCEPTIONS as exc:
@@ -397,15 +469,15 @@ class RolloutHost:
                         reward=None,
                         abstention_reason=reason,
                         termination=Termination.INFRA,
-                        policy_version_min=step,
-                        policy_version_max=step,
+                        policy_version_min=version,
+                        policy_version_max=version,
                     )
                 return _zero_turn_infra_trajectory(
                     task,
                     session_id=session_id,
                     harness_name=self.harness.name,
                     reason=reason,
-                    step=step,
+                    step=version,
                 )
             finally:
                 try:
@@ -419,7 +491,12 @@ class RolloutHost:
                         flush=True,
                     )
 
-    async def _gather_step(self, step: int, tasks: Sequence[EpisodeTask]) -> list[Trajectory]:
+    async def _gather_step(
+        self,
+        step: int,
+        tasks: Sequence[EpisodeTask],
+        only: frozenset[int] | None = None,
+    ) -> list[Trajectory]:
         """Build and run EVERY attempt of ``tasks`` for ``step``, returning one
         ``Trajectory`` per ``tasks_per_step * group_size`` attempt.
 
@@ -430,16 +507,45 @@ class RolloutHost:
         Each call builds a FRESH semaphore -- the counting state of a previous
         call's semaphore is spent on episodes that have since finished/failed,
         and a recovery retry must not inherit it.
+
+        ``only``, when given, runs just those session indices (in index order) --
+        the ``recovery_rerun="engine_rows"`` retry; each keeps its session id and
+        index, hence its server.
         """
         semaphore = asyncio.Semaphore(self.max_concurrency)
         episodes = []
         session_index = 0
         for task in tasks:
             for replica in range(self.group_size):
-                session_id = f"{task.uid}#{replica}"
-                episodes.append(self._run_episode(task, session_id, session_index, step, semaphore))
+                if only is None or session_index in only:
+                    session_id = f"{task.uid}#{replica}"
+                    episodes.append(
+                        self._run_episode(task, session_id, session_index, step, semaphore)
+                    )
                 session_index += 1
         return list(await asyncio.gather(*episodes))
+
+    def _merge_recovered(
+        self, step: int, previous: list[Trajectory], rerun: list[Trajectory], indices: list[int]
+    ) -> list[Trajectory]:
+        """Splice re-run rows into ``previous`` at ``indices``. Refuses when a kept
+        measured row and a re-run row carry different policy versions: one step's
+        batch must come from one policy, and a recovery that changed the served
+        version would mix two policies' samples under one advantage baseline."""
+        merged = list(previous)
+        for index, row in zip(indices, rerun, strict=True):
+            merged[index] = row
+        rerun_set = set(indices)
+        kept = {t.policy_version_min for i, t in enumerate(merged) if i not in rerun_set}
+        fresh = {t.policy_version_min for t in rerun}
+        if kept and fresh and kept != fresh:
+            raise RolloutHostRefusal(
+                f"RolloutHost.rollout: step {step}: recovery_rerun='engine_rows' would mix "
+                f"policy versions {sorted(map(str, kept))} (kept rows) and "
+                f"{sorted(map(str, fresh))} (re-run rows) "
+                f"in one batch; use recovery_rerun='all' or fix the re-push"
+            )
+        return merged
 
     def _recover_engines(self, step: int) -> SyncReport | None:
         """Restart the generation fleet and make it serve the CURRENT policy again.
@@ -505,6 +611,7 @@ class RolloutHost:
                 f"transferred, failed_ranks={report.failed_ranks}): the restarted fleet would "
                 f"keep serving a stale checkpoint on every subsequent rollout without saying so"
             )
+        self._record_push(report, self._state.get("last_pushed_version", self.fleet_launch_version))
         return report
 
     async def rollout_async(self, step: int) -> ExperienceBatch:
@@ -552,7 +659,19 @@ class RolloutHost:
             # In a worker thread: the re-push drives the fleet with its own asyncio.run(), which
             # cannot run on this loop's thread, and the restart blocks for minutes.
             await asyncio.to_thread(self._recover_engines, step)
-            trajectories = await self._gather_step(step, tasks)
+            if self.recovery_rerun == "engine_rows":
+                indices = [i for i, t in enumerate(trajectories) if _is_engine_infra(t)]
+                rerun = await self._gather_step(step, tasks, only=frozenset(indices))
+                trajectories = self._merge_recovered(step, trajectories, rerun, indices)
+            else:
+                trajectories = await self._gather_step(step, tasks)
+        # The measured per-session versions publish hands StalenessGate; () when no
+        # ledger exists (nothing measured -- never the asserted step).
+        self._state["last_step_versions"] = (
+            tuple(t.policy_version_min for t in trajectories)
+            if self._server_versions() is not None
+            else ()
+        )
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
         if self.guard is not None:
@@ -668,6 +787,7 @@ class RolloutHost:
                     flush=True,
                 )
                 self._state["last_pushed_path"] = path
+                self._state["last_pushed_version"] = target_step
                 recovered = self._recover_engines(step)
                 if recovered is not None:
                     report = recovered
@@ -680,14 +800,12 @@ class RolloutHost:
                     f"every subsequent rollout without saying so"
                 )
             self._state["last_pushed_path"] = path
+            self._state["last_pushed_version"] = target_step
+            self._record_push(report, target_step)
             if self.gates:
-                # rollout_policy_versions=(): RolloutHost does not yet track which
-                # policy version each in-flight rollout session is running (that
-                # instrumentation is a later slice's job) -- an honest empty
-                # sequence, never a fabricated one. StalenessGate still reaches a
-                # real, scoped PASS from is_stale alone when the sequence is empty
-                # (see its own docstring); it never fabricates a per-session lag
-                # claim nobody measured.
+                # rollout_policy_versions: the per-session versions the LAST rollout
+                # measured off the server ledger (see _server_versions) -- () when no
+                # ledger exists (client_factory hosts), never a fabricated sequence.
                 gate_ctx = WeightSyncGateContext(
                     offered=len(report.offered),
                     failed=len(report.failed_ranks),
@@ -699,7 +817,7 @@ class RolloutHost:
                     seconds=report.seconds,
                     step=step,
                     policy_version=target_step,
-                    rollout_policy_versions=(),
+                    rollout_policy_versions=self._state.get("last_step_versions", ()),
                     declared_max_lag=self.declared_max_lag,
                     parity=None,
                     declared_parity_atol=None,

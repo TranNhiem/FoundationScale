@@ -50,8 +50,20 @@ failure -- the signature of a vLLM engine that hung after an in-place weight
 reload. It restarts the fleet, re-pushes the last published checkpoint so the
 engine serves the current policy rather than the base model, and re-runs the
 same step with the same tasks, logging one `[agentic-rl:engine-recovery]` line
-per attempt. Partial failures and env failures never trigger it; once the
-retries are spent, `RolloutAbstentionGate` refuses as before.
+per attempt. Env failures never trigger it; once the retries are spent,
+`RolloutAbstentionGate` refuses as before. `rollout.recovery_rerun` declares
+what a retry re-runs: `"all"` (default) re-gathers every attempt, while
+`"engine_rows"` re-runs only the engine-failed rows and keeps the measured
+ones -- refused if the kept and re-run rows report different policy versions.
+
+**Per-session policy versions.** With a real `EngineFleet`, `RolloutHost`
+keeps a per-server version ledger: every server starts at
+`fleet_launch_version` (0, the `policy.model_path` weights `cli.py` launches),
+and `publish`/engine recovery advance exactly the servers their push report
+names as transferred. Each session records the version of the server it ran
+on (`policy_version_min/max`), and the next `publish` hands those versions to
+`StalenessGate` as `rollout_policy_versions`. Hosts built on an injected
+`client_factory` cannot name the session-to-server mapping and pass `()`.
 
 ## Rules every later piece must keep
 
@@ -119,11 +131,10 @@ same four `train/cli.py` uses: `0` pass, `5` red (a crash), `95` unmeasured
   unprobed and gated behind an explicit `reload_mode="collective_rpc"` opt-in;
   a cluster probe decides whether it is usable at all. Until then,
   `engine.weight_sync_mode="restart"` is the guaranteed-correct path for vLLM.
-- `RolloutHost.publish` does not yet track which policy version each in-flight
-  rollout session is running, so `StalenessGate`'s `WEIGHT_SYNC` check runs
-  with `rollout_policy_versions=()`; the gate reaches a real PASS from the
-  push's own measured `is_stale`, scoped to what it actually examined.
-  Likewise `parity`/`declared_parity_atol` are always `None` from this call
+- Per-session policy versions come from the server ledger, i.e. from what
+  each push REPORTED transferring; nothing yet asks a live engine which
+  weights it holds. `client_factory` hosts still pass `()`.
+- `parity`/`declared_parity_atol` are always `None` from this call
   site until a GPU probe slice exists to measure engine/learner logprob
   agreement.
 - `trainer.{temperature,top_p,top_k,max_new_tokens,group_size}` remain
