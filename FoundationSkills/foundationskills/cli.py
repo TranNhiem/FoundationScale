@@ -215,6 +215,18 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_change_contract(args: argparse.Namespace) -> int:
+    """C2: a diff touching protected code must carry a Change-Contract block; exit 5 (RED) when it does not."""
+    from foundationskills.core.change_contract import check, needs_contract
+
+    message = Path(args.message_file).read_text(encoding="utf-8")
+    paths = [line.strip() for line in Path(args.paths_file).read_text(encoding="utf-8").splitlines() if line.strip()]
+    problems = check(message, paths)
+    print(json.dumps({"status": "RED" if problems else "PASS", "needs_contract": needs_contract(paths),
+                      "problems": problems}, indent=2))
+    return 5 if problems else 0
+
+
 def _cmd_skillmd(args: argparse.Namespace) -> int:
     """C1: generated SKILL.md usage blocks. check exits 5 (RED) on any missing/stale block; build rewrites one skill."""
     import inspect
@@ -765,6 +777,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("change-contract", help="C2: check a commit message carries a Change-Contract for protected paths")
+    cc_sub = p.add_subparsers(dest="cc_cmd", required=True)
+    q = cc_sub.add_parser("check")
+    q.add_argument("--message-file", dest="message_file", required=True, help="the commit message")
+    q.add_argument("--paths-file", dest="paths_file", required=True, help="changed paths, one per line (git diff --name-only)")
+    q.set_defaults(func=_cmd_change_contract)
 
     p = sub.add_parser("skillmd", help="generated SKILL.md usage blocks (C1): build one skill | check (5 on drift)")
     skillmd_sub = p.add_subparsers(dest="skillmd_cmd", required=True)

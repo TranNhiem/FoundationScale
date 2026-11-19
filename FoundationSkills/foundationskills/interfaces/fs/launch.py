@@ -63,6 +63,7 @@ def launch(
     manifest_problems = validate_manifest(spec["harness_manifest"])
     if manifest_problems:  # C2: a malformed model-harness identity is refused, never repaired
         raise LaunchRefused("launch refused: harness_manifest " + "; ".join(manifest_problems[:3]))
+    _write_manifest_sidecar(spec)
 
     if spec.get("executable") is not True:
         # A measurement-only run (e.g. FS RL, which trains but saves nothing) is
@@ -181,6 +182,24 @@ def fs_verdict(output: str) -> int | None:
     if "PASS" in upper:
         return 0
     return 5
+
+
+def _write_manifest_sidecar(spec: dict[str, Any]) -> None:
+    """C2: ``harness_manifest.json`` + its 16-hex hash beside the launch log, before anything runs (best effort)."""
+    import json as _json
+
+    from foundationskills.core.harness import manifest_hash
+
+    log = _launch_log_path(spec)
+    if log is None:
+        return
+    try:
+        (log.parent / "harness_manifest.json").write_text(
+            _json.dumps(spec["harness_manifest"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (log.parent / "harness_manifest.sha256").write_text(manifest_hash(spec["harness_manifest"]) + "\n",
+                                                           encoding="utf-8")
+    except OSError:
+        pass  # an unwritable run directory never blocks a confirmed launch (same rule as the launch log)
 
 
 def _launch_log_path(spec: dict[str, Any]) -> Path | None:
