@@ -56,6 +56,23 @@ what a retry re-runs: `"all"` (default) re-gathers every attempt, while
 `"engine_rows"` re-runs only the engine-failed rows and keeps the measured
 ones -- refused if the kept and re-run rows report different policy versions.
 
+**Judge rewards.** `reward.kind="judge"` scores the final answer with an
+OpenAI-compatible judge model against a declared rubric
+(`reward.judge_rubric_path`: weighted criteria, each scored in [0, 1]) --
+`rewards/judge.py`. The answer is fenced between per-call random delimiters
+and declared data; a deterministic injection floor scores an answer that
+addresses the grader as a measured `0.0` (`judge_injection_attempt`). Judge
+transport failures abstain as `infra:judge_<kind>`, malformed output as
+`judge_malformed`, and `reward.judge_votes > 1` takes the median and abstains
+(`judge_disagreement`) when the votes spread past `reward.judge_max_spread`.
+The run refuses to start unless `reward.judge_calibration_path` holds a
+calibration report for the same rubric with agreement against gold labels
+of at least `reward.judge_min_agreement` over `reward.judge_min_n` items
+(`calibrate`/`require_calibrated`), and, when `reward.judge_api_key_env` is
+declared, unless that variable is set; the key itself is read at call time
+and never stored or logged. `judge_base_url` is the server root (the client
+appends `/v1/chat/completions`).
+
 **Process shaping.** `policy.algorithm="agentic_process_grpo"` trains with
 per-turn penalties on tool-call parse errors and repetition, added to the
 advantage after the baseline (never to the reward); see

@@ -379,11 +379,34 @@ class RolloutConfig:
 
 
 @dataclass(frozen=True)
+class JudgeConfig:
+    """``reward.kind="judge"`` (ARL-G02): an OpenAI-compatible judge model scoring a
+    declared rubric. ``api_key_env`` NAMES an environment variable read at call time
+    -- the key itself never enters the config, its provenance or any log. The
+    run refuses to start unless ``calibration_path`` holds a calibration report
+    for this rubric with ``agreement >= min_agreement`` over ``>= min_n`` items.
+    """
+
+    base_url: str
+    model: str
+    rubric_path: str
+    calibration_path: str
+    api_key_env: str | None = None
+    min_agreement: float = 0.8
+    min_n: int = 30
+    votes: int = 1
+    max_spread: float = 0.34
+    timeout_s: float = 120.0
+
+
+@dataclass(frozen=True)
 class RewardConfig:
     # Required for kind="music" (the scorer converts ABC with it); unused (None) otherwise.
     abc2midi_bin: str | None
-    kind: Literal["music", "math", "swe"] = "music"
+    kind: Literal["music", "math", "swe", "judge"] = "music"
     timeout_s: float = 60.0
+    # Required for kind="judge"; None otherwise.
+    judge: JudgeConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1148,7 +1171,7 @@ def _build_reward(
 ) -> RewardConfig:
     section = _strip_doc(raw, dotted_prefix="reward")
     local_overrides = _section_overrides(overrides, section="reward")
-    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s"})
+    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", *_JUDGE_KEYS})
     _refuse_unknown_keys(section, allowed, section="reward")
     kind = _resolve_scalar(
         dotted_key="reward.kind",
@@ -1160,10 +1183,10 @@ def _build_reward(
         required=False,
         provenance=provenance,
     )
-    if kind not in ("music", "math", "swe"):
+    if kind not in ("music", "math", "swe", "judge"):
         raise AgenticConfigRefusal(
-            f"reward.kind: is {_described(kind)}, but this plane builds only 'music', 'math' "
-            f"and 'swe'"
+            f"reward.kind: is {_described(kind)}, but this plane builds only 'music', 'math', "
+            f"'swe' and 'judge'"
         )
     abc2midi_bin = _resolve_scalar(
         dotted_key="reward.abc2midi_bin",
@@ -1190,7 +1213,76 @@ def _build_reward(
         required=False,
         provenance=provenance,
     )
-    return RewardConfig(kind=kind, abc2midi_bin=abc2midi_bin, timeout_s=timeout_s)
+    judge = _build_judge(section, local_overrides, provenance, kind=kind)
+    return RewardConfig(kind=kind, abc2midi_bin=abc2midi_bin, timeout_s=timeout_s, judge=judge)
+
+
+# reward.judge_* keys -> (JudgeConfig field, type, default, required when kind == "judge")
+_JUDGE_FIELDS: dict[str, tuple[str, Any, Any, bool]] = {
+    "judge_base_url": ("base_url", str, None, True),
+    "judge_model": ("model", str, None, True),
+    "judge_rubric_path": ("rubric_path", str, None, True),
+    "judge_calibration_path": ("calibration_path", str, None, True),
+    "judge_api_key_env": ("api_key_env", str | None, None, False),
+    "judge_min_agreement": ("min_agreement", float, 0.8, False),
+    "judge_min_n": ("min_n", int, 30, False),
+    "judge_votes": ("votes", int, 1, False),
+    "judge_max_spread": ("max_spread", float, 0.34, False),
+    "judge_timeout_s": ("timeout_s", float, 120.0, False),
+}
+_JUDGE_KEYS = frozenset(_JUDGE_FIELDS)
+
+
+def _build_judge(
+    section: Mapping[str, Any],
+    local_overrides: dict[str, str],
+    provenance: dict[str, Provenance],
+    *,
+    kind: str,
+) -> JudgeConfig | None:
+    """Resolve the ``reward.judge_*`` keys: all required when ``kind == "judge"``,
+    and refused outright otherwise (a declared setting nothing reads)."""
+    if kind != "judge":
+        stray = sorted(
+            key for key in _JUDGE_KEYS if key in section or f"reward.{key}" in local_overrides
+        )
+        if stray:
+            raise AgenticConfigRefusal(
+                f"reward.{stray[0]}: is set, but reward.kind={kind!r} never uses it -- "
+                f"judge settings are read only by reward.kind='judge'"
+            )
+        return None
+    values: dict[str, Any] = {}
+    for key, (field_name, py_type, default, required) in _JUDGE_FIELDS.items():
+        values[field_name] = _resolve_scalar(
+            dotted_key=f"reward.{key}",
+            field_name=key,
+            section_raw=section,
+            overrides=local_overrides,
+            py_type=py_type,
+            default=default,
+            required=required,
+            provenance=provenance,
+        )
+    for field_name in ("base_url", "model", "rubric_path", "calibration_path"):
+        if not values[field_name]:
+            raise AgenticConfigRefusal(f"reward.judge_{field_name}: must be a non-empty str")
+    if not 0.0 < values["min_agreement"] <= 1.0:
+        raise AgenticConfigRefusal(
+            f"reward.judge_min_agreement: is {values['min_agreement']!r}: it must lie in (0, 1]"
+        )
+    if values["min_n"] < 1 or values["votes"] < 1:
+        raise AgenticConfigRefusal(
+            f"reward.judge_min_n / reward.judge_votes: are {values['min_n']!r} / "
+            f"{values['votes']!r}: both must be >= 1"
+        )
+    if not 0.0 <= values["max_spread"] <= 1.0 or not values["timeout_s"] > 0.0:
+        raise AgenticConfigRefusal(
+            f"reward.judge_max_spread / reward.judge_timeout_s: are "
+            f"{values['max_spread']!r} / {values['timeout_s']!r}: the spread must lie in "
+            f"[0, 1] and the timeout must be > 0"
+        )
+    return JudgeConfig(**values)
 
 
 def _build_stability(

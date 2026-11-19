@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from collections.abc import Mapping, Sequence
@@ -56,6 +57,12 @@ from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
 from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn
+from foundationscale.agentic_rl.rewards.judge import (
+    JudgeRewardFn,
+    OpenAIJudgeClient,
+    Rubric,
+    require_calibrated,
+)
 from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
 from foundationscale.agentic_rl.rewards.swe import SweReward
@@ -240,8 +247,43 @@ def _music_reward(config: AgenticRLConfig) -> MusicReward:
     return MusicReward(abc2midi_bin=config.reward.abc2midi_bin, timeout_s=config.reward.timeout_s)
 
 
-def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward | SweReward:
+@dataclass(frozen=True)
+class _JudgeSetup:
+    """``reward.kind="judge"``: the rubric and client, built only after the calibration
+    gate passed (``require_calibrated``) and the key variable (if declared) exists."""
+
+    rubric: Rubric
+    client: OpenAIJudgeClient
+
+
+def _judge_setup(config: AgenticRLConfig) -> _JudgeSetup:
+    judge = config.reward.judge
+    assert judge is not None  # config: required whenever reward.kind == "judge"
+    if judge.api_key_env is not None and not os.environ.get(judge.api_key_env):
+        # Names the VARIABLE only; its value is never read into a message.
+        raise AgenticConfigRefusal(
+            f"reward.judge_api_key_env: environment variable {judge.api_key_env!r} is unset or "
+            f"empty -- every judge call would abstain, so the run is refused up front"
+        )
+    rubric = Rubric.from_json(judge.rubric_path)
+    require_calibrated(
+        judge.calibration_path, rubric, min_agreement=judge.min_agreement, min_n=judge.min_n
+    )
+    client = OpenAIJudgeClient(
+        base_url=judge.base_url,
+        model=judge.model,
+        api_key_env=judge.api_key_env,
+        timeout_s=judge.timeout_s,
+    )
+    return _JudgeSetup(rubric=rubric, client=client)
+
+
+def _reward_scorer(
+    config: AgenticRLConfig,
+) -> MusicReward | MathAnswerReward | SweReward | _JudgeSetup:
     """The scorer ``reward.kind`` names (built without a GPU, so ``--dry-run`` checks it)."""
+    if config.reward.kind == "judge":
+        return _judge_setup(config)
     if config.reward.kind == "math":
         return MathAnswerReward()
     if config.reward.kind == "swe":
@@ -325,8 +367,18 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     scorer = _reward_scorer(config)
-    reward: MusicRewardFn | MathRewardFn | SweReward
-    if isinstance(scorer, SweReward):
+    reward: MusicRewardFn | MathRewardFn | SweReward | JudgeRewardFn
+    if isinstance(scorer, _JudgeSetup):
+        judge = config.reward.judge
+        assert judge is not None
+        reward = JudgeRewardFn(
+            client=scorer.client,
+            rubric=scorer.rubric,
+            decode=chat_tokenizer.decode,
+            votes=judge.votes,
+            max_spread=judge.max_spread,
+        )
+    elif isinstance(scorer, SweReward):
         reward = scorer  # reads the verify() report in outcome.metadata; needs no decoding
     elif isinstance(scorer, MathAnswerReward):
         reward = MathRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
