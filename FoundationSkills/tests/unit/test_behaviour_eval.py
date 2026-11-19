@@ -23,6 +23,7 @@ from foundationskills.agent.behaviour_eval import (
     AGENT_SYSTEM,
     ARMS,
     BehaviourEvalRefused,
+    _check_self_grading,
     render_behaviour_md,
     run_behaviour_eval,
     write_behaviour,
@@ -37,7 +38,7 @@ HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 class FakeAgent:
-    """Deterministic agent with kind="fake-agent", model="fake-agent-1"; records every call."""
+    """Deterministic agent with kind="fake-agent", model="agentfam-1"; records every call."""
 
     def __init__(
         self,
@@ -46,7 +47,7 @@ class FakeAgent:
         stamp: Callable[[str], str] | None = None,
         fail_when: Callable[[dict], str | None] | None = None,
         finish_reason: str = "stop",
-        model: str = "fake-agent-1",
+        model: str = "agentfam-1",
     ) -> None:
         self.kind = "fake-agent"
         self.model = model
@@ -85,14 +86,14 @@ class FakeAgent:
 
 
 class FakeJudge:
-    """Deterministic judge with kind="fake-judge", model="fake-judge-1"; scripted payloads."""
+    """Deterministic judge with kind="fake-judge", model="judgefam-1"; scripted payloads."""
 
     def __init__(
         self,
         payload: Callable[[str, str], object] | None = None,
         *,
         fail_when: Callable[[dict], str | None] | None = None,
-        model: str = "fake-judge-1",
+        model: str = "judgefam-1",
     ) -> None:
         self.kind = "fake-judge"
         self.model = model
@@ -269,7 +270,7 @@ def test_scoring_and_uplift_arithmetic(index: list[dict]) -> None:
     )
     assert report["schema"] == "fskills.behaviour_eval/1"
     assert report["created"] == CREATED and report["gated_arm"] == "with_skill"
-    assert report["agent_model"] == "fake-agent-1" and report["judge_model"] == "fake-judge-1"
+    assert report["agent_model"] == "agentfam-1" and report["judge_model"] == "judgefam-1"
     assert report["backend_kind"] == {"agent": "fake-agent", "judge": "fake-judge"}
     loaded, blind = report["results"]["with_skill"], report["results"]["without_skill"]
     assert (loaded["calls"], loaded["measured"], loaded["unmeasured"]) == (4, 4, 0)
@@ -398,7 +399,7 @@ def test_render_behaviour_md_header_line(index: list[dict], tmp_path: Path) -> N
                  f"{entry['skill_md_sha256'][:12]} and eval cases {entry['evals_sha256'][:12]}; do not edit by hand.")
     assert md.startswith(f"# Behaviour evaluation: {entry['name']}\n")
     assert generated in md
-    assert "- Agent model: fake-agent-1" in md and "- Judge model: fake-judge-1" in md
+    assert "- Agent model: agentfam-1" in md and "- Judge model: judgefam-1" in md
     assert "| arm | item pass | case pass | measured |" in md
     assert "process-only items ungraded" in md
     assert "be-1" in md and f"{entry['name']}" in md
@@ -691,3 +692,12 @@ def test_resume_refuses_a_report_from_another_run(index: list[dict]) -> None:
     with pytest.raises(BehaviourEvalRefused):
         run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=2, workers=1,
                            created=CREATED, resume=first)
+
+
+def test_same_family_judging_is_refused_and_family_parsing() -> None:
+    from foundationskills.agent.behaviour_eval import model_family
+
+    assert model_family("mimo-v2.6-flash") == model_family("mimo-v2.6-pro") == "mimo"
+    assert model_family("glm-5.3-flash") == "glm" and model_family("org/Qwen3.5-4B") == "qwen"
+    with pytest.raises(BehaviourEvalRefused, match="same-family"):
+        _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))

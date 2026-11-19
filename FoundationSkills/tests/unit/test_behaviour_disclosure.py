@@ -21,7 +21,7 @@ CREATED = "2026-10-16T00:00:00Z"
 class ScriptedAgent:
     """Replies from a script keyed by how many turns this conversation has had."""
 
-    kind, model = "fake-agent", "fake-agent-1"
+    kind, model = "fake-agent", "agentfam-1"
 
     def __init__(self, script):
         self.script = script
@@ -33,7 +33,7 @@ class ScriptedAgent:
 
 
 class AllMetJudge:
-    kind, model = "fake-judge", "fake-judge-1"
+    kind, model = "fake-judge", "judgefam-1"
 
     def complete(self, messages, *, temperature=0.0, max_tokens=1024, seed=0, json_mode=False):  # noqa: ARG002
         user = messages[-1]["content"]

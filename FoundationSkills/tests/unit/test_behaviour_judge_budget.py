@@ -11,7 +11,7 @@ from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 
 class Agent:
-    kind, model = "fake-agent", "fake-agent-1"
+    kind, model = "fake-agent", "agentfam-1"
 
     def complete(self, messages, *, temperature=0.0, max_tokens=1024, seed=0, json_mode=False):  # noqa: ARG002
         return LLMResponse("a concrete plan", "stop", 0, 7, False, None)
@@ -20,7 +20,7 @@ class Agent:
 class Judge:
     """Empty (truncated or not) until the budget reaches `answers_at`; records each budget."""
 
-    kind, model = "fake-judge", "fake-judge-1"
+    kind, model = "fake-judge", "judgefam-1"
 
     def __init__(self, answers_at: int, truncated: bool = True) -> None:
         self.answers_at, self.truncated, self.budgets = answers_at, truncated, []

@@ -397,6 +397,17 @@ def _check_self_grading(agent: LLMBackend, judge: LLMBackend) -> None:
     if str(agent.model) == str(judge.model):
         raise BehaviourEvalRefused(
             f"run_behaviour_eval: self-grading refused: agent and judge both run model {agent.model}")
+    if model_family(agent.model) == model_family(judge.model):  # C3, atlas C9 §4: no same-family judging
+        raise BehaviourEvalRefused(
+            f"run_behaviour_eval: same-family judging refused: agent {agent.model} and judge {judge.model} are both "
+            f"the {model_family(agent.model)!r} family; use a judge from another family")
+
+
+def model_family(model: Any) -> str:
+    """The model family: the id's leading alphabetic token, lower-cased ("mimo-v2.6-pro" -> "mimo")."""
+    head = str(model).strip().split("/")[-1]
+    token = re.match(r"[A-Za-z]+", head)
+    return token.group(0).lower() if token else head.lower()
 
 
 def _select_packages(index: list[dict], packages: Iterable[str] | None) -> list[dict]:
