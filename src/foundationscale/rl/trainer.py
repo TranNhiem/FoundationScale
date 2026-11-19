@@ -2512,6 +2512,7 @@ class RLTrainer:
         group_ids: list[str],
         null_rank: bool,
         rows: list[tuple[int, float]] | None = None,
+        shaping_plane: torch.Tensor | None = None,
     ) -> StepReport | None:
         """Price the kept planes: logprobs, advantage, loss, backward, report.
 
@@ -2821,6 +2822,12 @@ class RLTrainer:
                 dtype=torch.float32,
                 device=device,
             ).detach()
+            if shaping_plane is not None:
+                # ARL-G01 process shaping (objective.process_shaping): added AFTER the
+                # baseline, on supervised positions only -- the reward and the
+                # estimator never see it. Built by _shaping_plane_from_batch on the
+                # SAME shifted alignment as response_mask, so rows index identically.
+                advantage_tensor = advantage_tensor + (shaping_plane[keep] * response_mask[keep])
 
         # A SATURATED step is unmeasured, not a step. When every completion in
         # a group earns the same reward -- all correct or all wrong -- the
@@ -3212,6 +3219,9 @@ class RLTrainer:
         kept_sequences, response_mask, attention, rewards, group_ids, _kept_row_indices = (
             self._planes_from_batch(batch, device=device, pad_token_id=pad_token_id)
         )
+        shaping_plane = self._shaping_plane_from_batch(
+            batch, objective, kept_row_indices=_kept_row_indices, response_mask=response_mask
+        )
         n_rows = int(kept_sequences.shape[0])
         null_rank = False
         every_rank_empty = agree_all(n_rows == 0, ctx)
@@ -3261,7 +3271,58 @@ class RLTrainer:
             group_ids=group_ids,
             null_rank=null_rank,
             rows=None,
+            shaping_plane=None if null_rank else shaping_plane,
         )
+
+    def _shaping_plane_from_batch(
+        self,
+        batch: ExperienceBatch,
+        objective: Any,
+        *,
+        kept_row_indices: list[int],
+        response_mask: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """The per-token process-shaping plane for the kept rows, or ``None`` when the
+        objective declares no ``process_shaping`` (ARL-G01).
+
+        WHAT IS CLAIMED: entry ``[i, t]`` is the shaping of the response token at
+        position ``t + 1 - len(prompt_i)`` of kept row ``i`` -- exactly the mapping
+        ``_planes_from_batch`` uses for ``response_mask`` -- and 0.0 outside the
+        response. The per-token values come from ``ProcessShaping.token_shaping``,
+        which refuses a mask entry that is not the int 0 or 1 and unequal column
+        lengths; a column whose length disagrees with ``response_ids`` is refused
+        here, naming both counts.
+        """
+        shaping = getattr(objective, "process_shaping", None)
+        if shaping is None:
+            return None
+        import torch
+
+        prompt_col = batch.column("prompt_token_ids")
+        response_col = batch.column("response_ids")
+        error_col = batch.column(shaping.error_column)
+        repetition_col = batch.column(shaping.repetition_column)
+        plane = torch.zeros_like(response_mask)
+        width = int(response_mask.shape[1]) if response_mask.dim() == 2 else 0
+        for i, row in enumerate(kept_row_indices):
+            values = shaping.token_shaping(tuple(error_col[row]), tuple(repetition_col[row]))
+            response_len = len(response_col[row])
+            if len(values) != response_len:
+                raise TrainerRefusal(
+                    f"_shaping_plane_from_batch: row {row}: process-shaping masks have "
+                    f"{len(values)} entries for a response of {response_len} token(s)"
+                )
+            prompt_len = len(prompt_col[row])
+            lo = max(prompt_len - 1, 0)
+            hi = min(prompt_len + response_len - 1, width)
+            if hi > lo:
+                resp_lo = lo + 1 - prompt_len
+                plane[i, lo:hi] = torch.tensor(
+                    values[resp_lo : resp_lo + (hi - lo)],
+                    dtype=plane.dtype,
+                    device=plane.device,
+                )
+        return plane
 
     def _sft_tail(
         self,

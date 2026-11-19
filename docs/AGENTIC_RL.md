@@ -56,6 +56,11 @@ what a retry re-runs: `"all"` (default) re-gathers every attempt, while
 `"engine_rows"` re-runs only the engine-failed rows and keeps the measured
 ones -- refused if the kept and re-run rows report different policy versions.
 
+**Process shaping.** `policy.algorithm="agentic_process_grpo"` trains with
+per-turn penalties on tool-call parse errors and repetition, added to the
+advantage after the baseline (never to the reward); see
+[RL_ALGORITHMS.md](RL_ALGORITHMS.md).
+
 **Per-session policy versions.** With a real `EngineFleet`, `RolloutHost`
 keeps a per-server version ledger: every server starts at
 `fleet_launch_version` (0, the `policy.model_path` weights `cli.py` launches),

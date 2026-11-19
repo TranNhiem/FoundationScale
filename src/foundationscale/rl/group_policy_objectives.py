@@ -1353,6 +1353,99 @@ def prompt_mean_row_weights(
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessShaping:
+    """Declared per-turn process shaping for :class:`AgenticGRPOLoss` (ARL-G01).
+
+    Per response token ``p`` of a priced row, AFTER the session-group baseline::
+
+        advantage[p] += -error_weight * tool_call_error_mask[p]
+                        - repetition_weight * repetition_mask[p]
+
+    Both masks are the rollout plane's own per-token facts
+    (``agentic_rl.contracts.DECLARED_COLUMNS``): 1 on every token of a generated
+    turn that carried an unparseable tool call / hit the repetition detector.
+    The shaping enters the ADVANTAGE only -- the reward column, the baseline and
+    every abstention rule are untouched -- and only on supervised positions
+    (the mask multiplies it like every other advantage entry).
+
+    WHAT IS CLAIMED: the weights are finite, non-negative, at least one is
+    positive (a shaping that shapes nothing is refused, not run as a no-op),
+    and neither exceeds ``max_weight`` -- a bound that keeps one turn's penalty
+    within the scale of a centred binary-reward advantage.
+
+    WHAT IS NOT CLAIMED: that these weights are tuned. The penalty form follows
+    turn-level format/redundancy credit in the process-reward literature
+    (e.g. RLEF arXiv:2410.02089, TrajDebug arXiv:2608.06346); the values are
+    declarations, not measurements.
+    """
+
+    error_weight: float
+    repetition_weight: float
+    error_column: str = "tool_call_error_mask"
+    repetition_column: str = "repetition_mask"
+    max_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("error_weight", self.error_weight),
+            ("repetition_weight", self.repetition_weight),
+            ("max_weight", self.max_weight),
+        ):
+            if (
+                type(value) is bool
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise LossConfigRefusal(
+                    f"ProcessShaping.{name}={value!r}: a shaping weight must be a finite "
+                    f"real number (a bool is not one)"
+                )
+        if not self.max_weight > 0.0:
+            raise LossConfigRefusal(
+                f"ProcessShaping.max_weight={self.max_weight!r}: the bound must be > 0"
+            )
+        for name, value in (
+            ("error_weight", self.error_weight),
+            ("repetition_weight", self.repetition_weight),
+        ):
+            if not 0.0 <= float(value) <= float(self.max_weight):
+                raise LossConfigRefusal(
+                    f"ProcessShaping.{name}={value!r}: it must lie in "
+                    f"[0.0, max_weight={self.max_weight!r}]"
+                )
+        if float(self.error_weight) == 0.0 and float(self.repetition_weight) == 0.0:
+            raise LossConfigRefusal(
+                "ProcessShaping: error_weight and repetition_weight are both 0.0 -- a "
+                "shaping that shapes nothing is refused; leave process_shaping=None instead"
+            )
+        _checked_name("error_column", self.error_column)
+        _checked_name("repetition_column", self.repetition_column)
+
+    @property
+    def columns(self) -> tuple[str, str]:
+        return (self.error_column, self.repetition_column)
+
+    def token_shaping(self, error_row: Sequence[Any], repetition_row: Sequence[Any]) -> list[float]:
+        """The per-token additive shaping for one row; refuses unequal lengths or a
+        mask entry that is not exactly 0 or 1 (a bool or a 2 is not a mask bit)."""
+        if len(error_row) != len(repetition_row):
+            raise BatchRefusal(
+                f"ProcessShaping: {self.error_column} has {len(error_row)} entries but "
+                f"{self.repetition_column} has {len(repetition_row)}; one per response token"
+            )
+        out: list[float] = []
+        for position, (err, rep) in enumerate(zip(error_row, repetition_row, strict=True)):
+            for column, bit in ((self.error_column, err), (self.repetition_column, rep)):
+                if type(bit) is not int or bit not in (0, 1):
+                    raise BatchRefusal(
+                        f"ProcessShaping: {column}[{position}]={bit!r}: a mask entry must "
+                        f"be the int 0 or 1"
+                    )
+            out.append(-float(self.error_weight) * err - float(self.repetition_weight) * rep)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
 class AgenticGRPOLoss:
     """Agentic GRPO: token ratio, centred session baseline, prompt-mean reduction.
 
@@ -1422,6 +1515,9 @@ class AgenticGRPOLoss:
     # every other choice of this objective and swaps only the denominator, so
     # an A/B against ``prompt_mean`` measures the reduction and nothing else.
     reduction_mode: Literal["prompt_mean", "token_mean"] = "prompt_mean"
+    # ARL-G01: optional declared per-turn process shaping added to the advantage
+    # after the baseline (see ProcessShaping). None is today's objective exactly.
+    process_shaping: ProcessShaping | None = None
 
     def __post_init__(self) -> None:
         _validate_common(
@@ -1433,6 +1529,12 @@ class AgenticGRPOLoss:
             reference_logprob_column=None,
             origin="agentic_grpo",
         )
+        if self.process_shaping is not None and not isinstance(
+            self.process_shaping, ProcessShaping
+        ):
+            raise LossConfigRefusal(
+                f"process_shaping={self.process_shaping!r}: it must be None or a ProcessShaping"
+            )
         # Read through ``object``: the Literal annotation is a promise to the
         # type checker, not to a caller building this from a config file.
         mode: object = self.reduction_mode
@@ -1488,13 +1590,17 @@ class AgenticGRPOLoss:
     @property
     def required_columns(self) -> tuple[str, ...]:
         # GRPO's schema minus the reference column -- the objective is
-        # structurally reference-free.
-        return (
+        # structurally reference-free. Process shaping additionally reads its
+        # two declared per-token mask columns.
+        base = (
             self.prompt_id_column,
             self.reward_column,
             self.mask_column,
             self.old_logprob_column,
         )
+        if self.process_shaping is None:
+            return base
+        return base + self.process_shaping.columns
 
     def declaration(self) -> LossDeclaration:
         # One unconditional component whose weight is validated strictly
@@ -1546,10 +1652,35 @@ class AgenticGRPOLoss:
             # positions, so every priced row adds at least 1 to the total.
             total = sum(supervised_tokens)
             row_weights = tuple(1.0 / total for _ in supervised_tokens)
+        shaping_rows: list[list[float]] | None = None
+        if self.process_shaping is not None:
+            shaping = self.process_shaping
+            error_outer = _outer_sequence(
+                batch.column(shaping.error_column),
+                field_name=shaping.error_column,
+                refusal=BatchRefusal,
+            )
+            repetition_outer = _outer_sequence(
+                batch.column(shaping.repetition_column),
+                field_name=shaping.repetition_column,
+                refusal=BatchRefusal,
+            )
+            shaping_rows = []
+            for index, batch_row in enumerate(prices.batch_rows):
+                row = shaping.token_shaping(error_outer[batch_row], repetition_outer[batch_row])
+                if len(row) != len(prices.mask_rows[index]):
+                    raise BatchRefusal(
+                        f"agentic_grpo: row {batch_row}: process-shaping masks have "
+                        f"{len(row)} entries but {self.mask_column} has "
+                        f"{len(prices.mask_rows[index])}; one per response token"
+                    )
+                shaping_rows.append(row)
         surrogate_total = 0.0
         for index, batch_row in enumerate(prices.batch_rows):
             mask = prices.mask_rows[index]
             weights = prices.weight_rows[index]
+            if shaping_rows is not None:
+                weights = tuple(w + s for w, s in zip(weights, shaping_rows[index], strict=True))
             current = prices.current_rows[index]
             old = prices.old_rows[index]
             row_total = 0.0

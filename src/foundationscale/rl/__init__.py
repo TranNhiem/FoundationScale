@@ -186,6 +186,7 @@ from foundationscale.rl.group_policy import (
     SequencePolicyAlgorithm,
     agentic_grpo_algorithm,
     agentic_grpo_token_mean_algorithm,
+    agentic_process_grpo_algorithm,
     check_group_policy_requirements,
     dapo_algorithm,
     dr_grpo_algorithm,
@@ -196,6 +197,7 @@ from foundationscale.rl.group_policy_objectives import (
     DAPOLoss,
     DrGRPOLoss,
     GSPOLoss,
+    ProcessShaping,
     prompt_mean_row_weights,
 )
 from foundationscale.rl.grpo import (
@@ -322,6 +324,7 @@ __all__ = (
     "AdvantageRefusal",
     "AdvantageResult",
     "AgenticGRPOLoss",
+    "ProcessShaping",
     "Algorithm",
     "AlgorithmRegistryRefusal",
     "AlgorithmRequirements",
@@ -401,6 +404,7 @@ __all__ = (
     "WeightSync",
     "agentic_grpo_algorithm",
     "agentic_grpo_token_mean_algorithm",
+    "agentic_process_grpo_algorithm",
     "available_algorithm_names",
     "best_of_n_algorithm",
     "build_objective_gate_context",

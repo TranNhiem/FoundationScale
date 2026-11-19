@@ -70,6 +70,7 @@ from foundationscale.rl.group_policy_objectives import (
     DAPOLoss,
     DrGRPOLoss,
     GSPOLoss,
+    ProcessShaping,
 )
 from foundationscale.rl.interfaces import (
     BatchRefusal,
@@ -761,3 +762,38 @@ def agentic_grpo_token_mean_algorithm() -> SequencePolicyAlgorithm:
         reduction_mode="token_mean",
     )
     return SequencePolicyAlgorithm(name="agentic_grpo_token_mean", objective=objective)
+
+
+# ARL-G01 declared shaping weights for ``agentic_process_grpo`` (declarations, not
+# measurements): one turn's penalty stays small next to a centred binary-reward
+# advantage (|A| <= 1), so the terminal outcome still dominates the update.
+PROCESS_ERROR_WEIGHT = 0.1
+PROCESS_REPETITION_WEIGHT = 0.1
+
+
+def agentic_process_grpo_algorithm() -> SequencePolicyAlgorithm:
+    """Construct ``agentic_process_grpo``: :func:`agentic_grpo_algorithm` plus
+    declared per-turn process shaping (ARL-G01).
+
+    WHAT IS CLAIMED: identical to ``agentic_grpo`` -- estimator, shrink policy,
+    ``min_valid=2``, (0.8, 1.2) clip, ``prompt_mean`` -- except that every token of
+    a generated turn with an unparseable tool call has ``PROCESS_ERROR_WEIGHT``
+    subtracted from its advantage, and every token of a turn that hit the
+    repetition detector ``PROCESS_REPETITION_WEIGHT``, AFTER the session baseline
+    (:class:`ProcessShaping`). Rewards and abstentions are untouched.
+
+    WHAT IS NOT CLAIMED: that the weights are tuned, or that shaping improves any
+    benchmark -- that is the GB200 A/B against ``agentic_grpo``'s job.
+    """
+    objective = AgenticGRPOLoss(
+        advantage_fn=SessionGroupAdvantage(
+            normalise_by_std=False,
+            partial_group_policy="shrink",
+            min_valid=2,
+        ),
+        process_shaping=ProcessShaping(
+            error_weight=PROCESS_ERROR_WEIGHT,
+            repetition_weight=PROCESS_REPETITION_WEIGHT,
+        ),
+    )
+    return SequencePolicyAlgorithm(name="agentic_process_grpo", objective=objective)

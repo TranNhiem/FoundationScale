@@ -103,13 +103,13 @@ def test_registry_round_trip_returns_fresh_binding_for_all_three() -> None:
     """Every family name resolves to a fresh, structurally valid algorithm.
 
     WHAT IS CLAIMED: sorted names are exactly grpo and ppo plus the three
-    policy-gradient family entries, the four sequence-level entries (agentic_grpo
+    policy-gradient family entries, the five sequence-level entries (agentic_grpo
     among them), the six
     preference bindings and the four online bindings; two lookups per name are
     distinct objects, and each abstains (``None``) on wiring before setup.
 
     WHAT IS NOT CLAIMED: that any module-import side effect installs the
-    family; the reset itself reinstalls all twenty, which is the property
+    family; the reset itself reinstalls all twenty-one, which is the property
     under test -- a family that registered on its own import would survive
     a reset only if something re-imported it.
     """
@@ -117,6 +117,7 @@ def test_registry_round_trip_returns_fresh_binding_for_all_three() -> None:
     assert available_algorithm_names() == (
         "agentic_grpo",
         "agentic_grpo_token_mean",
+        "agentic_process_grpo",
         "best_of_n",
         "cpo",
         "dapo",
@@ -168,7 +169,7 @@ def test_registry_refuses_duplicate_family_name_with_denominators() -> None:
     message = str(exc_info.value)
     assert "field name='rloo'" in message
     assert "1 of 1 new registrations" in message
-    assert "1 of 20 registered names" in message
+    assert "1 of 21 registered names" in message
     reset_algorithm_registry()
 
 
