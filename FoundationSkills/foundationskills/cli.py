@@ -215,6 +215,35 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_skillmd(args: argparse.Namespace) -> int:
+    """C1: generated SKILL.md usage blocks. check exits 5 (RED) on any missing/stale block; build rewrites one skill."""
+    import inspect
+
+    from foundationskills.agent import skillmd
+    from foundationskills.core.registry import REGISTRY
+
+    _ensure_skills()
+    parser = build_parser()
+    names = [args.skill] if args.skill else sorted(REGISTRY.names())
+    problems: dict[str, list[str]] = {}
+    for name in names:
+        skill = get_skill(name)
+        path = Path(inspect.getfile(type(skill))).with_name("SKILL.md")
+        if not path.is_file() or skillmd.cli_path(skill) is None:
+            continue  # no SKILL.md, or no CLI surface to document
+        text = path.read_text(encoding="utf-8")
+        if args.skillmd_cmd == "build":
+            block = skillmd.render_block(skillmd.usage_model(skill, parser))
+            path.write_text(skillmd.replace_block(text, block), encoding="utf-8")
+            print(f"{name}: wrote generated usage block ({skillmd.block_sha256(block)[:12]})")
+        elif found := skillmd.check(skill, parser, text):
+            problems[name] = found
+    if args.skillmd_cmd == "check":
+        print(json.dumps({"status": "RED" if problems else "PASS", "problems": problems}, indent=2, sort_keys=True))
+        return 5 if problems else 0
+    return 0
+
+
 def _cmd_compress(args: argparse.Namespace) -> int:
     """A4.8: preflight check, plan an RTN weight-only measurement (emits a launch spec; never launches), or verify it."""
     if args.compress_cmd == "check":
@@ -736,6 +765,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("skillmd", help="generated SKILL.md usage blocks (C1): build one skill | check (5 on drift)")
+    skillmd_sub = p.add_subparsers(dest="skillmd_cmd", required=True)
+    for verb in ("build", "check"):
+        q = skillmd_sub.add_parser(verb)
+        q.add_argument("--skill", required=(verb == "build"), default=None,
+                       help="registered skill name (build: required, never rewrites every skill at once)")
+        q.set_defaults(func=_cmd_skillmd)
 
     p = sub.add_parser("compress", help="compression (A4.8 v1, RTN weight-only): check | plan -> fskills launch --confirm -> verify")
     compress_sub = p.add_subparsers(dest="compress_cmd", required=True)
