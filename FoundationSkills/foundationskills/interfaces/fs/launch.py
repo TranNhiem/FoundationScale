@@ -53,6 +53,16 @@ def launch(
     if spec.get("cwd"):
         run_kwargs["cwd"] = str(spec["cwd"])
     require_confirmation(spec, confirm)
+    from foundationskills.core.harness import validate_manifest
+    from foundationskills.core.harness_collect import attach
+    from foundationskills.core.provenance import make_provenance
+
+    if "harness_manifest" not in spec:  # an in-memory spec that never passed write_artifact: record the pair now,
+        spec = attach(spec, make_provenance("fskills-launch", "1"))  # honestly marked as not covered by the hash
+        spec["harness_manifest_hash_covered"] = False
+    manifest_problems = validate_manifest(spec["harness_manifest"])
+    if manifest_problems:  # C2: a malformed model-harness identity is refused, never repaired
+        raise LaunchRefused("launch refused: harness_manifest " + "; ".join(manifest_problems[:3]))
 
     if spec.get("executable") is not True:
         # A measurement-only run (e.g. FS RL, which trains but saves nothing) is

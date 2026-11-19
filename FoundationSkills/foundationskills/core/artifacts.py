@@ -2,6 +2,8 @@
 """Typed artifacts, references, and atomic on-disk JSON persistence."""
 from __future__ import annotations
 
+import dataclasses
+
 import json
 import os
 import tempfile
@@ -159,6 +161,10 @@ def write_artifact(artifact: Artifact, directory: str | Path) -> ArtifactRef:
     for label, value in (("type", artifact.type), ("id", artifact.id)):
         if not _SAFE_PART.match(str(value)):  # both name the file: no separators, no traversal
             raise ValueError(f"artifact {label} {value!r} must match [A-Za-z0-9._-]+ and not start with '.'")
+    if artifact.type == ArtifactType.FS_LAUNCH_SPEC.value:  # C2: every launch spec names its model-harness pair
+        from foundationskills.core.harness_collect import attach
+
+        artifact = dataclasses.replace(artifact, payload=attach(artifact.payload, artifact.provenance))
     errors = artifact.validate()
     if errors:
         raise SchemaError(f"artifact {artifact.type}/{artifact.id} invalid: " + "; ".join(errors))
