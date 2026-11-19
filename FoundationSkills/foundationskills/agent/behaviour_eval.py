@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from foundationskills.agent import oracle_cases
+from foundationskills.agent.deterministic_scoring import det_scores, reconcile
 from foundationskills.agent.routing_eval import (
     EXIT_PASS,
     EXIT_RED,
@@ -317,6 +318,8 @@ def run_behaviour_eval(
         return row
 
     calls = list(map_ordered(run_one, jobs, int(workers)))
+    calibration = judge_calibration(calls)
+    _gate_judge_only(calls, calibration)
     results = {arm: _score_arm(calls, arm, names) for arm in arm_list}
     verdict, exit_code, reasons = _verdict(results, names, float(threshold))
     return {
@@ -338,6 +341,7 @@ def run_behaviour_eval(
         "results": results,
         "uplift": _uplift(results, names),
         "calls": calls,
+        "judge_calibration": calibration,
         "reused_calls": sum(1 for call in calls if call.get("reused")),
         "verdict": verdict,
         "exit_code": exit_code,
@@ -532,10 +536,43 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
     if met is None:
         row["error"] = error
         return row
+    det = det_scores(texts, answer, case)
+    reconciled = [reconcile(d, j) for d, j in zip(det, met)]
     row["measured"] = True
-    row["met"] = met
-    row["items_met"] = sum(1 for value in met if value)
+    row["judge_met"] = met  # the judge's raw marks, kept for audit and calibration
+    row["det"] = det  # C3 Tier A: True/False where decidable from the answer, None where only a judge can tell
+    row["unmeasured_items"] = sum(1 for value in reconciled if value is None)  # judge contradicted a decidable check
+    row["met"] = [value is True for value in reconciled]  # an unmeasured item never counts as met
+    row["items_met"] = sum(row["met"])
     return row
+
+
+CALIBRATION_MIN_ITEMS = 50  # operator decision 2026-11-19 (atlas C9 §3 floor)
+CALIBRATION_MIN_AGREEMENT = 0.80
+
+
+def judge_calibration(calls: list[dict]) -> dict:
+    """C3.2 auto-calibration: judge agreement with the decidable Tier A items of this run (operator decision)."""
+    pairs = [(d, j) for call in calls if call.get("measured")
+             for d, j in zip(call.get("det") or [], call.get("judge_met") or []) if d is not None]
+    agree = sum(1 for d, j in pairs if d == j)
+    rate = agree / len(pairs) if pairs else None
+    return {"source": "tier_a_decidable_items", "items": len(pairs), "agreement": rate,
+            "min_items": CALIBRATION_MIN_ITEMS, "min_agreement": CALIBRATION_MIN_AGREEMENT,  # read at call time
+            "calibrated": bool(len(pairs) >= CALIBRATION_MIN_ITEMS
+                               and (rate is None or rate >= CALIBRATION_MIN_AGREEMENT))}
+
+
+def _gate_judge_only(calls: list[dict], calibration: dict) -> None:
+    """A case with no decidable item counts only under a calibrated judge; otherwise its call is UNMEASURED."""
+    if calibration["calibrated"]:
+        return
+    for call in calls:
+        det = call.get("det")
+        if call.get("measured") and det is not None and det and all(value is None for value in det):
+            call["measured"] = False
+            call["error"] = (f"judge-only case and the judge is not calibrated "
+                             f"({calibration['items']} decidable items, agreement {calibration['agreement']})")
 
 
 def _parse_judgement(response: LLMResponse, graded: int) -> tuple[list[bool] | None, str | None]:

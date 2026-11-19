@@ -34,6 +34,8 @@ from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 CREATED = "2026-10-02T00:00:00Z"
 ANSWER = "Plan: build the loader, write the artefact, validate the schema, refuse a missing column."
+# C3: an oracle answer that actually states what the decidable items require (rule id + status)
+ORACLE_ANSWER = ANSWER + " This is REFUSED (exit 96) under rule DAT-COL; drift is a warning under DAT-DRIFT."
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -578,7 +580,7 @@ def test_oracle_case_source_grades_every_behaviour_json_case(
 ) -> None:
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
     entry = plain_entry(index)
-    agent, judge = FakeAgent(), FakeJudge()
+    agent, judge = FakeAgent(answer=ORACLE_ANSWER), FakeJudge()
     report = run_behaviour_eval(
         [entry], agent, judge, cases="oracle", arms=("with_skill",), reps=1, workers=1, created=CREATED,
     )
@@ -600,7 +602,7 @@ def test_oracle_report_renders_behaviour_oracle_md_with_a_per_severity_table(
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
     entry = plain_entry(index)
     report = run_behaviour_eval(
-        [entry], FakeAgent(), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
+        [entry], FakeAgent(answer=ORACLE_ANSWER), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
         threshold=0.7, created=CREATED,
     )
     md = render_behaviour_md(report, str(entry["name"]))
@@ -701,3 +703,12 @@ def test_same_family_judging_is_refused_and_family_parsing() -> None:
     assert model_family("glm-5.3-flash") == "glm" and model_family("org/Qwen3.5-4B") == "qwen"
     with pytest.raises(BehaviourEvalRefused, match="same-family"):
         _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))
+
+
+@pytest.fixture(autouse=True)
+def _legacy_calibration_floor(monkeypatch):
+    """These tests predate C3 calibration; their fake runs have few decidable items. The real floor is tested in
+    test_behaviour_calibration.py."""
+    from foundationskills.agent import behaviour_eval as _be
+
+    monkeypatch.setattr(_be, "CALIBRATION_MIN_ITEMS", 0)

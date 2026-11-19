@@ -95,3 +95,15 @@ def test_an_agent_reply_truncated_empty_is_reasked_once_with_a_larger_budget() -
     assert _escalated_budget(empty, 16384, _AGENT_BUDGET_CAP) == 32768
     assert _escalated_budget(empty, 32768, _AGENT_BUDGET_CAP) is None  # already at the cap: stays unmeasured
     assert _escalated_budget(LLMResponse("ok", "stop", 10, 0, False, None), 16384, _AGENT_BUDGET_CAP) is None
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _legacy_calibration_floor(monkeypatch):  # noqa: D401
+    """These tests predate C3 calibration; their fake runs have few decidable items. The real floor is tested in
+    test_behaviour_calibration.py."""
+    from foundationskills.agent import behaviour_eval as _be
+
+    monkeypatch.setattr(_be, "CALIBRATION_MIN_ITEMS", 0)
