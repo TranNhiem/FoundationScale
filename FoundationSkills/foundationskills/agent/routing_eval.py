@@ -64,6 +64,10 @@ from foundationskills.skills.data_engine.llm_backend import (
 )
 
 ARMS: tuple[str, ...] = ("full", "description", "names_only")
+# C5.3: opt-in arm, never part of the default benchmark: stage-1 front gate (agent/route_front_gate.py) narrows the
+# index to its top candidates, then the model confirms one or abstains, over the "full" rendering of those candidates.
+EXTRA_ARMS: tuple[str, ...] = ("two_stage",)
+TWO_STAGE_K = 8  # measured 2026-11-20: top-8 candidate recall 0.971 on the 352 routing cases
 GATED_ARM = "full"
 SCHEMA = "fskills.routing_eval/1"
 
@@ -240,6 +244,14 @@ def build_messages(index: list[dict], arm: str, question: str) -> list[dict]:
     # on every request, even marked and with a slash-only description, /fs-launch and /fs-status drew 19 false
     # routes and pulled three model skills under the 90% gate.
     offered = [entry for entry in index if entry.get("invocation") != "user" or f"/{entry['name']}" in str(question)]
+    if arm == "two_stage":
+        from foundationskills.agent.route_front_gate import front_gate
+        from foundationskills.agent.trigger_registry import compile_registry
+
+        gate = front_gate(str(question), compile_registry(index), k=TWO_STAGE_K)
+        keep = {c["name"] for c in gate["candidates"]}
+        offered = [entry for entry in offered if entry["name"] in keep]
+        arm = "full"
     system = (
         "You route user requests to FoundationSkills skill packages.\n\n"
         "Skill index:\n"
@@ -360,8 +372,8 @@ def _check_run_args(arms: tuple[str, ...], reps: int, workers: int, threshold: f
 
 
 def _require_arm(arm: str, where: str = "render_index") -> None:
-    if arm not in ARMS:
-        raise RoutingEvalRefused(f"{where}: unknown arm {arm!r}; expected one of {', '.join(ARMS)}")
+    if arm not in ARMS + EXTRA_ARMS:
+        raise RoutingEvalRefused(f"{where}: unknown arm {arm!r}; expected one of {', '.join(ARMS + EXTRA_ARMS)}")
 
 
 def _resolve_backend(backend: LLMBackend | Mapping[str, Any]) -> LLMBackend:

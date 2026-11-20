@@ -111,3 +111,14 @@ def test_real_index_has_keywords_and_compression_negative():
     routed = [n["route_to"] for s in registry["skills"] if "compression" in s["name"]
               for n in s["negatives"]]
     assert "fskills-deployment" in routed
+
+
+def test_two_stage_arm_offers_only_front_gate_candidates():
+    from foundationskills.agent import routing_eval as r
+
+    idx = r.load_index()
+    system = r.build_messages(idx, "two_stage", "Quantize gemma to int4 with RTN and check the perplexity ratio")[0]["content"]
+    assert "fskills-compression" in system
+    assert system.count("\n- ") <= r.TWO_STAGE_K
+    off = r.build_messages(idx, "two_stage", "Plan a hiking itinerary in the Alps")[0]["content"]
+    assert off.count("\n- ") <= r.TWO_STAGE_K
