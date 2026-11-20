@@ -351,6 +351,21 @@ PENDING_ENROLMENT: dict[str, str] = {
         "fully line-covered by tests/agentic_rl/test_envs_sandbox_task.py, but no mutation row "
         "yet proves a flipped parse or lifecycle rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/envs/diff_guard.py": (
+        "SWE test-harness tamper guard (host-side fingerprint of conftest/pytest.ini/*.pth): "
+        "fully line-covered by tests/agentic_rl/test_diff_guard.py, but no mutation row yet "
+        "proves a dropped guarded name or a followed symlink would be caught."
+    ),
+    "src/foundationscale/agentic_rl/eval_stats.py": (
+        "evaluation statistics (unbiased pass@k, paired task and seed+task bootstrap): "
+        "line-covered by tests/agentic_rl/test_eval_stats.py, but no mutation row yet proves a "
+        "flipped estimator or percentile index would be caught."
+    ),
+    "src/foundationscale/agentic_rl/rewards/judge.py": (
+        "LLM-judge rubric reward (nonce-fenced prompt, injection floor, vote median, calibration "
+        "gate): covered by tests/agentic_rl/test_judge_*.py, but no mutation row yet proves a "
+        "flipped abstention or calibration rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/rewards/swe.py": (
         "test-based SWE reward (fail_to_pass / pass_to_pass verdicts): fully line-covered by "
         "tests/agentic_rl/test_swe_reward.py, but no mutation row yet proves a flipped verdict "

@@ -108,3 +108,9 @@ def test_tamper_report_policy_keeps_scoring_unchanged() -> None:
 def test_unknown_tamper_policy_is_refused() -> None:
     with pytest.raises(ValueError, match="tamper"):
         SweReward(tamper="warn")
+
+
+def test_a_malformed_tamper_report_abstains_under_zero() -> None:
+    bad = _outcome(swe_guard="measured", swe_tampered="{not a list")
+    verdict = asyncio.run(SweReward(tamper="zero").score(_TASK, bad))
+    assert (verdict.value, verdict.reason) == (None, "tamper_guard_unmeasured")

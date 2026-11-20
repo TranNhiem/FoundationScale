@@ -134,3 +134,18 @@ def test_cli_builds_a_calibrated_judge_without_holding_the_key(
     assert isinstance(setup.client, OpenAIJudgeClient)
     assert [c.name for c in setup.rubric.criteria] == ["correct", "complete"]
     assert "s3cr3t-value" not in repr(vars(setup.client))
+
+
+def test_real_run_builds_the_judge_reward_with_the_declared_votes(tmp_path: Path) -> None:
+    from foundationscale.agentic_rl.rewards.judge import JudgeRewardFn
+
+    CalibrationReport(rubric_id="report_v1", n=50, agreement=0.9, threshold=0.5).to_json(
+        tmp_path / "calibration.json"
+    )
+    tasks = tmp_path / "tasks.jsonl"
+    tasks.write_text(json.dumps({"uid": "t1", "messages": [{"role": "user", "content": "x"}]}))
+    raw = _judge_raw(tmp_path, judge_votes=3, judge_max_spread=0.5)
+    raw["rollout"] = {**raw["rollout"], "tasks_path": str(tasks)}
+    reward = cli._build_real_run(build_config(raw, {})).reward
+    assert isinstance(reward, JudgeRewardFn)
+    assert (reward.votes, reward.max_spread) == (3, 0.5)

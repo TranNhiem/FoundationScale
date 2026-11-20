@@ -843,3 +843,19 @@ def test_default_factory_uses_the_broker_when_configured(
     backend = EnrootTaskBackend(roots=_ROOTS, environ=environ, vault_factory=_fake_vault_factory)
     backend.create_for_task(_spec(), _task(_META), instance_id="t#0")
     assert [type(r).__name__ for r in runners] == ["BrokerRunner"]
+
+
+class _UnreadableRootfsSandbox(FakeSandbox):
+    """A sandbox whose host-side rootfs cannot be read (DiffGuard must say unmeasured)."""
+
+    def host_path(self, container_path: str) -> Path:
+        raise PermissionError(f"cannot read {container_path}")
+
+
+def test_verify_reports_the_guard_unmeasured_when_the_rootfs_is_unreadable() -> None:
+    sandbox = _UnreadableRootfsSandbox([FakeResult(timed_out=True)])
+    env, _, _ = _env(sandbox=sandbox)
+    asyncio.run(env.start())
+    outcome = asyncio.run(env.verify())
+    assert outcome["swe_guard"] == "unmeasured"
+    assert "swe_tampered" not in outcome  # never an empty list nobody measured
