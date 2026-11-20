@@ -330,9 +330,9 @@
   {
     "id": "fskills-data-engine-negative-107",
     "question": "Deploy gemma4-4b behind an OpenAI-compatible API with vLLM on the GB200 node: set the tensor parallel size, max model len and a continuous-batching config so our team can query it.",
-    "expected_skill": null,
+    "expected_skill": "fskills-deployment",
     "should_trigger": false,
-    "ground_truth": "Model serving/infrastructure setup is out of scope for every skill here: fskills-data-engine only passes a backend config to its llm ops and launches no processes, so neither it nor its siblings should take this.",
+    "ground_truth": "A model-serving request: since A4.9 it belongs to fskills-deployment (this label predated that skill).",
     "expected_behavior": [
       "The agent did not load fskills-data-engine/SKILL.md to perform this request",
       "The agent did not describe llm_classify/llm_enhance or any data op as a substitute for serving",

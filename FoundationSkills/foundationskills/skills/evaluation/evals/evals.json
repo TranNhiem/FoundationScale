@@ -310,9 +310,9 @@
   {
     "id": "fskills-evaluation-negative-107",
     "question": "Deploy this checkpoint behind a vLLM inference endpoint and measure tokens/sec and latency under load on our A100s.",
-    "expected_skill": null,
+    "expected_skill": "fskills-deployment",
     "should_trigger": false,
-    "ground_truth": "Serving deployment and throughput benchmarking is out of scope (the evaluation skill is HF-backend only, no vLLM or API backends) and is not training or data work either.",
+    "ground_truth": "A model-serving request: since A4.9 it belongs to fskills-deployment (this label predated that skill).",
     "expected_behavior": [
       "The agent did not read or activate evaluation/SKILL.md for a serving deployment request",
       "The agent did not activate any FoundationSkills skill"
