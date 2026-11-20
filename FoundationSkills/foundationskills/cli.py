@@ -251,6 +251,17 @@ def _cmd_self_improve(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "PASS" if kept else "UNMEASURED", "hypotheses": len(hyps), "drafts": kept,
                           "next": "measure each draft, then `fskills self-improve hash` and `admit`"}, indent=2))
         return 0 if kept else 95
+    if args.si_cmd == "evidence":
+        from foundationskills.agent.self_improve_evidence import build_evidence
+
+        load = lambda path: json.loads(Path(path).read_text(encoding="utf-8"))  # noqa: E731
+        sides = {side: {"routing_behaviour": load(getattr(args, f"{side}_behaviour")),
+                        "oracle": load(getattr(args, f"{side}_oracle")), "routing": load(getattr(args, f"{side}_routing"))}
+                 for side in ("inc", "cand")}
+        ev = build_evidence(args.package, sides["inc"], sides["cand"])
+        Path(args.out).write_text(json.dumps(ev, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(ev, indent=2))
+        return 0 if ev["measured"] else 95
     new = Path(args.candidate).read_text(encoding="utf-8")
     evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
     if args.si_cmd == "hash":
@@ -927,6 +938,14 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--base-url", dest="base_url", required=True)
     q.add_argument("--model", required=True)
     q.add_argument("--api-key-env", dest="api_key_env", default=None)
+    q.set_defaults(func=_cmd_self_improve)
+    q = si_sub.add_parser("evidence", help="build admission evidence from measured incumbent/candidate reports")
+    q.add_argument("--skill", required=True)
+    q.add_argument("--package", required=True, help="routing package name, e.g. fskills-compression")
+    for side in ("inc", "cand"):
+        for kind in ("behaviour", "oracle", "routing"):
+            q.add_argument(f"--{side}-{kind}", dest=f"{side}_{kind}", required=True)
+    q.add_argument("--out", required=True)
     q.set_defaults(func=_cmd_self_improve)
     for verb in ("hash", "admit"):
         q = si_sub.add_parser(verb)
