@@ -712,3 +712,11 @@ def _legacy_calibration_floor(monkeypatch):
     from foundationskills.agent import behaviour_eval as _be
 
     monkeypatch.setattr(_be, "CALIBRATION_MIN_ITEMS", 0)
+
+
+def test_same_family_waiver_is_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("FSKILLS_ALLOW_SAME_FAMILY_JUDGE", "1")
+    _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))  # allowed, recorded
+    monkeypatch.setenv("FSKILLS_ALLOW_SAME_FAMILY_JUDGE", "0")
+    with pytest.raises(BehaviourEvalRefused, match="same-family"):
+        _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))

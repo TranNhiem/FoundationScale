@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.resources
+import os
 import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
@@ -342,6 +343,8 @@ def run_behaviour_eval(
         "uplift": _uplift(results, names),
         "calls": calls,
         "judge_calibration": calibration,
+        "same_family_judge_waiver": bool(model_family(agent.model) == model_family(judge.model)
+                                         and same_family_waiver()),
         "reused_calls": sum(1 for call in calls if call.get("reused")),
         "verdict": verdict,
         "exit_code": exit_code,
@@ -401,10 +404,16 @@ def _check_self_grading(agent: LLMBackend, judge: LLMBackend) -> None:
     if str(agent.model) == str(judge.model):
         raise BehaviourEvalRefused(
             f"run_behaviour_eval: self-grading refused: agent and judge both run model {agent.model}")
-    if model_family(agent.model) == model_family(judge.model):  # C3, atlas C9 §4: no same-family judging
+    if model_family(agent.model) == model_family(judge.model) and not same_family_waiver():  # C3, atlas C9 §4
         raise BehaviourEvalRefused(
             f"run_behaviour_eval: same-family judging refused: agent {agent.model} and judge {judge.model} are both "
             f"the {model_family(agent.model)!r} family; use a judge from another family")
+
+
+def same_family_waiver() -> bool:
+    """Operator's temporary waiver (2026-11-20): same-family judging allowed only with FSKILLS_ALLOW_SAME_FAMILY_JUDGE=1,
+    and every report produced under it records same_family_judge_waiver=True."""
+    return os.environ.get("FSKILLS_ALLOW_SAME_FAMILY_JUDGE") == "1"
 
 
 def model_family(model: Any) -> str:
