@@ -257,6 +257,12 @@ class RolloutHost:
     # the per-server version ledger (``_state["server_versions"]``) that ``publish`` and
     # ``_recover_engines`` advance from their own push reports.
     fleet_launch_version: int = 0
+    # Dynamic sampling (ARL-G06, DAPO-style): "off" trains on the drawn tasks as they come;
+    # "refill" drops groups whose rows are ALL measured with ONE reward value (zero spread ->
+    # zero centred advantage -> no gradient) and runs up to ``max_refill_rounds`` rounds of
+    # fresh tasks until ``tasks_per_step`` groups carry signal (see ``_refill``).
+    dynamic_sampling: str = "off"
+    max_refill_rounds: int = 2
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -327,6 +333,12 @@ class RolloutHost:
                 f"must be one of {', '.join(repr(v) for v in _RECOVERY_RERUN)}"
             )
         _real_int_at_least(self.fleet_launch_version, 0, where=where, name="fleet_launch_version")
+        if self.dynamic_sampling not in ("off", "refill"):
+            raise RolloutHostRefusal(
+                f"{where}: field 'dynamic_sampling' is {_described(self.dynamic_sampling)}: it "
+                f"must be one of 'off', 'refill'"
+            )
+        _real_int_at_least(self.max_refill_rounds, 1, where=where, name="max_refill_rounds")
         if self.engine_recovery_retries > 0 and self.fleet is None:
             raise RolloutHostRefusal(
                 f"{where}: field 'engine_recovery_retries' is {self.engine_recovery_retries} "
@@ -547,6 +559,80 @@ class RolloutHost:
             )
         return merged
 
+    def _group_key(self, trajectory: Trajectory) -> str:
+        return (
+            f"{trajectory.uid}::{trajectory.harness}" if self.group_by_harness else trajectory.uid
+        )
+
+    def _droppable_groups(self, trajectories: Sequence[Trajectory]) -> set[str]:
+        """Groups whose rows are ALL measured and share ONE reward: zero spread, so a centred
+        baseline gives every row zero advantage. A group with ANY abstained/infra row is never
+        droppable -- dropping it would hide infra from ``RolloutAbstentionGate``."""
+        rewards: dict[str, list[float | None]] = {}
+        for trajectory in trajectories:
+            rewards.setdefault(self._group_key(trajectory), []).append(trajectory.reward)
+        return {
+            key
+            for key, values in rewards.items()
+            if all(v is not None for v in values) and len(set(values)) == 1
+        }
+
+    async def _refill(
+        self, step: int, round0: list[Trajectory], reserve: Sequence[EpisodeTask]
+    ) -> list[Trajectory]:
+        """DAPO-style dynamic sampling: keep round 0's informative groups, run reserve tasks in
+        chunks of ``tasks_per_step`` until ``tasks_per_step`` groups carry signal or
+        ``max_refill_rounds`` is spent, and return the kept rows (round 0's rows first).
+
+        Kept: every non-droppable group, in draw order, up to ``tasks_per_step`` groups. When
+        no group anywhere is informative the step returns ``round0`` unchanged -- the trainer
+        then reports the step UNMEASURED exactly as without refill. One
+        ``[agentic-rl:dynamic-sampling]`` line reports rounds run and groups kept/dropped.
+        """
+        gathered = list(round0)
+        rounds = 0
+        offset = 0
+
+        def informative(rows: Sequence[Trajectory]) -> list[str]:
+            drop = self._droppable_groups(rows)
+            order: list[str] = []
+            for row in rows:
+                key = self._group_key(row)
+                if key not in drop and key not in order:
+                    order.append(key)
+            return order
+
+        while (
+            len(informative(gathered)) < self.tasks_per_step
+            and rounds < self.max_refill_rounds
+            and offset < len(reserve)
+        ):
+            chunk = reserve[offset : offset + self.tasks_per_step]
+            offset += len(chunk)
+            rounds += 1
+            gathered.extend(await self._gather_step(step, chunk))
+        keep = informative(gathered)[: self.tasks_per_step]
+        all_groups = {self._group_key(t) for t in gathered}
+        print(
+            "[agentic-rl:dynamic-sampling] "
+            + json.dumps(
+                {
+                    "rollout_step": step,
+                    "rounds": rounds,
+                    "groups_gathered": len(all_groups),
+                    "groups_kept": len(keep),
+                    "groups_dropped_zero_spread": len(all_groups) - len(set(informative(gathered))),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+        if not keep:
+            return round0
+        kept = set(keep)
+        return [t for t in gathered if self._group_key(t) in kept]
+
     def _recover_engines(self, step: int) -> SyncReport | None:
         """Restart the generation fleet and make it serve the CURRENT policy again.
 
@@ -633,7 +719,16 @@ class RolloutHost:
                 f"RolloutHost.rollout: parameter 'step' is {_described(step)}: it must be "
                 f"a real int >= 0"
             )
-        tasks = self.tasks.batch(step, self.tasks_per_step)
+        if self.dynamic_sampling == "refill":
+            # One deterministic draw covers round 0 and every refill round (capped at the pool,
+            # so no task repeats within a step and no (uid, session_id) collides in flatten).
+            pool = self.tasks.batch(
+                step,
+                min(len(self.tasks), self.tasks_per_step * (1 + self.max_refill_rounds)),
+            )
+            tasks, reserve = pool[: self.tasks_per_step], pool[self.tasks_per_step :]
+        else:
+            tasks, reserve = self.tasks.batch(step, self.tasks_per_step), ()
         trajectories = await self._gather_step(step, tasks)
         attempt = 0
         while attempt < self.engine_recovery_retries and _needs_engine_recovery(
@@ -665,6 +760,11 @@ class RolloutHost:
                 trajectories = self._merge_recovered(step, trajectories, rerun, indices)
             else:
                 trajectories = await self._gather_step(step, tasks)
+        # Summary and stability guard read ROUND 0 only: an unbiased sample of the drawn tasks.
+        # Refilled batches over-represent groups with spread, which would inflate the reward EMA.
+        round0 = trajectories
+        if self.dynamic_sampling == "refill":
+            trajectories = await self._refill(step, trajectories, reserve)
         # The measured per-session versions publish hands StalenessGate; () when no
         # ledger exists (nothing measured -- never the asserted step).
         # The freshest version the fleet COULD serve at this rollout: the last completed push
@@ -680,9 +780,9 @@ class RolloutHost:
             else ()
         )
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
-        print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
+        print(rollout_summary(step, round0), file=sys.stderr, flush=True)
         if self.guard is not None:
-            verdict = self.guard.update(rollout_stats(step, trajectories))
+            verdict = self.guard.update(rollout_stats(step, round0))
             print(verdict_line(verdict), file=sys.stderr, flush=True)
         if self.gates:
             gate_ctx = RolloutGateContext(

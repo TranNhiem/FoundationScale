@@ -376,6 +376,10 @@ class RolloutConfig:
     # default, the original behaviour) or "engine_rows" (only the ENGINE infra rows;
     # measured rows are kept, refused if the re-run changed the served policy version).
     recovery_rerun: str = "all"
+    # RolloutHost.dynamic_sampling / max_refill_rounds (ARL-G06): "off" (default) or "refill"
+    # (drop zero-spread, fully measured groups and refill with fresh tasks, DAPO-style).
+    dynamic_sampling: str = "off"
+    max_refill_rounds: int = 2
 
 
 @dataclass(frozen=True)
@@ -1059,6 +1063,8 @@ def _build_rollout(
             "max_infra_rate",
             "engine_recovery_retries",
             "recovery_rerun",
+            "dynamic_sampling",
+            "max_refill_rounds",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1156,6 +1162,32 @@ def _build_rollout(
         raise AgenticConfigRefusal(
             f"rollout.recovery_rerun: {recovery_rerun!r} is not one of 'all', 'engine_rows'"
         )
+    dynamic_sampling = _resolve_scalar(
+        dotted_key="rollout.dynamic_sampling",
+        field_name="dynamic_sampling",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="off",
+        required=False,
+        provenance=provenance,
+    )
+    if dynamic_sampling not in ("off", "refill"):
+        raise AgenticConfigRefusal(
+            f"rollout.dynamic_sampling: {dynamic_sampling!r} is not one of 'off', 'refill'"
+        )
+    max_refill_rounds = _resolve_scalar(
+        dotted_key="rollout.max_refill_rounds",
+        field_name="max_refill_rounds",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=int,
+        default=2,
+        required=False,
+        provenance=provenance,
+    )
+    if max_refill_rounds < 1:
+        raise AgenticConfigRefusal(f"rollout.max_refill_rounds: {max_refill_rounds!r} must be >= 1")
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1166,6 +1198,8 @@ def _build_rollout(
         max_infra_rate=max_infra_rate,
         engine_recovery_retries=engine_recovery_retries,
         recovery_rerun=recovery_rerun,
+        dynamic_sampling=dynamic_sampling,
+        max_refill_rounds=max_refill_rounds,
     )
 
 

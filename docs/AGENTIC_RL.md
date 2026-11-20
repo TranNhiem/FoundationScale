@@ -90,6 +90,19 @@ per-turn penalties on tool-call parse errors and repetition, added to the
 advantage after the baseline (never to the reward); see
 [RL_ALGORITHMS.md](RL_ALGORITHMS.md).
 
+**Dynamic sampling.** On GB200 math runs about half of all groups had zero
+reward spread (every sample solved, or every sample failed), so a centred
+baseline gave them zero advantage, and 7-10% of steps carried no gradient at
+all. `rollout.dynamic_sampling="refill"` (default `"off"`) drops groups whose
+rows are all measured with one reward value and runs up to
+`rollout.max_refill_rounds` rounds of fresh tasks (one deterministic draw per
+step) until `tasks_per_step` groups carry signal. A group with any abstained
+or infra row is never dropped, so the infra gate still sees it; the
+`[agentic-rl:rollout]` summary and the stability guard read round 0 only (an
+unbiased task sample), and one `[agentic-rl:dynamic-sampling]` line reports
+rounds and groups kept/dropped. With no informative group anywhere the step
+keeps round 0 and is reported UNMEASURED as before.
+
 **Per-session policy versions.** With a real `EngineFleet`, `RolloutHost`
 keeps a per-server version ledger: every server starts at
 `fleet_launch_version` (0, the `policy.model_path` weights `cli.py` launches),
