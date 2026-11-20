@@ -56,6 +56,18 @@ what a retry re-runs: `"all"` (default) re-gathers every attempt, while
 `"engine_rows"` re-runs only the engine-failed rows and keeps the measured
 ones -- refused if the kept and re-run rows report different policy versions.
 
+**SWE tamper guard (DiffGuard).** The `enroot_task` environment fingerprints,
+from the host side, every test-harness file the agent could edit to change a
+test run without touching a hidden test -- `conftest.py`, `pytest.ini`,
+`tox.ini`, `setup.cfg`, `pyproject.toml` under the workdir, and
+`sitecustomize.py`/`usercustomize.py`/`*.pth` in site-packages -- at the end
+of `start()` and again before `verify()` unseals the hidden tests. It reports
+`swe_guard` and `swe_tampered` (changed paths) in the outcome metadata.
+`reward.swe_tamper="zero"` scores a tampered episode 0.0
+(`test_harness_tampering`) and abstains when the guard was unmeasured;
+`"report"` (default) keeps scoring unchanged. The SWE example config uses
+`"zero"`.
+
 **Judge rewards.** `reward.kind="judge"` scores the final answer with an
 OpenAI-compatible judge model against a declared rubric
 (`reward.judge_rubric_path`: weighted criteria, each scored in [0, 1]) --

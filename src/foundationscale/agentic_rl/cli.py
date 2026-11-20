@@ -287,7 +287,7 @@ def _reward_scorer(
     if config.reward.kind == "math":
         return MathAnswerReward()
     if config.reward.kind == "swe":
-        return SweReward()
+        return SweReward(tamper=config.reward.swe_tamper)
     return _music_reward(config)
 
 

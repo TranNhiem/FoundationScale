@@ -14,6 +14,12 @@ reports per-test results in ``outcome.metadata``: ``swe_status`` (``"ok"`` when 
 - otherwise 0.0 (``unresolved``), or with ``partial_credit=True`` the fraction of ``fail_to_pass``
   tests passing (``partial``).
 
+With ``tamper="zero"`` (ARL-G14), an episode whose environment reported DiffGuard edits to
+test-harness files (``swe_tampered`` non-empty -- see ``envs.diff_guard``) scores 0.0
+(``test_harness_tampering``) whatever its tests say, and an episode whose guard was not measured
+abstains (``tamper_guard_unmeasured``). ``tamper="report"`` (the default) leaves scoring unchanged;
+the report still rides ``outcome.metadata``.
+
 A test missing from the report counts as not passing. A task with an empty ``fail_to_pass`` list is
 a broken task and abstains (``no_fail_to_pass``) rather than scoring every attempt as resolved.
 """
@@ -45,6 +51,13 @@ class SweReward:
     """Scores an episode by its hidden-test report (see the module docstring)."""
 
     partial_credit: bool = False
+    tamper: str = "report"
+
+    def __post_init__(self) -> None:
+        if self.tamper not in ("report", "zero"):
+            raise ValueError(
+                f"SweReward: field 'tamper' is {self.tamper!r}: it must be one of 'report', 'zero'"
+            )
 
     async def score(self, task: EpisodeTask, outcome: EpisodeOutcome) -> RewardVerdict:
         meta = task.metadata or {}
@@ -62,6 +75,15 @@ class SweReward:
             return RewardVerdict(None, "swe_tests_did_not_run")
         if not isinstance(results, dict):
             return RewardVerdict(None, "swe_tests_did_not_run")
+
+        if self.tamper == "zero":
+            if outcome.metadata.get("swe_guard") != "measured":
+                return RewardVerdict(None, "tamper_guard_unmeasured")
+            tampered = _test_ids(outcome.metadata.get("swe_tampered", ""))
+            if tampered is None:
+                return RewardVerdict(None, "tamper_guard_unmeasured")
+            if tampered:
+                return RewardVerdict(0.0, "test_harness_tampering")
 
         def passed(test_id: str) -> bool:
             return results.get(test_id) == "passed"

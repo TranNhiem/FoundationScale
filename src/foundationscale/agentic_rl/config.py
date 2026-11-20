@@ -407,6 +407,9 @@ class RewardConfig:
     timeout_s: float = 60.0
     # Required for kind="judge"; None otherwise.
     judge: JudgeConfig | None = None
+    # kind="swe" only: what a DiffGuard tampering report does -- "report" (scoring unchanged)
+    # or "zero" (tampered episodes score 0.0; an unmeasured guard abstains). ARL-G14.
+    swe_tamper: str = "report"
 
 
 @dataclass(frozen=True)
@@ -1171,7 +1174,7 @@ def _build_reward(
 ) -> RewardConfig:
     section = _strip_doc(raw, dotted_prefix="reward")
     local_overrides = _section_overrides(overrides, section="reward")
-    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", *_JUDGE_KEYS})
+    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", "swe_tamper", *_JUDGE_KEYS})
     _refuse_unknown_keys(section, allowed, section="reward")
     kind = _resolve_scalar(
         dotted_key="reward.kind",
@@ -1214,7 +1217,31 @@ def _build_reward(
         provenance=provenance,
     )
     judge = _build_judge(section, local_overrides, provenance, kind=kind)
-    return RewardConfig(kind=kind, abc2midi_bin=abc2midi_bin, timeout_s=timeout_s, judge=judge)
+    swe_tamper = _resolve_scalar(
+        dotted_key="reward.swe_tamper",
+        field_name="swe_tamper",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="report",
+        required=False,
+        provenance=provenance,
+    )
+    if swe_tamper not in ("report", "zero"):
+        raise AgenticConfigRefusal(
+            f"reward.swe_tamper: is {_described(swe_tamper)}: it must be 'report' or 'zero'"
+        )
+    if swe_tamper != "report" and kind != "swe":
+        raise AgenticConfigRefusal(
+            f"reward.swe_tamper: is {swe_tamper!r}, but reward.kind={kind!r} never reads it"
+        )
+    return RewardConfig(
+        kind=kind,
+        abc2midi_bin=abc2midi_bin,
+        timeout_s=timeout_s,
+        judge=judge,
+        swe_tamper=swe_tamper,
+    )
 
 
 # reward.judge_* keys -> (JudgeConfig field, type, default, required when kind == "judge")

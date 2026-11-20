@@ -86,7 +86,8 @@
     "engine_recovery_retries": 3
   },
   "reward": {
-    "kind": "swe"
+    "kind": "swe",
+    "swe_tamper": "zero"
   },
   "publish_root": "@OUT@/publish",
   "stability": {

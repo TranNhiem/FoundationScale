@@ -551,6 +551,9 @@ def test_execute_sandbox_error_is_infra_error() -> None:
         asyncio.run(env.execute("ls"))
 
 
+_GUARD_CLEAN = {"swe_guard": "measured", "swe_tampered": "[]"}  # DiffGuard: nothing edited
+
+
 def test_verify_unseals_then_reports_tests() -> None:
     report = "\n".join(
         (
@@ -571,6 +574,7 @@ def test_verify_unseals_then_reports_tests() -> None:
         "swe_status": "ok",
         "swe_tests": json.dumps(tests, sort_keys=True),
         "swe_exit_code": "1",
+        **_GUARD_CLEAN,
     }
     assert vault.calls == ["seal", "unseal"]
     assert real_sandbox.execs == [("pytest -q", "/repo", None, 600.0)]
@@ -580,7 +584,11 @@ def test_verify_timeout_is_error_outcome() -> None:
     sandbox = FakeSandbox([FakeResult(timed_out=True)])
     env, _, _ = _env(sandbox=sandbox)
     asyncio.run(env.start())
-    assert asyncio.run(env.verify()) == {"swe_status": "error", "swe_error": "test_cmd timed out"}
+    assert asyncio.run(env.verify()) == {
+        "swe_status": "error",
+        "swe_error": "test_cmd timed out",
+        **_GUARD_CLEAN,
+    }
 
 
 def test_verify_without_tests_is_error_outcome() -> None:
@@ -588,7 +596,11 @@ def test_verify_without_tests_is_error_outcome() -> None:
     env, _, _ = _env(sandbox=sandbox)
     asyncio.run(env.start())
     outcome = asyncio.run(env.verify())
-    assert outcome == {"swe_status": "error", "swe_error": "no test results (exit 5)"}
+    assert outcome == {
+        "swe_status": "error",
+        "swe_error": "no test results (exit 5)",
+        **_GUARD_CLEAN,
+    }
 
 
 def test_verify_vault_exception_is_infra_error() -> None:

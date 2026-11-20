@@ -31,6 +31,7 @@ from foundationscale.agentic_rl.envs.base import (
     EnvSpec,
     ExecResult,
 )
+from foundationscale.agentic_rl.envs.diff_guard import changed_paths, fingerprint
 from foundationscale.agentic_rl.integrity import IntegrityRefusal
 from foundationscale.agentic_rl.sandbox.broker import BrokerRunner
 from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, SandboxError, SandboxSpec
@@ -350,6 +351,9 @@ class TaskSandboxEnvironment:
         self._started = False
         self._verified = False
         self._closed = False
+        # DiffGuard baseline (envs.diff_guard): guarded-file digests at the end of start();
+        # None until taken, or when the host-side walk could not read the rootfs (unmeasured).
+        self._guard_before: dict[str, str] | None = None
 
     @property
     def workdir(self) -> str:
@@ -508,6 +512,14 @@ class TaskSandboxEnvironment:
                     f"with {detail}: setup_commands must all succeed before the episode starts "
                     f"-- a failing setup leaves the environment in an unknown state",
                 )
+        self._guard_before = self._guard_fingerprint()
+
+    def _guard_fingerprint(self) -> dict[str, str] | None:
+        """Host-side DiffGuard fingerprint, or None when the rootfs could not be read."""
+        try:
+            return fingerprint(self._sandbox.host_path("/"), self._config.workdir)
+        except OSError:
+            return None
 
     def _exec_sync(self, command: str, *, timeout_s: float) -> SandboxExecResult:
         """Blocking half of ``execute()``: run ``command`` in the container.
@@ -531,7 +543,21 @@ class TaskSandboxEnvironment:
             ) from exc
 
     def _verify_sync(self) -> dict[str, str]:
-        """Blocking half of ``verify()``: unseal the hidden tests and run ``config.test_cmd``."""
+        """Blocking half of ``verify()``: unseal the hidden tests and run ``config.test_cmd``.
+
+        Before unsealing, DiffGuard compares the guarded files against the start() baseline and
+        reports the changed paths as ``swe_tampered`` (a JSON list), or ``swe_guard="unmeasured"``
+        when either fingerprint could not be taken -- never an empty list it did not measure.
+        """
+        after = self._guard_fingerprint()
+        guard: dict[str, str]
+        if self._guard_before is None or after is None:
+            guard = {"swe_guard": "unmeasured"}
+        else:
+            guard = {
+                "swe_guard": "measured",
+                "swe_tampered": json.dumps(changed_paths(self._guard_before, after)),
+            }
         try:
             self._vault.unseal()
             result = self._sandbox.exec(
@@ -549,17 +575,19 @@ class TaskSandboxEnvironment:
                 f"scored zero",
             ) from exc
         if result.timed_out:
-            return {"swe_status": "error", "swe_error": "test_cmd timed out"}
+            return {"swe_status": "error", "swe_error": "test_cmd timed out", **guard}
         tests = parse_pytest_report(result.stdout)
         if not tests:
             return {
                 "swe_status": "error",
                 "swe_error": f"no test results (exit {result.return_code})",
+                **guard,
             }
         return {
             "swe_status": "ok",
             "swe_tests": json.dumps(tests, sort_keys=True),
             "swe_exit_code": str(result.return_code),
+            **guard,
         }
 
 
