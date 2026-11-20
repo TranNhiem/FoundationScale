@@ -42,6 +42,7 @@ class ArtifactType(str, Enum):
     SERVING_SPEC = "serving_spec"
     VLA_VERDICT = "vla_verdict"
     COMPRESSION_REPORT = "compression_report"
+    PLAN = "plan"
 
     def __str__(self) -> str:
         return self.value

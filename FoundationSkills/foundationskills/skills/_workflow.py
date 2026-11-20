@@ -85,3 +85,49 @@ def load_payload(path: str) -> dict[str, Any]:
 def artifact_paths(result: SkillResult, kind: str) -> list[str]:
     """Paths of the artifacts of type ``kind`` a composed step wrote (outputs reference artifacts by path)."""
     return [str(ref.path) for ref in result.artifacts if str(ref.type) == kind]
+
+
+def run_plan(caller: Any, plan_dict: dict[str, Any], ctx: SkillContext,
+             reg: SkillRegistry | None = None) -> dict[str, Any]:
+    """C7.2: run a typed plan DAG (core/plan_dag.py) node by node and close it.
+
+    An invalid plan is REFUSED before anything runs. Nodes run in topological order; a node whose dependencies are
+    not all done is skipped (never run), and a skip makes the plan RED. A node over its declared wall-time budget is
+    failed. The plan and its closure are written as a typed ``plan`` artifact.
+    """
+    import time  # noqa: PLC0415
+
+    from foundationskills.core.artifacts import Artifact, write_artifact  # noqa: PLC0415
+    from foundationskills.core.plan_dag import (  # noqa: PLC0415
+        closure, node_done, plan_from_dict, plan_payload, topo_order, validate_plan)
+    from foundationskills.core.provenance import make_provenance  # noqa: PLC0415
+
+    try:
+        plan = plan_from_dict(plan_dict)
+    except (ValueError, TypeError, KeyError) as exc:
+        return {"verdict": "REFUSED", "reasons": [f"plan unreadable: {exc}"], "steps": []}
+    problems = validate_plan(plan, tuple(getattr(caller, "invokes", ())))
+    if problems:
+        return {"verdict": "REFUSED", "reasons": problems, "steps": []}
+    nodes = {n.id: n for n in plan.nodes}
+    outcomes: dict[str, dict[str, Any]] = {}
+    steps: list[dict[str, Any]] = []
+    for node_id in topo_order(plan):
+        node = nodes[node_id]
+        if not all(d in outcomes and node_done(nodes[d], outcomes[d]["status"], outcomes[d]["rule_ids"])
+                   for d in node.deps):
+            continue  # skipped: closure reports it, and a skip is RED
+        start = time.monotonic()
+        result, step = run_step(caller, node.skill, dict(node.request), ctx, reg)
+        seconds = time.monotonic() - start
+        status, rules = result.status.value, [f.rule_id for f in result.findings]
+        if node.budget_wall_seconds is not None and seconds > node.budget_wall_seconds:
+            status, rules = "RED", rules + ["CORE-BUDGET"]
+        outcomes[node_id] = {"status": status, "rule_ids": rules}
+        steps.append({"node": node_id, "seconds": round(seconds, 3), **step.as_row(), "status": status})
+    closed = closure(plan, outcomes)
+    payload = {**plan_payload(plan), "closure": closed, "steps": steps}
+    stamp = make_provenance(str(getattr(caller, "name", "workflow")), str(getattr(caller, "version", "")),
+                            {"plan_id": plan.id})
+    ref = write_artifact(Artifact("plan", plan.id, payload, stamp), ctx.artifacts_dir)
+    return {"verdict": closed["verdict"], "reasons": closed["reasons"], "steps": steps, "plan_path": ref.path}
