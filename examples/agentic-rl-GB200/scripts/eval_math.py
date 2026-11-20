@@ -19,6 +19,7 @@ from pathlib import Path
 from foundationscale.agentic_rl.cli import _HFChatTokenizer
 from foundationscale.agentic_rl.engines.vllm import VLLMClient
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
+from foundationscale.agentic_rl.eval_stats import EvalStatsRefusal, pass_at_k
 from foundationscale.agentic_rl.harness.base import EpisodeBudget, EpisodeTask, SamplingParams
 from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MathRewardFn
@@ -71,11 +72,23 @@ async def evaluate(a: argparse.Namespace) -> dict:
 
     res = await asyncio.gather(*(one(t, k) for t in tasks for k in range(a.samples)))
     vals = [v for v in res if v is not None]
-    return {
+    # Per-task scores in task order (gather preserves order): the unit compare_evals.py pairs on.
+    per_task = {t["uid"]: res[i * a.samples : (i + 1) * a.samples] for i, t in enumerate(tasks)}
+    if a.per_task_out:
+        with Path(a.per_task_out).open("w") as fh:
+            for uid, scores in per_task.items():
+                fh.write(json.dumps({"uid": uid, "scores": scores}) + "\n")
+    summary = {
         "model": a.model, "tasks": len(tasks), "samples": a.samples, "measured": len(vals),
         "abstained": len(res) - len(vals), "mean": statistics.fmean(vals) if vals else None,
         "pass_gt0": sum(v > 0 for v in vals), "max": max(vals) if vals else None,
     }  # fmt: skip
+    for k in sorted({1, a.samples}):
+        try:
+            summary[f"pass@{k}"] = pass_at_k(per_task, k)
+        except EvalStatsRefusal:
+            summary[f"pass@{k}"] = None  # some task has < k measured samples: unmeasured
+    return summary
 
 
 def main() -> None:
@@ -91,6 +104,11 @@ def main() -> None:
     p.add_argument("--max-tokens", type=int, default=12000)
     p.add_argument("--concurrency", type=int, default=64)
     p.add_argument("--parser", choices=["qwen_xml", "hermes_json"], default="qwen_xml")
+    p.add_argument(
+        "--per-task-out",
+        default=None,
+        help="write per-task sample scores (JSONL) for compare_evals",
+    )
     print(json.dumps(asyncio.run(evaluate(p.parse_args()))))
 
 

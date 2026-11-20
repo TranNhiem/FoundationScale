@@ -57,3 +57,18 @@ python examples/agentic-rl-GB200/scripts/eval_music.py --model /path/to/MiMo-V2.
 Serve the base model on the port first, as in Step 1.
 
 Back to the [README](README.md).
+
+## Is a difference real? (paired comparison)
+
+AIME25 has 30 problems, so a few points between two checkpoints is often noise. Run each
+evaluation with `--per-task-out FILE.jsonl` (one line per task with its sample scores), then:
+
+```bash
+python scripts/compare_evals.py base.jsonl new.jsonl --k 1 4
+# several seeds per side: base_s10.jsonl+base_s11.jsonl+base_s12.jsonl
+```
+
+It prints `diff = new - base` over the shared tasks with a 95% bootstrap CI that resamples
+tasks, the fraction of resamples at or below zero, and unbiased pass@k per side. Call a
+difference a finding only when the CI excludes zero.
+
