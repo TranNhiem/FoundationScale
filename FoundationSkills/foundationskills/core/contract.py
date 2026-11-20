@@ -283,6 +283,13 @@ class BaseSkill(abc.ABC):
                                   if f.rule_id == "CORE-EXC"), None)))
         except Exception:  # noqa: BLE001 - the ledger is best effort; a broken row never masks a verdict
             pass
+        try:  # C6: the experience bank records the measured outcome; it is read only as advice, never as a verdict
+            from foundationskills.core import experience
+
+            experience.record(ctx.workdir, result.status is Status.REFUSED, experience.outcome_row(
+                self.name, self.version, request, result.status.value, [f.rule_id for f in result.findings]))
+        except Exception:  # noqa: BLE001
+            pass
         return result
 
     def _enforce_budget(self, result: SkillResult, wall_ms: float) -> SkillResult:

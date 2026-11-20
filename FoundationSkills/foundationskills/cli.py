@@ -215,6 +215,20 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_experience(args: argparse.Namespace) -> int:
+    """C6: promoted lessons (>= 3 independent measured outcomes) from an experience bank. Advisory only."""
+    from foundationskills.core import experience
+
+    path = experience.bank_path(args.workdir)
+    rows = experience.read(path) if path else []
+    if not rows:
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no experience recorded at {path}"}))
+        return 95
+    found = experience.lessons(rows, skill=args.skill)
+    print(json.dumps({"status": "PASS", "rows": len(rows), "lessons": found, "note": "advisory only"}, indent=2))
+    return 0
+
+
 def _cmd_ledger(args: argparse.Namespace) -> int:
     """C4: summarize a run's ledger.jsonl per skill (read-only). 95 when there is no ledger to read."""
     from foundationskills.core import ledger
@@ -798,6 +812,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("experience", help="C6 experience bank: promoted lessons from measured outcomes (advisory)")
+    ex_sub = p.add_subparsers(dest="experience_cmd", required=True)
+    q = ex_sub.add_parser("lessons")
+    q.add_argument("--workdir", default=None, help="skill workdir (ignored when FSKILLS_EXPERIENCE_DIR is set)")
+    q.add_argument("--skill", default=None)
+    q.set_defaults(func=_cmd_experience)
 
     p = sub.add_parser("ledger", help="C4 cost/trace ledger: summarize a run directory's ledger.jsonl")
     ld_sub = p.add_subparsers(dest="ledger_cmd", required=True)
