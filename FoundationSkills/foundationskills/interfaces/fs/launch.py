@@ -165,8 +165,25 @@ def launch(
         "returncode": returncode,
         **extra,
     }
-    _ledger_row(spec, out, time.monotonic() - started)
+    elapsed = time.monotonic() - started
+    _enforce_launch_budget(spec, out, elapsed)
+    _ledger_row(spec, out, elapsed)
     return out
+
+
+def _enforce_launch_budget(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> None:
+    """C4.2: a declared ``budget.wall_seconds`` overrun turns a successful local run RED (5); unmeasured when submitted."""
+    limit = (spec.get("budget") or {}).get("wall_seconds")
+    if limit is None:
+        return
+    if out.get("returncode") is None:
+        out["budget_breach"] = None
+        out["budget_note"] = "submitted to the scheduler: wall time is not measured here (unmeasured, never a pass)"
+        return
+    out["budget_breach"] = seconds > float(limit)
+    if out["budget_breach"] and out["returncode"] == 0:
+        out["returncode"] = 5
+        out["budget_note"] = f"ran {seconds:.1f} s against a declared budget of {float(limit):.1f} s"
 
 
 def _ledger_row(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> None:
