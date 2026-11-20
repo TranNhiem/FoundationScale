@@ -215,6 +215,55 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_self_improve(args: argparse.Namespace) -> int:
+    """C9: governed SKILL.md self-improvement.
+
+    propose writes drafts only; hash prints the admission hash for the operator; admit writes SKILL.md on PASS only.
+    """
+    import inspect
+
+    from foundationskills.agent import admit as ad, diagnose, edit_search, prune_verify
+
+    _ensure_skills()
+    skill = get_skill(args.skill)
+    skill_md = Path(inspect.getfile(type(skill))).with_name("SKILL.md")
+    old = skill_md.read_text(encoding="utf-8")
+    if args.si_cmd == "propose":
+        from foundationskills.skills.data_engine.llm_backend import make_backend
+
+        hyps = [h for path in args.report
+                for h in diagnose.hypotheses(json.loads(Path(path).read_text(encoding="utf-8")))]
+        if not hyps:
+            print(json.dumps({"status": "UNMEASURED", "reason": "no repeated with_skill misses in the given reports"}))
+            return 95
+        cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.base_url, "model": args.model,
+                               "api_key_env": args.api_key_env}
+        backend = make_backend(cfg, "self_improve")
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        kept = []
+        for i, cand in enumerate(edit_search.propose(backend, old, hyps, n=args.n)):
+            problems = prune_verify.stage0(old, cand, skill, build_parser())
+            target = out / f"{args.skill}.candidate{i}.md"
+            if not problems:
+                target.write_text(cand, encoding="utf-8")
+                kept.append(str(target))
+        print(json.dumps({"status": "PASS" if kept else "UNMEASURED", "hypotheses": len(hyps), "drafts": kept,
+                          "next": "measure each draft, then `fskills self-improve hash` and `admit`"}, indent=2))
+        return 0 if kept else 95
+    new = Path(args.candidate).read_text(encoding="utf-8")
+    evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+    if args.si_cmd == "hash":
+        print(ad.admission_hash(ad.admission_payload(args.skill, old, new, evidence)))
+        return 0
+    result = ad.admit(args.skill, old, new, evidence, args.confirm)
+    if result["verdict"] == "PASS":
+        skill_md.write_text(new, encoding="utf-8")  # the only writer: after the conjunctive gate and a typed-back hash
+        result["written"] = str(skill_md)
+    print(json.dumps(result, indent=2))
+    return {"PASS": 0, "RED": 5, "UNMEASURED": 95, "REFUSED": 96}[result["verdict"]]
+
+
 def _cmd_lifecycle(args: argparse.Namespace) -> int:
     """C10.2: propose lifecycle changes from a ledger (never applied), or record an operator-approved change."""
     from foundationskills.core import ledger, lifecycle
@@ -862,6 +911,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("self-improve", help="C9 governed SKILL.md self-improvement: propose drafts | hash | admit")
+    si_sub = p.add_subparsers(dest="si_cmd", required=True)
+    q = si_sub.add_parser("propose", help="mine misses, generate prose-only drafts, stage-0 prune (writes drafts only)")
+    q.add_argument("--skill", required=True)
+    q.add_argument("--report", action="append", required=True, help="behaviour-eval report(s) of this skill")
+    q.add_argument("--out", required=True, help="drafts directory (never the skill package)")
+    q.add_argument("--n", type=int, default=3)
+    q.add_argument("--base-url", dest="base_url", required=True)
+    q.add_argument("--model", required=True)
+    q.add_argument("--api-key-env", dest="api_key_env", default=None)
+    q.set_defaults(func=_cmd_self_improve)
+    for verb in ("hash", "admit"):
+        q = si_sub.add_parser(verb)
+        q.add_argument("--skill", required=True)
+        q.add_argument("--candidate", required=True)
+        q.add_argument("--evidence", required=True, help="JSON: measured, target, incumbent{...}, candidate{...}")
+        if verb == "admit":
+            q.add_argument("--confirm", default=None, help="the admission hash you read from `self-improve hash`")
+        q.set_defaults(func=_cmd_self_improve)
 
     p = sub.add_parser("lifecycle", help="C10.2 skill lifecycle: propose from the ledger; operator approves each change")
     lc_sub = p.add_subparsers(dest="lifecycle_cmd", required=True)
