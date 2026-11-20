@@ -215,6 +215,33 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_triage(args: argparse.Namespace) -> int:
+    """C8: SkillTriage over behaviour reports (run) and operator approval of proposed regression cases (approve)."""
+    from foundationskills.agent import skill_triage as st
+
+    if args.triage_cmd == "approve":
+        try:
+            row = st.approve(args.proposals, args.id, args.approver)
+        except (KeyError, ValueError) as exc:
+            print(f"[fskills:triage:refuse] {exc}", file=sys.stderr)
+            return 96
+        print(json.dumps(row, indent=2))
+        return 0
+    findings, totals = [], {"pairs": 0}
+    for path in args.report:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+        result = st.triage(report)
+        totals["pairs"] += result["pairs"]
+        findings += result["findings"]
+        if args.proposals:
+            st.propose(result["findings"], args.proposals, report)
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding["direction"]] = counts.get(finding["direction"], 0) + 1
+    print(json.dumps({"status": "PASS" if totals["pairs"] else "UNMEASURED", **totals, "counts": counts}, indent=2))
+    return 0 if totals["pairs"] else 95
+
+
 def _cmd_experience(args: argparse.Namespace) -> int:
     """C6: promoted lessons (>= 3 independent measured outcomes) from an experience bank. Advisory only."""
     from foundationskills.core import experience
@@ -812,6 +839,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("triage", help="C8 SkillTriage: attribute failures/cost to skills; approve proposed regressions")
+    tr_sub = p.add_subparsers(dest="triage_cmd", required=True)
+    q = tr_sub.add_parser("run")
+    q.add_argument("--report", action="append", required=True, help="behaviour-eval report(s) with both arms")
+    q.add_argument("--proposals", default=None, help="JSONL file to append proposed regression cases to")
+    q.set_defaults(func=_cmd_triage)
+    q = tr_sub.add_parser("approve")
+    q.add_argument("--proposals", required=True)
+    q.add_argument("--id", required=True)
+    q.add_argument("--approver", required=True, help="who approves (recorded)")
+    q.set_defaults(func=_cmd_triage)
 
     p = sub.add_parser("experience", help="C6 experience bank: promoted lessons from measured outcomes (advisory)")
     ex_sub = p.add_subparsers(dest="experience_cmd", required=True)
