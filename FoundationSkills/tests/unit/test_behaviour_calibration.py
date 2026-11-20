@@ -30,3 +30,16 @@ def test_judge_only_calls_count_under_a_calibrated_judge():
     calls = [_call([True], [True]) for _ in range(50)] + [_call([None], [True])]
     _gate_judge_only(calls, judge_calibration(calls))
     assert calls[-1]["measured"] is True
+
+
+def test_transferred_calibration_requires_same_judge_model_and_a_pass():
+    from types import SimpleNamespace
+
+    from foundationskills.agent.behaviour_eval import transferred_calibration
+
+    good = {"judge_model": "mimo-v2.6-pro", "cases": "oracle", "created": "t",
+            "judge_calibration": {"calibrated": True, "items": 96, "agreement": 0.9}}
+    judge = SimpleNamespace(model="mimo-v2.6-pro")
+    assert transferred_calibration(good, judge)["source"].startswith("transferred:oracle")
+    assert transferred_calibration({**good, "judge_model": "other"}, judge) is None
+    assert transferred_calibration({**good, "judge_calibration": {"calibrated": False}}, judge) is None

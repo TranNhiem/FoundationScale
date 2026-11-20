@@ -244,6 +244,7 @@ def run_behaviour_eval(
     packages: Iterable[str] | None = None,
     created: datetime | str | None = None,
     resume: Mapping[str, Any] | None = None,
+    calibration_from: Mapping[str, Any] | None = None,
 ) -> dict:
     """Run the behaviour evaluation over one case source and return the report dictionary.
 
@@ -320,6 +321,8 @@ def run_behaviour_eval(
 
     calls = list(map_ordered(run_one, jobs, int(workers)))
     calibration = judge_calibration(calls)
+    if not calibration["calibrated"] and calibration_from is not None:
+        calibration = transferred_calibration(calibration_from, judge) or calibration
     _gate_judge_only(calls, calibration)
     results = {arm: _score_arm(calls, arm, names) for arm in arm_list}
     verdict, exit_code, reasons = _verdict(results, names, float(threshold))
@@ -570,6 +573,16 @@ def judge_calibration(calls: list[dict]) -> dict:
             "min_items": CALIBRATION_MIN_ITEMS, "min_agreement": CALIBRATION_MIN_AGREEMENT,  # read at call time
             "calibrated": bool(len(pairs) >= CALIBRATION_MIN_ITEMS
                                and (rate is None or rate >= CALIBRATION_MIN_AGREEMENT))}
+
+
+def transferred_calibration(report: Mapping[str, Any], judge: LLMBackend) -> dict | None:
+    """The calibration of an earlier report (e.g. the oracle run), if it was calibrated with this exact judge model.
+
+    Routing-behaviour cases have no decidable items, so their judge is calibrated where it can be measured."""
+    cal = report.get("judge_calibration") if isinstance(report, Mapping) else None
+    if not isinstance(cal, Mapping) or not cal.get("calibrated") or str(report.get("judge_model")) != str(judge.model):
+        return None
+    return {**dict(cal), "source": f"transferred:{report.get('cases', '?')} run {report.get('created', '?')}"}
 
 
 def _gate_judge_only(calls: list[dict], calibration: dict) -> None:
