@@ -667,6 +667,13 @@ class RolloutHost:
                 trajectories = await self._gather_step(step, tasks)
         # The measured per-session versions publish hands StalenessGate; () when no
         # ledger exists (nothing measured -- never the asserted step).
+        # The freshest version the fleet COULD serve at this rollout: the last completed push
+        # (or the launch weights). Staleness is judged against it, not against the trainer's
+        # step counter -- a step the trainer skips (UNMEASURED: no gradient, so no update and
+        # no publish) leaves the weights, and therefore the frontier, unchanged.
+        self._state["rollout_frontier"] = self._state.get(
+            "last_pushed_version", self.fleet_launch_version
+        )
         self._state["last_step_versions"] = (
             tuple(t.policy_version_min for t in trajectories)
             if self._server_versions() is not None
@@ -816,7 +823,16 @@ class RolloutHost:
                     is_stale=report.is_stale,
                     seconds=report.seconds,
                     step=step,
-                    policy_version=target_step,
+                    # Measured sessions are judged in UPDATES: the weights published here are the
+                    # rollout frontier plus one update, so an on-policy session lags by exactly 1
+                    # and only a server left on older weights lags by more -- even when a skipped
+                    # (UNMEASURED) step made target_step jump past frontier + 1. Without measured
+                    # sessions the trainer's own target_step stands, as before.
+                    policy_version=(
+                        self._state["rollout_frontier"] + 1
+                        if self._state.get("last_step_versions")
+                        else target_step
+                    ),
                     rollout_policy_versions=self._state.get("last_step_versions", ()),
                     declared_max_lag=self.declared_max_lag,
                     parity=None,

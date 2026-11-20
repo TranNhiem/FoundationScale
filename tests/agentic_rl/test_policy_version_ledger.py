@@ -285,3 +285,53 @@ def test_rollout_recovery_rerun_refuses_anything_else(tmp_path: Path) -> None:
     for bad in ("ALL", "engine_ro", "per_row", "engine_rows ", ""):
         with pytest.raises(AgenticConfigRefusal, match="recovery_rerun"):
             _load(tmp_path, recovery_rerun=bad)
+
+
+# ---------------------------------------------------------------------------
+# (h) GB200 arl_pg_s10 regression: a skipped (UNMEASURED) step publishes nothing, so the next
+#     rollout runs on the SAME weights. Staleness counts updates, not trainer steps.
+# ---------------------------------------------------------------------------
+
+
+def _gated_publishing_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RolloutHost:
+    import foundationscale.rl.distributed as distributed
+    from foundationscale.agentic_rl.weight_sync import DiskWeightSync
+
+    fleet = LedgerFleet(fakes.FleetMode(cured_by_restart=True), healthy=True)
+    driver, _pushed = fakes._recovering_host(
+        tmp_path, monkeypatch, fleet, mode="reload_endpoint", complete=True
+    )
+    monkeypatch.setattr(DiskWeightSync, "push", lambda self, path: fakes._report(complete=True))
+    monkeypatch.setattr(distributed, "save_checkpoint", lambda *args, **kwargs: None)
+    return fakes._host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=None,
+        fleet=fleet,
+        weight_sync=driver.weight_sync,
+        gates=True,
+    )
+
+
+def test_a_skipped_step_does_not_read_as_staleness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _gated_publishing_host(tmp_path, monkeypatch)
+    host.rollout(4)
+    host.publish(object(), object(), fakes._Rank0(), 4)  # fleet now serves version 5
+    # step 5: the trainer measured nothing (no spread) -> no update, no publish(5)
+    host.rollout(6)
+    assert set(host._state["last_step_versions"]) == {5}
+    host.publish(object(), object(), fakes._Rank0(), 6)  # target 7: lag is ONE update, passes
+
+
+def test_a_server_left_on_old_weights_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _gated_publishing_host(tmp_path, monkeypatch)
+    host.rollout(4)
+    host.publish(object(), object(), fakes._Rank0(), 4)
+    host._state["server_versions"][1] = 3  # server_1 silently kept older weights
+    host.rollout(5)
+    with pytest.raises(RolloutHostRefusal, match="trails"):
+        host.publish(object(), object(), fakes._Rank0(), 5)
