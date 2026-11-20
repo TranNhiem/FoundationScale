@@ -130,3 +130,99 @@ def paired_bootstrap(
         confidence=confidence,
         resamples=resamples,
     )
+
+
+@dataclass(frozen=True)
+class SeedComparison:
+    """``mean_b - mean_a`` across independently trained seeds, with a hierarchical CI."""
+
+    seeds_a: int
+    seeds_b: int
+    n_tasks: int
+    mean_a: float
+    mean_b: float
+    diff: float
+    ci_low: float
+    ci_high: float
+    p_le_zero: float
+    seed_means_a: tuple[float, ...]
+    seed_means_b: tuple[float, ...]
+    confidence: float
+    resamples: int
+
+    @property
+    def excludes_zero(self) -> bool:
+        return self.ci_low > 0.0 or self.ci_high < 0.0
+
+
+def seed_bootstrap(
+    a_runs: Sequence[Mapping[str, Sequence[float | None]]],
+    b_runs: Sequence[Mapping[str, Sequence[float | None]]],
+    *,
+    resamples: int = 10000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> SeedComparison:
+    """Compare two ARMS, each a list of independently trained seeds evaluated on the same tasks.
+
+    Each bootstrap draw resamples seeds within each arm (with replacement), then resamples the
+    shared TASKS once (the same task draw for both arms, keeping the comparison paired over tasks),
+    and takes ``mean over drawn seeds and drawn tasks`` per arm. The CI therefore covers training-
+    seed variance as well as evaluation noise: GB200 math baselines showed two seeds of ONE
+    algorithm differing by +2.1 points on MATH-500 with a task-only CI excluding zero, so a
+    task-only bootstrap over one seed per arm would call seed noise a finding.
+
+    Refuses fewer than 2 seeds per arm (no seed variance can be estimated from one) and seeds whose
+    task sets differ. Tasks with no measured score in ANY seed of either arm are dropped.
+    """
+    if len(a_runs) < 2 or len(b_runs) < 2:
+        raise EvalStatsRefusal(
+            f"{len(a_runs)} seed(s) in A and {len(b_runs)} in B: need >= 2 per arm to "
+            f"estimate seed variance"
+        )
+    if type(resamples) is not int or resamples < 100:
+        raise EvalStatsRefusal(f"resamples={resamples!r}: must be an int >= 100")
+    if not 0.5 < confidence < 1.0:
+        raise EvalStatsRefusal(f"confidence={confidence!r}: must lie in (0.5, 1.0)")
+    runs = list(a_runs) + list(b_runs)
+    tasks = set(runs[0])
+    for index, run in enumerate(runs[1:], start=1):
+        if set(run) != tasks:
+            raise EvalStatsRefusal(f"seed {index}: task set differs from seed 0")
+    # per-seed per-task means; a task is kept only if measured in every seed of both arms
+    means: list[dict[str, float]] = []
+    for run in runs:
+        means.append({uid: statistics.fmean(m) for uid in run if (m := _measured(run[uid]))})
+    shared = sorted(uid for uid in tasks if all(uid in m for m in means))
+    if len(shared) < 2:
+        raise EvalStatsRefusal(f"{len(shared)} task(s) measured in every seed: need >= 2")
+    a_means, b_means = means[: len(a_runs)], means[len(a_runs) :]
+
+    def arm_mean(arm: Sequence[dict[str, float]], picks: Sequence[str]) -> float:
+        return statistics.fmean(statistics.fmean(m[uid] for uid in picks) for m in arm)
+
+    rng = random.Random(seed)
+    boot: list[float] = []
+    for _ in range(resamples):
+        picks = rng.choices(shared, k=len(shared))
+        draw_a = rng.choices(a_means, k=len(a_means))
+        draw_b = rng.choices(b_means, k=len(b_means))
+        boot.append(arm_mean(draw_b, picks) - arm_mean(draw_a, picks))
+    boot.sort()
+    alpha = (1.0 - confidence) / 2.0
+    mean_a, mean_b = arm_mean(a_means, shared), arm_mean(b_means, shared)
+    return SeedComparison(
+        seeds_a=len(a_runs),
+        seeds_b=len(b_runs),
+        n_tasks=len(shared),
+        mean_a=mean_a,
+        mean_b=mean_b,
+        diff=mean_b - mean_a,
+        ci_low=boot[max(0, math.floor(alpha * resamples))],
+        ci_high=boot[min(resamples - 1, math.ceil((1.0 - alpha) * resamples) - 1)],
+        p_le_zero=sum(1 for d in boot if d <= 0.0) / resamples,
+        seed_means_a=tuple(statistics.fmean(m[uid] for uid in shared) for m in a_means),
+        seed_means_b=tuple(statistics.fmean(m[uid] for uid in shared) for m in b_means),
+        confidence=confidence,
+        resamples=resamples,
+    )

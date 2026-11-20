@@ -67,3 +67,40 @@ def test_paired_bootstrap_refusals_and_drops() -> None:
     assert (result.n_tasks, result.n_dropped) == (2, 1)
     with pytest.raises(EvalStatsRefusal, match="resamples"):
         paired_bootstrap({"t1": [1.0], "t2": [0.0]}, {"t1": [1.0], "t2": [0.0]}, resamples=10)
+
+
+def test_seed_bootstrap_widens_the_ci_when_seeds_disagree() -> None:
+    from foundationscale.agentic_rl.eval_stats import seed_bootstrap
+
+    tasks = [f"t{i}" for i in range(40)]
+    # arm A: two seeds 0.2 apart; arm B: same two seeds shifted +0.05 -- the shift is far below
+    # the seed spread, so a seed-aware CI must include zero even though a task-only one would not.
+    a = [{u: [0.5] for u in tasks}, {u: [0.7] for u in tasks}]
+    b = [{u: [0.55] for u in tasks}, {u: [0.75] for u in tasks}]
+    result = seed_bootstrap(a, b, resamples=2000)
+    assert result.diff == pytest.approx(0.05)
+    assert result.ci_low < 0.0 < result.ci_high
+    assert result.seed_means_a == (pytest.approx(0.5), pytest.approx(0.7))
+
+
+def test_seed_bootstrap_detects_a_shift_larger_than_the_seed_spread() -> None:
+    from foundationscale.agentic_rl.eval_stats import seed_bootstrap
+
+    tasks = [f"t{i}" for i in range(40)]
+    a = [{u: [0.50] for u in tasks}, {u: [0.52] for u in tasks}]
+    b = [{u: [0.80] for u in tasks}, {u: [0.82] for u in tasks}]
+    result = seed_bootstrap(a, b, resamples=2000)
+    assert result.excludes_zero and result.ci_low > 0.2
+
+
+def test_seed_bootstrap_refuses_one_seed_and_mismatched_tasks() -> None:
+    from foundationscale.agentic_rl.eval_stats import seed_bootstrap
+
+    one = [{"t1": [1.0], "t2": [0.0]}]
+    with pytest.raises(EvalStatsRefusal, match="need >= 2 per arm"):
+        seed_bootstrap(one, one * 2)
+    with pytest.raises(EvalStatsRefusal, match="task set differs"):
+        seed_bootstrap(
+            [{"t1": [1.0], "t2": [0.0]}, {"t1": [1.0], "t3": [0.0]}],
+            [{"t1": [1.0], "t2": [0.0]}, {"t1": [1.0], "t2": [0.0]}],
+        )

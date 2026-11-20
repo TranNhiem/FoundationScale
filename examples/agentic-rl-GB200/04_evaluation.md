@@ -72,3 +72,15 @@ It prints `diff = new - base` over the shared tasks with a 95% bootstrap CI that
 tasks, the fraction of resamples at or below zero, and unbiased pass@k per side. Call a
 difference a finding only when the CI excludes zero.
 
+That CI only covers evaluation noise. To compare two **training recipes**, train at least two
+seeds per arm and pass `--seeds`, which resamples seeds and then tasks:
+
+```bash
+python scripts/compare_evals.py \
+    base_s10.jsonl+base_s11.jsonl+base_s12.jsonl new_s10.jsonl+new_s11.jsonl+new_s12.jsonl --seeds
+```
+
+On GB200, three `agentic_grpo` math seeds differed from each other by up to 2.7 points on
+MATH-500 and 6 points on AIME25, with task-only CIs that excluded zero. A one-seed-per-arm
+comparison would have reported that seed noise as an algorithm effect.
+
