@@ -215,6 +215,19 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_ledger(args: argparse.Namespace) -> int:
+    """C4: summarize a run's ledger.jsonl per skill (read-only). 95 when there is no ledger to read."""
+    from foundationskills.core import ledger
+
+    path = Path(args.workdir) / ledger.FILENAME
+    if not path.is_file():
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no ledger at {path}"}))
+        return 95
+    rows = [r for r in ledger.read(path) if not args.skill or r.get("skill_name") == args.skill]
+    print(json.dumps({"status": "PASS", "rows": len(rows), "skills": ledger.summarize(rows)}, indent=2, sort_keys=True))
+    return 0
+
+
 def _cmd_change_contract(args: argparse.Namespace) -> int:
     """C2: a diff touching protected code must carry a Change-Contract block; exit 5 (RED) when it does not."""
     from foundationskills.core.change_contract import check, needs_contract
@@ -777,6 +790,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("ledger", help="C4 cost/trace ledger: summarize a run directory's ledger.jsonl")
+    ld_sub = p.add_subparsers(dest="ledger_cmd", required=True)
+    q = ld_sub.add_parser("summarize")
+    q.add_argument("--workdir", required=True, help="directory holding ledger.jsonl (a skill workdir or run dir)")
+    q.add_argument("--skill", default=None)
+    q.set_defaults(func=_cmd_ledger)
 
     p = sub.add_parser("change-contract", help="C2: check a commit message carries a Change-Contract for protected paths")
     cc_sub = p.add_subparsers(dest="cc_cmd", required=True)

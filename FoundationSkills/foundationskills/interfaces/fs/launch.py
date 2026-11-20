@@ -21,6 +21,7 @@ an honest null to an invented one.
 from __future__ import annotations
 
 import re
+import time
 import shlex
 import subprocess
 from pathlib import Path
@@ -45,6 +46,7 @@ def launch(
     measurement_only: bool = False,
 ) -> dict[str, Any]:
     """Launch a confirmed fs_launch_spec. Returns {job_id|pid, command, dry_run_rc, returncode}."""
+    started = time.monotonic()
     # FS records code provenance from the launch cwd, and the spec env carries
     # measured launch facts (e.g. GB200 NCCL pins); both apply to every process.
     import os as _os
@@ -155,7 +157,7 @@ def launch(
             extra["returncode_raw"] = returncode
             returncode = verdict
 
-    return {
+    out = {
         "job_id": job_id,
         "pid": pid,
         "command": command,
@@ -163,6 +165,27 @@ def launch(
         "returncode": returncode,
         **extra,
     }
+    _ledger_row(spec, out, time.monotonic() - started)
+    return out
+
+
+def _ledger_row(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> None:
+    """C4: one launch row beside the launch log (best effort). GPU-seconds stay null: the GPU count is not measured."""
+    from foundationskills.core import ledger
+    from foundationskills.core.harness import manifest_hash
+
+    log = _launch_log_path(spec)
+    code = out.get("returncode")
+    verdicts = {0: "PASS", 5: "RED", 95: "UNMEASURED", 96: "REFUSED"}
+    try:
+        ledger.append(log.parent if log else None, ledger.record(
+            "launch", str(spec.get("entry") or "unknown"), str(spec.get("stage_name") or ""),
+            verdict=verdicts.get(code) if code is not None else "SUBMITTED", exit_code=code,
+            wall_clock_ms=round(seconds * 1000, 3), request={"argv": spec.get("argv")},
+            harness_hash=manifest_hash(spec["harness_manifest"]) if spec.get("harness_manifest") else None,
+            extra={"job_id": out.get("job_id"), "gpu_seconds_note": "gpu count not measured"}))
+    except Exception:  # noqa: BLE001 - never block or alter a confirmed launch
+        pass
 
 
 _FS_VERDICT = re.compile(r"^\[fs:train:(done|refuse)\]\s*(.*)$", re.M)

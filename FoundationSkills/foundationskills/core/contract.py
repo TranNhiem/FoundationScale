@@ -263,6 +263,25 @@ class BaseSkill(abc.ABC):
         return SkillResult(status=Status.REFUSED, payload={}, findings=tuple(findings), refusal=reason)
 
     def execute(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
+        """Run the template (``_execute_core``) and append one C4 ledger row; the row never changes the result."""
+        import time
+
+        from foundationskills.core import ledger
+
+        start = time.perf_counter()
+        result = self._execute_core(request, ctx)
+        try:
+            ledger.append_skill_row(ctx.workdir, result.status is Status.REFUSED, ledger.record(
+                "skill", self.name, self.version, verdict=result.status.value, exit_code=result.exit_code,
+                wall_clock_ms=round((time.perf_counter() - start) * 1000, 3), request=request,
+                rules_fired=[f.rule_id for f in result.findings],
+                error_class=next((f.evidence.get("exception_type") for f in result.findings
+                                  if f.rule_id == "CORE-EXC"), None)))
+        except Exception:  # noqa: BLE001 - the ledger is best effort; a broken row never masks a verdict
+            pass
+        return result
+
+    def _execute_core(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         """Template: schema, input checks, run, output schema, handoff, rule declaration audit."""
         try:
             assert_valid(request, _accepting_orchestrator_inputs(self.input_schema), f"{self.name} request")
