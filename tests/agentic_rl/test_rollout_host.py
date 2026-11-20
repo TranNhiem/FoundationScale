@@ -1063,3 +1063,43 @@ def test_publish_applies_the_stability_guard_after_a_complete_push(
     )
     with pytest.raises(CollapseDetected):
         host.publish(object(), object(), SimpleNamespace(rank=0), step=2)
+
+
+def test_rollout_summary_counts_tool_call_error_and_repetition_turns() -> None:
+    """The per-turn facts agentic_process_grpo penalises are counted in every run."""
+    import json
+
+    from foundationscale.agentic_rl.contracts import (
+        SegmentKind,
+        Termination,
+        ToolCall,
+        Trajectory,
+        Turn,
+    )
+    from foundationscale.agentic_rl.rollout_host import rollout_summary
+
+    bad = ToolCall(name=None, arguments="{oops", call_id=None, parse_error="json")
+    good = ToolCall(name="bash", arguments="{}", call_id="c1", parse_error=None)
+    prompt = (Turn(0, SegmentKind.SYSTEM, (1,), False, None),)
+    turns = (
+        Turn(1, SegmentKind.ASSISTANT, (2, 3), True, None, tool_calls=(bad, good)),
+        Turn(2, SegmentKind.TOOL_RESULT, (4,), False, None),
+        Turn(3, SegmentKind.ASSISTANT, (5,), True, None, repetition_hit=True),
+        Turn(4, SegmentKind.ASSISTANT, (6,), True, None, tool_calls=(good,)),
+    )
+    row = Trajectory(
+        uid="u",
+        session_id="u#0",
+        harness="h",
+        prompt_turns=prompt,
+        turns=turns,
+        reward=1.0,
+        abstention_reason=None,
+        termination=Termination.STOP,
+        policy_version_min=0,
+        policy_version_max=0,
+    )
+    payload = json.loads(rollout_summary(0, [row]).split(" ", 1)[1])
+    assert payload["tool_call_error_turns"] == 1
+    assert payload["repetition_turns"] == 1
+    assert payload["generated_turns"] == 3

@@ -889,5 +889,18 @@ def rollout_summary(step: int, trajectories: tuple[Trajectory, ...] | list[Traje
         "groups": len(groups),
         "reward_notes": {str(k): v for k, v in notes.items() if k is not None},
         "supervised_tokens": sum(t.supervised_token_count for t in trajectories),
+        # Generated turns carrying an unparseable tool call / a repetition hit: the
+        # per-turn facts ProcessShaping (agentic_process_grpo) penalises, counted in
+        # every run so a shaped and an unshaped arm report the same quantity.
+        "tool_call_error_turns": sum(
+            1
+            for t in trajectories
+            for turn in t.turns
+            if turn.generated and any(c.parse_error is not None for c in turn.tool_calls)
+        ),
+        "repetition_turns": sum(
+            1 for t in trajectories for turn in t.turns if turn.generated and turn.repetition_hit
+        ),
+        "generated_turns": sum(1 for t in trajectories for turn in t.turns if turn.generated),
     }
     return "[agentic-rl:rollout] " + json.dumps(payload, sort_keys=True)
