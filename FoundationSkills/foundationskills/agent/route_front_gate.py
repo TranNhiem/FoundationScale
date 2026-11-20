@@ -74,6 +74,18 @@ def _slash_match(req_lower: str, forms: tuple[str, ...]) -> bool:
     return False
 
 
+def _routable(name: str) -> bool:
+    """False when FSKILLS_LIFECYCLE_FILE marks the skill quarantined or retired (approved stages only)."""
+    import os
+
+    path = os.environ.get("FSKILLS_LIFECYCLE_FILE")
+    if not path:
+        return True
+    from foundationskills.core import lifecycle
+
+    return lifecycle.routable(lifecycle.load_state(path), name)
+
+
 def front_gate(
     request: str,
     registry: dict,
@@ -105,6 +117,8 @@ def front_gate(
                 redirects.add(neg["route_to"])
 
         if not own:
+            continue
+        if not _routable(skill["name"]):  # C10.2: an operator-approved quarantine/retirement leaves automatic routing
             continue
 
         sc = score(request, skill)

@@ -215,6 +215,29 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_lifecycle(args: argparse.Namespace) -> int:
+    """C10.2: propose lifecycle changes from a ledger (never applied), or record an operator-approved change."""
+    from foundationskills.core import ledger, lifecycle
+
+    if args.lifecycle_cmd == "approve":
+        try:
+            entry = lifecycle.approve(args.state, args.skill, args.to, args.approver, {"note": args.note or ""})
+        except ValueError as exc:
+            print(f"[fskills:lifecycle:refuse] {exc}", file=sys.stderr)
+            return 96
+        print(json.dumps({args.skill: entry}, indent=2))
+        return 0
+    rows = ledger.read(args.ledger) if Path(args.ledger).is_file() else []
+    if not rows:
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no ledger rows at {args.ledger}"}))
+        return 95
+    names = sorted({r.get("skill_name") for r in rows if r.get("kind") == "skill" and r.get("skill_name")})
+    found = lifecycle.proposals(rows, lifecycle.load_state(args.state), names)
+    print(json.dumps({"status": "PASS", "proposals": found, "note": "proposals only; approve each with "
+                      "`fskills lifecycle approve`"}, indent=2))
+    return 0
+
+
 def _cmd_triage(args: argparse.Namespace) -> int:
     """C8: SkillTriage over behaviour reports (run) and operator approval of proposed regression cases (approve)."""
     from foundationskills.agent import skill_triage as st
@@ -839,6 +862,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--max-ratio", dest="max_ratio", type=float, default=None)
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
+
+    p = sub.add_parser("lifecycle", help="C10.2 skill lifecycle: propose from the ledger; operator approves each change")
+    lc_sub = p.add_subparsers(dest="lifecycle_cmd", required=True)
+    q = lc_sub.add_parser("propose")
+    q.add_argument("--ledger", required=True, help="a ledger.jsonl (e.g. FSKILLS_LEDGER_DIR/ledger.jsonl)")
+    q.add_argument("--state", required=True, help="the lifecycle state file (FSKILLS_LIFECYCLE_FILE)")
+    q.set_defaults(func=_cmd_lifecycle)
+    q = lc_sub.add_parser("approve")
+    q.add_argument("--state", required=True)
+    q.add_argument("--skill", required=True)
+    q.add_argument("--to", required=True, help="active | downweighted | quarantined | retired")
+    q.add_argument("--approver", required=True)
+    q.add_argument("--note", default=None)
+    q.set_defaults(func=_cmd_lifecycle)
 
     p = sub.add_parser("triage", help="C8 SkillTriage: attribute failures/cost to skills; approve proposed regressions")
     tr_sub = p.add_subparsers(dest="triage_cmd", required=True)
