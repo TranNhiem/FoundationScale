@@ -199,7 +199,8 @@ def run_gate(
 
     # VG-09 least-privilege allowed-tools
     rows.append(
-        _guard("VG-09", lambda: _scan_mod.check_allowed_tools(entry, frontmatter), lock_err, fm_err)
+        _guard("VG-09", lambda: _scan_mod.check_allowed_tools(
+            entry, frontmatter, ((files or {}).get("SKILL.md") or b"").decode("utf-8", "replace")), lock_err, fm_err)
     )
 
     # VG-10 scripts policy

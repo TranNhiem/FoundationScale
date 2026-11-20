@@ -311,7 +311,19 @@ def check_invisible_unicode(files: Mapping[str, bytes]) -> CheckResult:
     )
 
 
-def check_allowed_tools(entry: Mapping, frontmatter: Mapping) -> CheckResult:
+# C10: host tool names a SKILL.md body can instruct an agent to use (Claude Code / Agent Skills hosts).
+HOST_TOOLS = ("Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Grep", "Glob",
+              "Task", "Agent")
+
+
+def body_tool_mentions(body: str) -> list[str]:
+    """Host tool names the body uses as tools (backticked, or "the X tool"), sorted and unique."""
+    names = "|".join(HOST_TOOLS)
+    found = set(re.findall(rf"`({names})(?:\(|`)", body)) | set(re.findall(rf"\bthe ({names}) tool\b", body))
+    return sorted(found)
+
+
+def check_allowed_tools(entry: Mapping, frontmatter: Mapping, body: str = "") -> CheckResult:
     """VG-09: ``allowed-tools`` against the entry's ``allowed_tools_need``.
 
     No declaration is ``PASS`` (nothing is claimed). Otherwise the tokens -- a space/comma separated
@@ -341,6 +353,12 @@ def check_allowed_tools(entry: Mapping, frontmatter: Mapping) -> CheckResult:
         )
         if part
     )
+    declared = {token.split("(", 1)[0] for token in tokens}
+    undeclared = [name for name in body_tool_mentions(body) if name not in declared and WILDCARD_TOOL not in declared]
+    hits += [Hit(FRONTMATTER_PATH, 0, name, f"body uses the {name} tool, which allowed-tools does not declare")
+             for name in undeclared]
+    if undeclared:  # C10: the declared scope must cover what the body tells the agent to do
+        note += f"; body uses undeclared tool(s): {', '.join(undeclared)}"
     return _result("VG-09", "RED" if hits else "PASS", hits, note)
 
 
