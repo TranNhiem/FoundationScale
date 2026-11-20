@@ -583,8 +583,8 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         if args.packages:
             packages = tuple(part.strip() for part in args.packages.split(",") if part.strip())
         resume = json.loads(Path(args.resume).read_text(encoding="utf-8")) if args.resume else None
-        cal_from = (json.loads(Path(args.calibration_from).read_text(encoding="utf-8"))
-                    if getattr(args, "calibration_from", None) else None)
+        cal_from = [json.loads(Path(path).read_text(encoding="utf-8"))
+                    for path in (getattr(args, "calibration_from", None) or [])] or None
         report = be_.run_behaviour_eval(index, agent, judge, cases=_case_source_of(args), reps=args.reps,
                                         workers=args.workers, agent_max_tokens=args.agent_max_tokens,
                                         threshold=args.threshold, judge_max_tokens=args.judge_max_tokens,
@@ -984,8 +984,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--out", required=True)
     p_run.add_argument("--resume", default=None,
                        help="earlier report of the same run: reuse its measured calls, re-ask only the rest")
-    p_run.add_argument("--calibration-from", dest="calibration_from", default=None,
-                       help="report whose judge_calibration (same judge model, calibrated) covers judge-only cases")
+    p_run.add_argument("--calibration-from", dest="calibration_from", action="append", default=None,
+                       help="earlier report(s) judged by the same judge model; their Tier A calibration is pooled "
+                            "(repeatable) to cover judge-only cases")
     p_run.add_argument("--write-behaviour", action="store_true",
                        help="write BEHAVIOUR.md per package unless unmeasured")
     p_run.set_defaults(func=_cmd_behaviour_eval)

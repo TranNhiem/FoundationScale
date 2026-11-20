@@ -244,7 +244,7 @@ def run_behaviour_eval(
     packages: Iterable[str] | None = None,
     created: datetime | str | None = None,
     resume: Mapping[str, Any] | None = None,
-    calibration_from: Mapping[str, Any] | None = None,
+    calibration_from: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None,
 ) -> dict:
     """Run the behaviour evaluation over one case source and return the report dictionary.
 
@@ -321,8 +321,9 @@ def run_behaviour_eval(
 
     calls = list(map_ordered(run_one, jobs, int(workers)))
     calibration = judge_calibration(calls)
-    if not calibration["calibrated"] and calibration_from is not None:
-        calibration = transferred_calibration(calibration_from, judge) or calibration
+    if not calibration["calibrated"] and calibration_from:
+        reports = [calibration_from] if isinstance(calibration_from, Mapping) else list(calibration_from)
+        calibration = pooled_calibration(reports, judge) or calibration
     _gate_judge_only(calls, calibration)
     results = {arm: _score_arm(calls, arm, names) for arm in arm_list}
     verdict, exit_code, reasons = _verdict(results, names, float(threshold))
@@ -583,6 +584,28 @@ def transferred_calibration(report: Mapping[str, Any], judge: LLMBackend) -> dic
     if not isinstance(cal, Mapping) or not cal.get("calibrated") or str(report.get("judge_model")) != str(judge.model):
         return None
     return {**dict(cal), "source": f"transferred:{report.get('cases', '?')} run {report.get('created', '?')}"}
+
+
+def pooled_calibration(reports: Iterable[Mapping[str, Any]], judge: LLMBackend) -> dict | None:
+    """Pool the Tier A calibration of several earlier reports judged by this exact judge model (calibration belongs to
+    the judge, not to one run). None when no report matches or the pooled evidence misses the floor."""
+    items = agree = 0.0
+    used = 0
+    for report in reports:
+        cal = report.get("judge_calibration") if isinstance(report, Mapping) else None
+        if (not isinstance(cal, Mapping) or str(report.get("judge_model")) != str(judge.model)
+                or not cal.get("items") or cal.get("agreement") is None):
+            continue
+        items += cal["items"]
+        agree += cal["agreement"] * cal["items"]
+        used += 1
+    if not used:
+        return None
+    rate = agree / items
+    pooled = {"source": f"pooled:{used} reports", "items": int(items), "agreement": rate,
+              "min_items": CALIBRATION_MIN_ITEMS, "min_agreement": CALIBRATION_MIN_AGREEMENT,
+              "calibrated": bool(items >= CALIBRATION_MIN_ITEMS and rate >= CALIBRATION_MIN_AGREEMENT)}
+    return pooled if pooled["calibrated"] else None
 
 
 def _gate_judge_only(calls: list[dict], calibration: dict) -> None:

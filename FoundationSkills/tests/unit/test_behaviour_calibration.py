@@ -43,3 +43,16 @@ def test_transferred_calibration_requires_same_judge_model_and_a_pass():
     assert transferred_calibration(good, judge)["source"].startswith("transferred:oracle")
     assert transferred_calibration({**good, "judge_model": "other"}, judge) is None
     assert transferred_calibration({**good, "judge_calibration": {"calibrated": False}}, judge) is None
+
+
+def test_pooled_calibration_reaches_the_floor_across_small_reports():
+    from types import SimpleNamespace
+
+    from foundationskills.agent.behaviour_eval import pooled_calibration
+
+    judge = SimpleNamespace(model="mimo-v2.6-pro")
+    small = [{"judge_model": "mimo-v2.6-pro", "judge_calibration": {"items": 28, "agreement": 0.9}} for _ in range(2)]
+    pooled = pooled_calibration(small, judge)
+    assert pooled["calibrated"] and pooled["items"] == 56 and abs(pooled["agreement"] - 0.9) < 1e-9
+    assert pooled_calibration(small[:1], judge) is None  # 28 items: below the floor
+    assert pooled_calibration([{**small[0], "judge_model": "other"}] * 3, judge) is None
