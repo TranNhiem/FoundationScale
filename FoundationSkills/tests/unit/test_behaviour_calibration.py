@@ -56,3 +56,12 @@ def test_pooled_calibration_reaches_the_floor_across_small_reports():
     assert pooled["calibrated"] and pooled["items"] == 56 and abs(pooled["agreement"] - 0.9) < 1e-9
     assert pooled_calibration(small[:1], judge) is None  # 28 items: below the floor
     assert pooled_calibration([{**small[0], "judge_model": "other"}] * 3, judge) is None
+
+
+def test_a_report_over_candidate_text_is_never_published():
+    import pytest
+
+    from foundationskills.agent.behaviour_eval import BehaviourEvalRefused, write_behaviour
+
+    with pytest.raises(BehaviourEvalRefused, match="candidate"):
+        write_behaviour({"verdict": "pass", "skill_md_override": {"fskills-compression": "ab" * 32}}, [])

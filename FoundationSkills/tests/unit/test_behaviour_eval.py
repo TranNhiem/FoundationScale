@@ -720,3 +720,14 @@ def test_same_family_waiver_is_explicit(monkeypatch) -> None:
     monkeypatch.setenv("FSKILLS_ALLOW_SAME_FAMILY_JUDGE", "0")
     with pytest.raises(BehaviourEvalRefused, match="same-family"):
         _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))
+
+
+def test_candidate_skill_md_override_reaches_the_agent_and_is_recorded(index: list[dict], skill_md: str) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes output/ladder.parquet"])])
+    agent = FakeAgent()
+    candidate = "CANDIDATE SKILL TEXT for C9 stage 1"
+    report = run_behaviour_eval([entry], agent, FakeJudge(), arms=ARMS, reps=1, workers=1, created=CREATED,
+                                skill_md_overrides={entry["name"]: candidate})
+    assert any(candidate in call["system"] for call in agent.calls)
+    assert not any(skill_md in call["system"] for call in agent.calls)
+    assert list(report["skill_md_override"]) == [entry["name"]]

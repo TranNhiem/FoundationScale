@@ -245,6 +245,7 @@ def run_behaviour_eval(
     created: datetime | str | None = None,
     resume: Mapping[str, Any] | None = None,
     calibration_from: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None,
+    skill_md_overrides: Mapping[str, str] | None = None,
 ) -> dict:
     """Run the behaviour evaluation over one case source and return the report dictionary.
 
@@ -257,6 +258,13 @@ def run_behaviour_eval(
     _check_self_grading(agent, judge)
     selected = _select_packages(index, packages)
     skill_mds = {str(entry["package"]): _load_skill_md(entry) for entry in selected}
+    overrides = {}
+    for entry in selected:  # C9 stage 1: measure a candidate SKILL.md text without writing it into the package
+        pick = skill_md_overrides or {}
+        text = pick.get(str(entry["name"])) or pick.get(str(entry["package"]))
+        if text is not None:
+            skill_mds[str(entry["package"])] = text
+            overrides[str(entry["name"])] = hashlib.sha256(text.encode("utf-8")).hexdigest()
     names = sorted({str(entry["name"]) for entry in selected})
     chosen: dict[str, list[dict]] = {}
     views: list[dict] = []
@@ -347,6 +355,7 @@ def run_behaviour_eval(
         "uplift": _uplift(results, names),
         "calls": calls,
         "judge_calibration": calibration,
+        "skill_md_override": overrides,  # non-empty: this report measured candidate text, never publishable
         "same_family_judge_waiver": bool(model_family(agent.model) == model_family(judge.model)
                                          and same_family_waiver()),
         "reused_calls": sum(1 for call in calls if call.get("reused")),
@@ -900,6 +909,8 @@ def write_behaviour(report: dict, index: list[dict]) -> list[Path]:
     """Write BEHAVIOUR.md (routing) or BEHAVIOUR_ORACLE.md (oracle) per package; refuse unmeasured runs."""
     if report.get("verdict") == "unmeasured":
         raise BehaviourEvalRefused("write_behaviour: an unmeasured run must not become a published behaviour report")
+    if report.get("skill_md_override"):  # C9: candidate text was measured, not the package's SKILL.md
+        raise BehaviourEvalRefused("write_behaviour: a run over candidate SKILL.md text must not be published")
     filename = CASE_FILES[_report_source(report)]
     packages = {str(entry["name"]): str(entry["package"]) for entry in index}
     paths: list[Path] = []

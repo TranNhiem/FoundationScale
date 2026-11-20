@@ -698,10 +698,15 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         resume = json.loads(Path(args.resume).read_text(encoding="utf-8")) if args.resume else None
         cal_from = [json.loads(Path(path).read_text(encoding="utf-8"))
                     for path in (getattr(args, "calibration_from", None) or [])] or None
+        overrides = {}
+        for item in getattr(args, "skill_md_override", None) or []:
+            name, _, path = item.partition("=")
+            overrides[name] = Path(path).read_text(encoding="utf-8")
         report = be_.run_behaviour_eval(index, agent, judge, cases=_case_source_of(args), reps=args.reps,
                                         workers=args.workers, agent_max_tokens=args.agent_max_tokens,
                                         threshold=args.threshold, judge_max_tokens=args.judge_max_tokens,
-                                        packages=packages, resume=resume, calibration_from=cal_from)
+                                        packages=packages, resume=resume, calibration_from=cal_from,
+                                        skill_md_overrides=overrides or None)
     except (be_.BehaviourEvalRefused, oc_.OracleCasesRefused, LLMOpError, OSError,
             json.JSONDecodeError) as exc:
         print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
@@ -1159,6 +1164,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--calibration-from", dest="calibration_from", action="append", default=None,
                        help="earlier report(s) judged by the same judge model; their Tier A calibration is pooled "
                             "(repeatable) to cover judge-only cases")
+    p_run.add_argument("--skill-md-override", dest="skill_md_override", action="append", default=None,
+                       help="NAME=PATH: measure candidate SKILL.md text for one package (C9 stage 1; never published)")
     p_run.add_argument("--write-behaviour", action="store_true",
                        help="write BEHAVIOUR.md per package unless unmeasured")
     p_run.set_defaults(func=_cmd_behaviour_eval)
