@@ -594,6 +594,12 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
         return 96
     be_.write_report(report, Path(args.out))
+    from foundationskills.core import ledger as _ledger  # C4.3: eval-call token rows beside the report
+
+    for row in be_.ledger_rows(report):
+        _ledger.append(Path(args.out).parent, row)
+        if _ledger.shared_dir() is not None:
+            _ledger.append(_ledger.shared_dir(), row)
     if args.write_behaviour and report["verdict"] != "unmeasured":
         for path in be_.write_behaviour(report, index):
             print(path, file=sys.stderr)

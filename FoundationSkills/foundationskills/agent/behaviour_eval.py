@@ -506,7 +506,9 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
         "items_graded": len(texts),
         "ungraded_items": _ungraded_count(case),
         "agent_tokens": int(response.completion_tokens),
+        "agent_prompt_tokens": int(getattr(response, "prompt_tokens", 0) or 0),
         "judge_tokens": 0,
+        "judge_prompt_tokens": 0,
         "error": None,
         "met": [],
         "item_texts": list(texts),
@@ -545,6 +547,7 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
             temperature=0.0, max_tokens=budget, seed=0, json_mode=True)
         row["judge_budget_escalated"] = budget
     row["judge_tokens"] = int(verdict_response.completion_tokens)
+    row["judge_prompt_tokens"] = int(getattr(verdict_response, "prompt_tokens", 0) or 0)
     met, error = _parse_judgement(verdict_response, len(texts))
     if met is None:
         row["error"] = error
@@ -584,6 +587,25 @@ def transferred_calibration(report: Mapping[str, Any], judge: LLMBackend) -> dic
     if not isinstance(cal, Mapping) or not cal.get("calibrated") or str(report.get("judge_model")) != str(judge.model):
         return None
     return {**dict(cal), "source": f"transferred:{report.get('cases', '?')} run {report.get('created', '?')}"}
+
+
+def ledger_rows(report: Mapping[str, Any]) -> list[dict]:
+    """C4.3: one ledger row per eval call with the measured agent+judge tokens (reused calls are not re-billed)."""
+    from foundationskills.core import ledger
+
+    rows = []
+    for call in report.get("calls") or []:
+        if call.get("reused"):
+            continue
+        rows.append(ledger.record(
+            "eval", str(call.get("package")), str(report.get("cases") or ""),
+            verdict="MEASURED" if call.get("measured") else "UNMEASURED", exit_code=None, wall_clock_ms=None,
+            request={"case": call.get("case_id"), "arm": call.get("arm"), "rep": call.get("rep")},
+            tokens_in=int(call.get("agent_prompt_tokens", 0)) + int(call.get("judge_prompt_tokens", 0)),
+            tokens_out=int(call.get("agent_tokens", 0)) + int(call.get("judge_tokens", 0)),
+            extra={"arm": call.get("arm"), "case_id": call.get("case_id"),
+                   "agent_model": report.get("agent_model"), "judge_model": report.get("judge_model")}))
+    return rows
 
 
 def pooled_calibration(reports: Iterable[Mapping[str, Any]], judge: LLMBackend) -> dict | None:

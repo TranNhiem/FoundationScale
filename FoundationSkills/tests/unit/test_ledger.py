@@ -54,3 +54,15 @@ def test_launch_writes_a_row_beside_the_launch_log(tmp_path):
     rows = ledger.read(tmp_path / "out" / ledger.FILENAME)
     assert len(rows) == 1 and rows[0]["kind"] == "launch" and rows[0]["exit_code"] == 0
     assert rows[0]["harness_hash"] and json.dumps(rows[0])
+
+
+def test_eval_ledger_rows_carry_measured_tokens_and_skip_reused_calls():
+    from foundationskills.agent.behaviour_eval import ledger_rows
+
+    report = {"cases": "oracle", "agent_model": "a", "judge_model": "j", "calls": [
+        {"package": "p", "arm": "with_skill", "case_id": "c1", "rep": 0, "measured": True,
+         "agent_prompt_tokens": 100, "judge_prompt_tokens": 50, "agent_tokens": 20, "judge_tokens": 5},
+        {"package": "p", "arm": "with_skill", "case_id": "c2", "rep": 0, "measured": True, "reused": True}]}
+    rows = ledger_rows(report)
+    assert len(rows) == 1 and rows[0]["kind"] == "eval"
+    assert rows[0]["tokens_in"]["value"] == 150 and rows[0]["tokens_out"]["value"] == 25
