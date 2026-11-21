@@ -305,10 +305,14 @@ def _load(path: Path, cache: dict[Path, Module | None]) -> Module | None:
                 dupes.add(stmt.name)
             else:
                 funcs[stmt.name] = stmt
-        elif isinstance(stmt, ast.ImportFrom):
-            if stmt.level == 0 and stmt.module and stmt.module != "__future__":
-                for alias in stmt.names:
-                    imports[alias.asname or alias.name] = stmt.module
+        elif (
+            isinstance(stmt, ast.ImportFrom)
+            and stmt.level == 0
+            and stmt.module
+            and stmt.module != "__future__"
+        ):
+            for alias in stmt.names:
+                imports[alias.asname or alias.name] = stmt.module
     mod = Module(path=path, consts=consts, funcs=funcs, imports=imports)
     cache[path] = mod
     return mod
