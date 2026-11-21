@@ -95,6 +95,7 @@ class CompressionSkill(BaseSkill):
             "text_file": {"type": "string", "minLength": 1},
             "bits": {"type": "integer"},
             "group_size": {"type": "integer"},
+            "ctx": {"type": "integer", "minimum": 128},
             "budget_ppl_ratio": {"type": "number"},
             "results": {"type": "string", "minLength": 1},
             "format": {"type": "string"},
@@ -198,7 +199,8 @@ class CompressionSkill(BaseSkill):
             return checked
         bits, group = int(request.get("bits") or 4), int(request.get("group_size") or 128)
         spec = emit_compress(request["model"], request["text_file"], bits, group, float(request["budget_ppl_ratio"]),
-                             request["results"], python=str(request.get("python") or sys.executable))
+                             request["results"], ctx=int(request.get("ctx") or 2048),
+                             python=str(request.get("python") or sys.executable))
         stamp = make_provenance(self.name, self.version, {"model": spec["compress"]["model"], "bits": bits})
         ref = write_artifact(Artifact("fs_launch_spec", "compress", spec, stamp), ctx.artifacts_dir)
         payload = {"spec": spec, "spec_path": ref.path, "preflight": checked.payload,

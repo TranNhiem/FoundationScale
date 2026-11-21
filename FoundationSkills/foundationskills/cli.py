@@ -401,7 +401,7 @@ def _cmd_compress(args: argparse.Namespace) -> int:
     elif args.compress_cmd == "plan":
         request = {"action": "plan", "model": args.model, "text_file": args.text_file, "bits": args.bits,
                    "group_size": args.group_size, "budget_ppl_ratio": args.budget_ppl_ratio, "results": args.results,
-                   "artifact_root": args.artifact_root, "format": args.format}
+                   "artifact_root": args.artifact_root, "format": args.format, "ctx": args.ctx}
     else:
         request = {"action": "verify", "spec": args.spec}
     if getattr(args, "python", None):
@@ -1024,6 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
         q.set_defaults(func=_cmd_compress)
     p_cp.add_argument("--text-file", dest="text_file", required=True, help="held-out .txt/.jsonl for the ppl ratio")
     p_cp.add_argument("--group-size", dest="group_size", type=int, default=128)
+    p_cp.add_argument("--ctx", type=int, default=2048, help="eval window length (a harness config of the fragility grid)")
     p_cp.add_argument("--budget-ppl-ratio", dest="budget_ppl_ratio", type=float, default=None,
                       help="pre-registered max compressed/base ppl ratio in (1.0, 2.0]; absent -> REFUSED (CP-IN-004)")
     p_cp.add_argument("--results", required=True, help="results JSON the worker writes (must not exist)")

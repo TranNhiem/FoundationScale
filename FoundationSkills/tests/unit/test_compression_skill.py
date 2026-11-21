@@ -147,3 +147,9 @@ def test_verify_refuses_a_missing_spec(tmp_path):
 def test_every_rule_has_a_must_fire_fixture():
     skill = CompressionSkill()
     assert {r.rule_id for r in skill.rules} == set(skill.must_fire_fixtures())
+
+
+def test_plan_passes_the_eval_ctx_through_to_the_worker(stage, tmp_path):
+    res = _run({**stage, "ctx": 1024}, tmp_path)
+    argv = res.payload["spec"]["argv"]
+    assert res.status is Status.PASS and argv[argv.index("--ctx") + 1] == "1024"
