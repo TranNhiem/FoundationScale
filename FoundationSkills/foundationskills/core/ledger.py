@@ -30,16 +30,17 @@ def record(kind: str, skill_name: str, skill_version: str, *, verdict: str | Non
            wall_clock_ms: float | None, request: Any = None, rules_fired: Iterable[str] = (),
            harness_hash: str | None = None, tokens_in: int | None = None, tokens_out: int | None = None,
            gpu_seconds: float | None = None, error_class: str | None = None, run_id: str | None = None,
-           extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One ledger row (schema fskills.ledger/1)."""
+           extra: dict[str, Any] | None = None, null_reasons: dict[str, str] | None = None) -> dict[str, Any]:
+    """One ledger row (schema fskills.ledger/1). ``null_reasons`` overrides the default reason per counter."""
+    why = {"tokens_in": "no_llm_call", "tokens_out": "no_llm_call", "gpu_seconds": "not_launched", **(null_reasons or {})}
     return {
         "schema": SCHEMA, "ts_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="milliseconds"),
         "run_id": run_id or uuid.uuid4().hex, "kind": kind, "skill_name": skill_name, "skill_version": skill_version,
         "input_hash": sha256_json(request)[:16] if request is not None else None,
         "harness_hash": harness_hash, "rules_fired": sorted(set(rules_fired)), "verdict": verdict,
         "exit_code": exit_code, "wall_clock_ms": wall_clock_ms,
-        "tokens_in": _null(tokens_in, "no_llm_call"), "tokens_out": _null(tokens_out, "no_llm_call"),
-        "gpu_seconds": _null(gpu_seconds, "not_launched"), "cost_estimate_usd": _null(None, "no_price_table"),
+        "tokens_in": _null(tokens_in, why["tokens_in"]), "tokens_out": _null(tokens_out, why["tokens_out"]),
+        "gpu_seconds": _null(gpu_seconds, why["gpu_seconds"]), "cost_estimate_usd": _null(None, "no_price_table"),
         "error_class": error_class, **(extra or {}),
     }
 

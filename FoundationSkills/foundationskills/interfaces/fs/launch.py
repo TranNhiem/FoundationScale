@@ -200,7 +200,7 @@ def _ledger_row(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> No
             verdict=verdicts.get(code) if code is not None else "SUBMITTED", exit_code=code,
             wall_clock_ms=round(seconds * 1000, 3), request={"argv": spec.get("argv")},
             harness_hash=manifest_hash(spec["harness_manifest"]) if spec.get("harness_manifest") else None,
-            extra={"job_id": out.get("job_id"), "gpu_seconds_note": "gpu count not measured"}))
+            extra={"job_id": out.get("job_id")}, null_reasons={"gpu_seconds": "gpu_count_unmeasured"}))
     except Exception:  # noqa: BLE001 - never block or alter a confirmed launch
         pass
 

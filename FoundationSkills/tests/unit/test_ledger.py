@@ -53,6 +53,7 @@ def test_launch_writes_a_row_beside_the_launch_log(tmp_path):
     launch(spec, confirm=plan_hash(spec), submit=False)
     rows = ledger.read(tmp_path / "out" / ledger.FILENAME)
     assert len(rows) == 1 and rows[0]["kind"] == "launch" and rows[0]["exit_code"] == 0
+    assert rows[0]["gpu_seconds"]["null_reason"] == "gpu_count_unmeasured"  # it ran; the GPU count is the gap
     assert rows[0]["harness_hash"] and json.dumps(rows[0])
 
 
