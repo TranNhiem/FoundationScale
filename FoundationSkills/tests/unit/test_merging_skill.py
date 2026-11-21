@@ -103,7 +103,11 @@ def test_plan_pass_writes_launch_spec(case):
     (ref,) = res.artifacts
     doc, pay = _doc(ref.path)
     assert _entry(pay, doc) == "fskills-merge" and "fs_launch_spec" in json.dumps(doc)
-    assert not HEX.search(json.dumps(pay)), "the plan payload must never carry the confirm hash"
+    from foundationskills.core.orchestrator import plan_hash
+
+    # the manifest legitimately carries file sha256s (C2); what must never appear is the confirmation hash itself
+    assert plan_hash(pay) not in json.dumps(pay), "the plan payload must never carry the confirm hash"
+    assert "harness_manifest" in pay
     assert "--confirm <hash>" in res.payload["next"]
 
 def test_plan_bfloat16_warns_meho001(case):

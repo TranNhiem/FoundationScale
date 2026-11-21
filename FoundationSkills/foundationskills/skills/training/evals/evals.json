@@ -319,9 +319,9 @@
   {
     "id": "fskills-training-negative-106",
     "question": "Now deploy the trained 27B for online inference on our GB200s with vLLM: tune the KV cache, continuous batching and p99 latency for a chat API.",
-    "expected_skill": null,
+    "expected_skill": "fskills-deployment",
     "should_trigger": false,
-    "ground_truth": "Serving/deployment and inference optimization are not covered by any skill here (training planning, data prep, or checkpoint evals only).",
+    "ground_truth": "A model-serving request: since A4.9 it belongs to fskills-deployment (this label predated that skill).",
     "expected_behavior": [
       "The agent did not load training/SKILL.md or trigger fskills-training",
       "The agent did not load any FoundationSkills skill package",

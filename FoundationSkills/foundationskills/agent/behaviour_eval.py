@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.resources
+import os
 import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
@@ -65,6 +66,7 @@ from pathlib import Path
 from typing import Any
 
 from foundationskills.agent import oracle_cases
+from foundationskills.agent.deterministic_scoring import det_scores, reconcile
 from foundationskills.agent.routing_eval import (
     EXIT_PASS,
     EXIT_RED,
@@ -242,6 +244,8 @@ def run_behaviour_eval(
     packages: Iterable[str] | None = None,
     created: datetime | str | None = None,
     resume: Mapping[str, Any] | None = None,
+    calibration_from: Mapping[str, Any] | Iterable[Mapping[str, Any]] | None = None,
+    skill_md_overrides: Mapping[str, str] | None = None,
 ) -> dict:
     """Run the behaviour evaluation over one case source and return the report dictionary.
 
@@ -254,6 +258,13 @@ def run_behaviour_eval(
     _check_self_grading(agent, judge)
     selected = _select_packages(index, packages)
     skill_mds = {str(entry["package"]): _load_skill_md(entry) for entry in selected}
+    overrides = {}
+    for entry in selected:  # C9 stage 1: measure a candidate SKILL.md text without writing it into the package
+        pick = skill_md_overrides or {}
+        text = pick.get(str(entry["name"])) or pick.get(str(entry["package"]))
+        if text is not None:
+            skill_mds[str(entry["package"])] = text
+            overrides[str(entry["name"])] = hashlib.sha256(text.encode("utf-8")).hexdigest()
     names = sorted({str(entry["name"]) for entry in selected})
     chosen: dict[str, list[dict]] = {}
     views: list[dict] = []
@@ -317,6 +328,11 @@ def run_behaviour_eval(
         return row
 
     calls = list(map_ordered(run_one, jobs, int(workers)))
+    calibration = judge_calibration(calls)
+    if not calibration["calibrated"] and calibration_from:
+        reports = [calibration_from] if isinstance(calibration_from, Mapping) else list(calibration_from)
+        calibration = pooled_calibration(reports, judge) or calibration
+    _gate_judge_only(calls, calibration)
     results = {arm: _score_arm(calls, arm, names) for arm in arm_list}
     verdict, exit_code, reasons = _verdict(results, names, float(threshold))
     return {
@@ -338,6 +354,10 @@ def run_behaviour_eval(
         "results": results,
         "uplift": _uplift(results, names),
         "calls": calls,
+        "judge_calibration": calibration,
+        "skill_md_override": overrides,  # non-empty: this report measured candidate text, never publishable
+        "same_family_judge_waiver": bool(model_family(agent.model) == model_family(judge.model)
+                                         and same_family_waiver()),
         "reused_calls": sum(1 for call in calls if call.get("reused")),
         "verdict": verdict,
         "exit_code": exit_code,
@@ -397,6 +417,23 @@ def _check_self_grading(agent: LLMBackend, judge: LLMBackend) -> None:
     if str(agent.model) == str(judge.model):
         raise BehaviourEvalRefused(
             f"run_behaviour_eval: self-grading refused: agent and judge both run model {agent.model}")
+    if model_family(agent.model) == model_family(judge.model) and not same_family_waiver():  # C3, atlas C9 §4
+        raise BehaviourEvalRefused(
+            f"run_behaviour_eval: same-family judging refused: agent {agent.model} and judge {judge.model} are both "
+            f"the {model_family(agent.model)!r} family; use a judge from another family")
+
+
+def same_family_waiver() -> bool:
+    """Operator's temporary waiver (2026-11-20): same-family judging allowed only with FSKILLS_ALLOW_SAME_FAMILY_JUDGE=1,
+    and every report produced under it records same_family_judge_waiver=True."""
+    return os.environ.get("FSKILLS_ALLOW_SAME_FAMILY_JUDGE") == "1"
+
+
+def model_family(model: Any) -> str:
+    """The model family: the id's leading alphabetic token, lower-cased ("mimo-v2.6-pro" -> "mimo")."""
+    head = str(model).strip().split("/")[-1]
+    token = re.match(r"[A-Za-z]+", head)
+    return token.group(0).lower() if token else head.lower()
 
 
 def _select_packages(index: list[dict], packages: Iterable[str] | None) -> list[dict]:
@@ -478,7 +515,9 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
         "items_graded": len(texts),
         "ungraded_items": _ungraded_count(case),
         "agent_tokens": int(response.completion_tokens),
+        "agent_prompt_tokens": int(getattr(response, "prompt_tokens", 0) or 0),
         "judge_tokens": 0,
+        "judge_prompt_tokens": 0,
         "error": None,
         "met": [],
         "item_texts": list(texts),
@@ -517,14 +556,99 @@ def _record_call(response: LLMResponse, arm: str, entry: dict, case: dict, rep: 
             temperature=0.0, max_tokens=budget, seed=0, json_mode=True)
         row["judge_budget_escalated"] = budget
     row["judge_tokens"] = int(verdict_response.completion_tokens)
+    row["judge_prompt_tokens"] = int(getattr(verdict_response, "prompt_tokens", 0) or 0)
     met, error = _parse_judgement(verdict_response, len(texts))
     if met is None:
         row["error"] = error
         return row
+    det = det_scores(texts, answer, case)
+    reconciled = [reconcile(d, j) for d, j in zip(det, met)]
     row["measured"] = True
-    row["met"] = met
-    row["items_met"] = sum(1 for value in met if value)
+    row["judge_met"] = met  # the judge's raw marks, kept for audit and calibration
+    row["det"] = det  # C3 Tier A: True/False where decidable from the answer, None where only a judge can tell
+    row["unmeasured_items"] = sum(1 for value in reconciled if value is None)  # judge contradicted a decidable check
+    row["met"] = [value is True for value in reconciled]  # an unmeasured item never counts as met
+    row["items_met"] = sum(row["met"])
     return row
+
+
+CALIBRATION_MIN_ITEMS = 50  # operator decision 2026-11-19 (atlas C9 §3 floor)
+CALIBRATION_MIN_AGREEMENT = 0.80
+
+
+def judge_calibration(calls: list[dict]) -> dict:
+    """C3.2 auto-calibration: judge agreement with the decidable Tier A items of this run (operator decision)."""
+    pairs = [(d, j) for call in calls if call.get("measured")
+             for d, j in zip(call.get("det") or [], call.get("judge_met") or []) if d is not None]
+    agree = sum(1 for d, j in pairs if d == j)
+    rate = agree / len(pairs) if pairs else None
+    return {"source": "tier_a_decidable_items", "items": len(pairs), "agreement": rate,
+            "min_items": CALIBRATION_MIN_ITEMS, "min_agreement": CALIBRATION_MIN_AGREEMENT,  # read at call time
+            "calibrated": bool(len(pairs) >= CALIBRATION_MIN_ITEMS
+                               and (rate is None or rate >= CALIBRATION_MIN_AGREEMENT))}
+
+
+def transferred_calibration(report: Mapping[str, Any], judge: LLMBackend) -> dict | None:
+    """The calibration of an earlier report (e.g. the oracle run), if it was calibrated with this exact judge model.
+
+    Routing-behaviour cases have no decidable items, so their judge is calibrated where it can be measured."""
+    cal = report.get("judge_calibration") if isinstance(report, Mapping) else None
+    if not isinstance(cal, Mapping) or not cal.get("calibrated") or str(report.get("judge_model")) != str(judge.model):
+        return None
+    return {**dict(cal), "source": f"transferred:{report.get('cases', '?')} run {report.get('created', '?')}"}
+
+
+def ledger_rows(report: Mapping[str, Any]) -> list[dict]:
+    """C4.3: one ledger row per eval call with the measured agent+judge tokens (reused calls are not re-billed)."""
+    from foundationskills.core import ledger
+
+    rows = []
+    for call in report.get("calls") or []:
+        if call.get("reused"):
+            continue
+        rows.append(ledger.record(
+            "eval", str(call.get("package")), str(report.get("cases") or ""),
+            verdict="MEASURED" if call.get("measured") else "UNMEASURED", exit_code=None, wall_clock_ms=None,
+            request={"case": call.get("case_id"), "arm": call.get("arm"), "rep": call.get("rep")},
+            tokens_in=int(call.get("agent_prompt_tokens", 0)) + int(call.get("judge_prompt_tokens", 0)),
+            tokens_out=int(call.get("agent_tokens", 0)) + int(call.get("judge_tokens", 0)),
+            extra={"arm": call.get("arm"), "case_id": call.get("case_id"),
+                   "agent_model": report.get("agent_model"), "judge_model": report.get("judge_model")}))
+    return rows
+
+
+def pooled_calibration(reports: Iterable[Mapping[str, Any]], judge: LLMBackend) -> dict | None:
+    """Pool the Tier A calibration of several earlier reports judged by this exact judge model (calibration belongs to
+    the judge, not to one run). None when no report matches or the pooled evidence misses the floor."""
+    items = agree = 0.0
+    used = 0
+    for report in reports:
+        cal = report.get("judge_calibration") if isinstance(report, Mapping) else None
+        if (not isinstance(cal, Mapping) or str(report.get("judge_model")) != str(judge.model)
+                or not cal.get("items") or cal.get("agreement") is None):
+            continue
+        items += cal["items"]
+        agree += cal["agreement"] * cal["items"]
+        used += 1
+    if not used:
+        return None
+    rate = agree / items
+    pooled = {"source": f"pooled:{used} reports", "items": int(items), "agreement": rate,
+              "min_items": CALIBRATION_MIN_ITEMS, "min_agreement": CALIBRATION_MIN_AGREEMENT,
+              "calibrated": bool(items >= CALIBRATION_MIN_ITEMS and rate >= CALIBRATION_MIN_AGREEMENT)}
+    return pooled if pooled["calibrated"] else None
+
+
+def _gate_judge_only(calls: list[dict], calibration: dict) -> None:
+    """A case with no decidable item counts only under a calibrated judge; otherwise its call is UNMEASURED."""
+    if calibration["calibrated"]:
+        return
+    for call in calls:
+        det = call.get("det")
+        if call.get("measured") and det is not None and det and all(value is None for value in det):
+            call["measured"] = False
+            call["error"] = (f"judge-only case and the judge is not calibrated "
+                             f"({calibration['items']} decidable items, agreement {calibration['agreement']})")
 
 
 def _parse_judgement(response: LLMResponse, graded: int) -> tuple[list[bool] | None, str | None]:
@@ -785,6 +909,8 @@ def write_behaviour(report: dict, index: list[dict]) -> list[Path]:
     """Write BEHAVIOUR.md (routing) or BEHAVIOUR_ORACLE.md (oracle) per package; refuse unmeasured runs."""
     if report.get("verdict") == "unmeasured":
         raise BehaviourEvalRefused("write_behaviour: an unmeasured run must not become a published behaviour report")
+    if report.get("skill_md_override"):  # C9: candidate text was measured, not the package's SKILL.md
+        raise BehaviourEvalRefused("write_behaviour: a run over candidate SKILL.md text must not be published")
     filename = CASE_FILES[_report_source(report)]
     packages = {str(entry["name"]): str(entry["package"]) for entry in index}
     paths: list[Path] = []

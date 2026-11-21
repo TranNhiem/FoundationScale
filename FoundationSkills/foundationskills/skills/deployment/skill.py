@@ -173,7 +173,8 @@ class DeploymentSkill(BaseSkill):
                           request.get("adapter"), str(request.get("served_name") or "model"),
                           str(request.get("modality") or "text"), int(request.get("max_model_len") or 16384))
         serve = spec["serve"]
-        cell = lookup(str(serve["family"]), serve["mode"], serve["modality"])
+        cell = lookup(str(serve["family"]), serve["mode"], serve["modality"],
+                      quantization=serve.get("quantization"))
         stamp = make_provenance(self.name, self.version, {"model": serve["model"], "adapter": str(serve["adapter"])})
         ref = write_artifact(Artifact("fs_launch_spec", "serve", spec, stamp), ctx.artifacts_dir)
         payload = {"spec": spec, "spec_path": ref.path, "envelope": cell,
@@ -181,7 +182,8 @@ class DeploymentSkill(BaseSkill):
                            f"{ref.path} --confirm <hash> --no-submit &, then fskills serve verify --spec {ref.path}"}
         if cell is None:
             return SkillResult(Status.UNMEASURED, payload, artifacts=(ref,), provenance=stamp, findings=(self.finding(
-                "DP-HO-001", f"{ENGINE} x {serve['family']} x {serve['mode']} x {serve['modality']} was never served "
+                "DP-HO-001", f"{ENGINE} x {serve['family']} x {serve['mode']} x {serve['modality']} x "
+                f"{serve.get('quantization') or 'unquantized'} was never served "
                 "here: the deployment is UNMEASURED", {"target": serve}, "measure it and add a row to "
                 "interfaces/fs/serving_envelope.py, or deploy a measured cell"),))
         return SkillResult(Status.PASS, payload, artifacts=(ref,), provenance=stamp)
@@ -203,7 +205,8 @@ class DeploymentSkill(BaseSkill):
                 smoke[name] = ""
                 smoke[f"{name}.error"] = f"{type(exc).__name__}: {exc}"
         place = self.placement(int(serve["port"]))
-        cell = lookup(str(serve["family"]), serve["mode"], serve["modality"])
+        cell = lookup(str(serve["family"]), serve["mode"], serve["modality"],
+                      quantization=serve.get("quantization"))
         checks = {"served_names_listed": not missing, "smoke_text": all(smoke.get(n) for n in serve["served_names"]),
                   "placement": place}
         findings: list[Finding] = []

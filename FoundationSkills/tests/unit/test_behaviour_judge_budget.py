@@ -11,7 +11,7 @@ from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 
 class Agent:
-    kind, model = "fake-agent", "fake-agent-1"
+    kind, model = "fake-agent", "agentfam-1"
 
     def complete(self, messages, *, temperature=0.0, max_tokens=1024, seed=0, json_mode=False):  # noqa: ARG002
         return LLMResponse("a concrete plan", "stop", 0, 7, False, None)
@@ -20,7 +20,7 @@ class Agent:
 class Judge:
     """Empty (truncated or not) until the budget reaches `answers_at`; records each budget."""
 
-    kind, model = "fake-judge", "fake-judge-1"
+    kind, model = "fake-judge", "judgefam-1"
 
     def __init__(self, answers_at: int, truncated: bool = True) -> None:
         self.answers_at, self.truncated, self.budgets = answers_at, truncated, []
@@ -95,3 +95,15 @@ def test_an_agent_reply_truncated_empty_is_reasked_once_with_a_larger_budget() -
     assert _escalated_budget(empty, 16384, _AGENT_BUDGET_CAP) == 32768
     assert _escalated_budget(empty, 32768, _AGENT_BUDGET_CAP) is None  # already at the cap: stays unmeasured
     assert _escalated_budget(LLMResponse("ok", "stop", 10, 0, False, None), 16384, _AGENT_BUDGET_CAP) is None
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _legacy_calibration_floor(monkeypatch):  # noqa: D401
+    """These tests predate C3 calibration; their fake runs have few decidable items. The real floor is tested in
+    test_behaviour_calibration.py."""
+    from foundationskills.agent import behaviour_eval as _be
+
+    monkeypatch.setattr(_be, "CALIBRATION_MIN_ITEMS", 0)

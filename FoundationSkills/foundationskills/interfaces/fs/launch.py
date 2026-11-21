@@ -21,6 +21,7 @@ an honest null to an invented one.
 from __future__ import annotations
 
 import re
+import time
 import shlex
 import subprocess
 from pathlib import Path
@@ -45,6 +46,7 @@ def launch(
     measurement_only: bool = False,
 ) -> dict[str, Any]:
     """Launch a confirmed fs_launch_spec. Returns {job_id|pid, command, dry_run_rc, returncode}."""
+    started = time.monotonic()
     # FS records code provenance from the launch cwd, and the spec env carries
     # measured launch facts (e.g. GB200 NCCL pins); both apply to every process.
     import os as _os
@@ -53,6 +55,17 @@ def launch(
     if spec.get("cwd"):
         run_kwargs["cwd"] = str(spec["cwd"])
     require_confirmation(spec, confirm)
+    from foundationskills.core.harness import validate_manifest
+    from foundationskills.core.harness_collect import attach
+    from foundationskills.core.provenance import make_provenance
+
+    if "harness_manifest" not in spec:  # an in-memory spec that never passed write_artifact: record the pair now,
+        spec = attach(spec, make_provenance("fskills-launch", "1"))  # honestly marked as not covered by the hash
+        spec["harness_manifest_hash_covered"] = False
+    manifest_problems = validate_manifest(spec["harness_manifest"])
+    if manifest_problems:  # C2: a malformed model-harness identity is refused, never repaired
+        raise LaunchRefused("launch refused: harness_manifest " + "; ".join(manifest_problems[:3]))
+    _write_manifest_sidecar(spec)
 
     if spec.get("executable") is not True:
         # A measurement-only run (e.g. FS RL, which trains but saves nothing) is
@@ -144,7 +157,7 @@ def launch(
             extra["returncode_raw"] = returncode
             returncode = verdict
 
-    return {
+    out = {
         "job_id": job_id,
         "pid": pid,
         "command": command,
@@ -152,6 +165,44 @@ def launch(
         "returncode": returncode,
         **extra,
     }
+    elapsed = time.monotonic() - started
+    _enforce_launch_budget(spec, out, elapsed)
+    _ledger_row(spec, out, elapsed)
+    return out
+
+
+def _enforce_launch_budget(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> None:
+    """C4.2: a declared ``budget.wall_seconds`` overrun turns a successful local run RED (5); unmeasured when submitted."""
+    limit = (spec.get("budget") or {}).get("wall_seconds")
+    if limit is None:
+        return
+    if out.get("returncode") is None:
+        out["budget_breach"] = None
+        out["budget_note"] = "submitted to the scheduler: wall time is not measured here (unmeasured, never a pass)"
+        return
+    out["budget_breach"] = seconds > float(limit)
+    if out["budget_breach"] and out["returncode"] == 0:
+        out["returncode"] = 5
+        out["budget_note"] = f"ran {seconds:.1f} s against a declared budget of {float(limit):.1f} s"
+
+
+def _ledger_row(spec: dict[str, Any], out: dict[str, Any], seconds: float) -> None:
+    """C4: one launch row beside the launch log (best effort). GPU-seconds stay null: the GPU count is not measured."""
+    from foundationskills.core import ledger
+    from foundationskills.core.harness import manifest_hash
+
+    log = _launch_log_path(spec)
+    code = out.get("returncode")
+    verdicts = {0: "PASS", 5: "RED", 95: "UNMEASURED", 96: "REFUSED"}
+    try:
+        ledger.append(log.parent if log else None, ledger.record(
+            "launch", str(spec.get("entry") or "unknown"), str(spec.get("stage_name") or ""),
+            verdict=verdicts.get(code) if code is not None else "SUBMITTED", exit_code=code,
+            wall_clock_ms=round(seconds * 1000, 3), request={"argv": spec.get("argv")},
+            harness_hash=manifest_hash(spec["harness_manifest"]) if spec.get("harness_manifest") else None,
+            extra={"job_id": out.get("job_id")}, null_reasons={"gpu_seconds": "gpu_count_unmeasured"}))
+    except Exception:  # noqa: BLE001 - never block or alter a confirmed launch
+        pass
 
 
 _FS_VERDICT = re.compile(r"^\[fs:train:(done|refuse)\]\s*(.*)$", re.M)
@@ -171,6 +222,24 @@ def fs_verdict(output: str) -> int | None:
     if "PASS" in upper:
         return 0
     return 5
+
+
+def _write_manifest_sidecar(spec: dict[str, Any]) -> None:
+    """C2: ``harness_manifest.json`` + its 16-hex hash beside the launch log, before anything runs (best effort)."""
+    import json as _json
+
+    from foundationskills.core.harness import manifest_hash
+
+    log = _launch_log_path(spec)
+    if log is None:
+        return
+    try:
+        (log.parent / "harness_manifest.json").write_text(
+            _json.dumps(spec["harness_manifest"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (log.parent / "harness_manifest.sha256").write_text(manifest_hash(spec["harness_manifest"]) + "\n",
+                                                           encoding="utf-8")
+    except OSError:
+        pass  # an unwritable run directory never blocks a confirmed launch (same rule as the launch log)
 
 
 def _launch_log_path(spec: dict[str, Any]) -> Path | None:

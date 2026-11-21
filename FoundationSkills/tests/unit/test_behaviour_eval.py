@@ -23,6 +23,7 @@ from foundationskills.agent.behaviour_eval import (
     AGENT_SYSTEM,
     ARMS,
     BehaviourEvalRefused,
+    _check_self_grading,
     render_behaviour_md,
     run_behaviour_eval,
     write_behaviour,
@@ -33,11 +34,13 @@ from foundationskills.skills.data_engine.llm_backend import LLMResponse
 
 CREATED = "2026-10-02T00:00:00Z"
 ANSWER = "Plan: build the loader, write the artefact, validate the schema, refuse a missing column."
+# C3: an oracle answer that actually states what the decidable items require (rule id + status)
+ORACLE_ANSWER = ANSWER + " This is REFUSED (exit 96) under rule DAT-COL; drift is a warning under DAT-DRIFT."
 HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 class FakeAgent:
-    """Deterministic agent with kind="fake-agent", model="fake-agent-1"; records every call."""
+    """Deterministic agent with kind="fake-agent", model="agentfam-1"; records every call."""
 
     def __init__(
         self,
@@ -46,7 +49,7 @@ class FakeAgent:
         stamp: Callable[[str], str] | None = None,
         fail_when: Callable[[dict], str | None] | None = None,
         finish_reason: str = "stop",
-        model: str = "fake-agent-1",
+        model: str = "agentfam-1",
     ) -> None:
         self.kind = "fake-agent"
         self.model = model
@@ -85,14 +88,14 @@ class FakeAgent:
 
 
 class FakeJudge:
-    """Deterministic judge with kind="fake-judge", model="fake-judge-1"; scripted payloads."""
+    """Deterministic judge with kind="fake-judge", model="judgefam-1"; scripted payloads."""
 
     def __init__(
         self,
         payload: Callable[[str, str], object] | None = None,
         *,
         fail_when: Callable[[dict], str | None] | None = None,
-        model: str = "fake-judge-1",
+        model: str = "judgefam-1",
     ) -> None:
         self.kind = "fake-judge"
         self.model = model
@@ -269,7 +272,7 @@ def test_scoring_and_uplift_arithmetic(index: list[dict]) -> None:
     )
     assert report["schema"] == "fskills.behaviour_eval/1"
     assert report["created"] == CREATED and report["gated_arm"] == "with_skill"
-    assert report["agent_model"] == "fake-agent-1" and report["judge_model"] == "fake-judge-1"
+    assert report["agent_model"] == "agentfam-1" and report["judge_model"] == "judgefam-1"
     assert report["backend_kind"] == {"agent": "fake-agent", "judge": "fake-judge"}
     loaded, blind = report["results"]["with_skill"], report["results"]["without_skill"]
     assert (loaded["calls"], loaded["measured"], loaded["unmeasured"]) == (4, 4, 0)
@@ -398,7 +401,7 @@ def test_render_behaviour_md_header_line(index: list[dict], tmp_path: Path) -> N
                  f"{entry['skill_md_sha256'][:12]} and eval cases {entry['evals_sha256'][:12]}; do not edit by hand.")
     assert md.startswith(f"# Behaviour evaluation: {entry['name']}\n")
     assert generated in md
-    assert "- Agent model: fake-agent-1" in md and "- Judge model: fake-judge-1" in md
+    assert "- Agent model: agentfam-1" in md and "- Judge model: judgefam-1" in md
     assert "| arm | item pass | case pass | measured |" in md
     assert "process-only items ungraded" in md
     assert "be-1" in md and f"{entry['name']}" in md
@@ -577,7 +580,7 @@ def test_oracle_case_source_grades_every_behaviour_json_case(
 ) -> None:
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
     entry = plain_entry(index)
-    agent, judge = FakeAgent(), FakeJudge()
+    agent, judge = FakeAgent(answer=ORACLE_ANSWER), FakeJudge()
     report = run_behaviour_eval(
         [entry], agent, judge, cases="oracle", arms=("with_skill",), reps=1, workers=1, created=CREATED,
     )
@@ -599,7 +602,7 @@ def test_oracle_report_renders_behaviour_oracle_md_with_a_per_severity_table(
     monkeypatch.setattr(behaviour_eval, "load_cases", load_fake_oracle_cases)
     entry = plain_entry(index)
     report = run_behaviour_eval(
-        [entry], FakeAgent(), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
+        [entry], FakeAgent(answer=ORACLE_ANSWER), FakeJudge(), cases="oracle", arms=("with_skill",), reps=1, workers=1,
         threshold=0.7, created=CREATED,
     )
     md = render_behaviour_md(report, str(entry["name"]))
@@ -691,3 +694,40 @@ def test_resume_refuses_a_report_from_another_run(index: list[dict]) -> None:
     with pytest.raises(BehaviourEvalRefused):
         run_behaviour_eval([entry], FakeAgent(), FakeJudge(), arms=("with_skill",), reps=2, workers=1,
                            created=CREATED, resume=first)
+
+
+def test_same_family_judging_is_refused_and_family_parsing() -> None:
+    from foundationskills.agent.behaviour_eval import model_family
+
+    assert model_family("mimo-v2.6-flash") == model_family("mimo-v2.6-pro") == "mimo"
+    assert model_family("glm-5.3-flash") == "glm" and model_family("org/Qwen3.5-4B") == "qwen"
+    with pytest.raises(BehaviourEvalRefused, match="same-family"):
+        _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))
+
+
+@pytest.fixture(autouse=True)
+def _legacy_calibration_floor(monkeypatch):
+    """These tests predate C3 calibration; their fake runs have few decidable items. The real floor is tested in
+    test_behaviour_calibration.py."""
+    from foundationskills.agent import behaviour_eval as _be
+
+    monkeypatch.setattr(_be, "CALIBRATION_MIN_ITEMS", 0)
+
+
+def test_same_family_waiver_is_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("FSKILLS_ALLOW_SAME_FAMILY_JUDGE", "1")
+    _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))  # allowed, recorded
+    monkeypatch.setenv("FSKILLS_ALLOW_SAME_FAMILY_JUDGE", "0")
+    with pytest.raises(BehaviourEvalRefused, match="same-family"):
+        _check_self_grading(FakeAgent(model="mimo-v2.6-flash"), FakeJudge(model="mimo-v2.6-pro"))
+
+
+def test_candidate_skill_md_override_reaches_the_agent_and_is_recorded(index: list[dict], skill_md: str) -> None:
+    entry = make_entry(index, [make_case("be-1", ["writes output/ladder.parquet"])])
+    agent = FakeAgent()
+    candidate = "CANDIDATE SKILL TEXT for C9 stage 1"
+    report = run_behaviour_eval([entry], agent, FakeJudge(), arms=ARMS, reps=1, workers=1, created=CREATED,
+                                skill_md_overrides={entry["name"]: candidate})
+    assert any(candidate in call["system"] for call in agent.calls)
+    assert not any(skill_md in call["system"] for call in agent.calls)
+    assert list(report["skill_md_override"]) == [entry["name"]]

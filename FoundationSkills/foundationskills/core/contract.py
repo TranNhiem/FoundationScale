@@ -218,7 +218,9 @@ class BaseSkill(abc.ABC):
     invocation: str = "model"
     invokes: tuple[str, ...] = ()
 
-    _CORE_RULES = {"CORE-EXC", "CORE-OUT-SCHEMA", "CORE-UNDECLARED-RULE", "CORE-HOST-001"}
+    _CORE_RULES = {"CORE-EXC", "CORE-OUT-SCHEMA", "CORE-UNDECLARED-RULE", "CORE-HOST-001", "CORE-BUDGET"}
+    # C4.2: declared hard budgets per call, e.g. {"wall_clock_ms": 60000}; a measured breach is never PASS
+    budgets: dict[str, float] = {}
     # A1.5 host portability: a skill whose work needs FoundationScale sets this (or overrides
     # fs_required) so that on a host without it, execute() REFUSES with the install step instead of
     # producing a plan nothing can run.
@@ -263,6 +265,46 @@ class BaseSkill(abc.ABC):
         return SkillResult(status=Status.REFUSED, payload={}, findings=tuple(findings), refusal=reason)
 
     def execute(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
+        """Run the template (``_execute_core``) and append one C4 ledger row; the row never changes the result."""
+        import time
+
+        from foundationskills.core import ledger
+
+        start = time.perf_counter()
+        result = self._execute_core(request, ctx)
+        wall_ms = round((time.perf_counter() - start) * 1000, 3)
+        result = self._enforce_budget(result, wall_ms)
+        try:
+            ledger.append_skill_row(ctx.workdir, result.status is Status.REFUSED, ledger.record(
+                "skill", self.name, self.version, verdict=result.status.value, exit_code=result.exit_code,
+                wall_clock_ms=wall_ms, request=request,
+                rules_fired=[f.rule_id for f in result.findings],
+                error_class=next((f.evidence.get("exception_type") for f in result.findings
+                                  if f.rule_id == "CORE-EXC"), None)))
+        except Exception:  # noqa: BLE001 - the ledger is best effort; a broken row never masks a verdict
+            pass
+        try:  # C6: the experience bank records the measured outcome; it is read only as advice, never as a verdict
+            from foundationskills.core import experience
+
+            experience.record(ctx.workdir, result.status is Status.REFUSED, experience.outcome_row(
+                self.name, self.version, request, result.status.value, [f.rule_id for f in result.findings]))
+        except Exception:  # noqa: BLE001
+            pass
+        return result
+
+    def _enforce_budget(self, result: SkillResult, wall_ms: float) -> SkillResult:
+        """C4.2: a declared budget breached by a measured counter adds CORE-BUDGET; a breached PASS becomes RED."""
+        limit = (self.budgets or {}).get("wall_clock_ms")
+        if limit is None or wall_ms <= float(limit):
+            return result
+        finding = Finding("CORE-BUDGET", Severity.BLOCK,
+                          f"{self.name} took {wall_ms:.0f} ms against a declared budget of {float(limit):.0f} ms",
+                          {"wall_clock_ms": wall_ms, "budget_wall_clock_ms": float(limit)},
+                          "find what made the call slow, or re-declare the budget with evidence")
+        status = Status.RED if result.status is Status.PASS else result.status
+        return replace(result, status=status, findings=(*result.findings, finding))
+
+    def _execute_core(self, request: dict[str, Any], ctx: SkillContext) -> SkillResult:
         """Template: schema, input checks, run, output schema, handoff, rule declaration audit."""
         try:
             assert_valid(request, _accepting_orchestrator_inputs(self.input_schema), f"{self.name} request")

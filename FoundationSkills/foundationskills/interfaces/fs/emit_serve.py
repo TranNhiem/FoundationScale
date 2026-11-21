@@ -32,6 +32,17 @@ def model_family(model: Path) -> str | None:
         return None
 
 
+def model_quantization(model: Path) -> str | None:
+    """``quant_method:format`` from config.json's quantization_config; None for an unquantized checkpoint."""
+    try:
+        q = json.loads((model / "config.json").read_text(encoding="utf-8")).get("quantization_config")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(q, dict):
+        return None
+    return f"{q.get('quant_method') or 'unknown'}:{q.get('format') or 'unknown'}"
+
+
 def port_free(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
@@ -84,6 +95,6 @@ def emit_serve(model: str, gpu: str, port: int = 18841, adapter: str | None = No
         "stage_name": "serve", "entry": "fskills-serve", "argv": argv, "env": {}, "sbatch": None, "dry_run_argv": None,
         "expected_outputs": [], "executable": not gaps, "missing": "; ".join(gaps) or None, "cwd": None,
         "serve": {"model": str(m), "adapter": str(a) if a else None, "family": model_family(m), "mode": mode,
-                  "modality": modality, "gpu": gpu, "port": port, "endpoint": f"http://127.0.0.1:{port}",
+                  "modality": modality, "quantization": model_quantization(m), "gpu": gpu, "port": port, "endpoint": f"http://127.0.0.1:{port}",
                   "served_names": [served_name] + ([lora_name] if lora_name else []), "container": CONTAINER},
     }

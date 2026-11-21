@@ -245,3 +245,16 @@ def test_parse_frontmatter_ok_and_refusals():
     ):
         with pytest.raises(VettingRefused):
             scan.parse_frontmatter(bad)
+
+
+def test_vg09_flags_a_body_tool_outside_the_declared_scope():
+    from foundationskills.vetting.scan import body_tool_mentions, check_allowed_tools
+
+    body = "Use the Read tool to load the file, then run `Bash(git log)` to inspect history."
+    assert body_tool_mentions(body) == ["Bash", "Read"]
+    entry = {"allowed_tools_need": ["Read"]}
+    res = check_allowed_tools(entry, {"allowed-tools": "Read"}, body)
+    assert res.status == "RED" and "Bash" in res.note
+    ok = check_allowed_tools({"allowed_tools_need": ["Read", "Bash"]}, {"allowed-tools": "Read Bash"}, body)
+    assert ok.status == "PASS"
+    assert check_allowed_tools(entry, {}, body).status == "PASS"  # no declaration: nothing claimed (unchanged)

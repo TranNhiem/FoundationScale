@@ -357,9 +357,9 @@
   {
     "id": "fskills-auto-research-negative-110",
     "question": "Serve my fine-tuned gemma4-4b behind an OpenAI-compatible endpoint and load-balance it across the inference fleet.",
-    "expected_skill": null,
+    "expected_skill": "fskills-deployment",
     "should_trigger": false,
-    "ground_truth": "Inference serving and fleet operations are excluded from the FoundationSkills packages (the training skill explicitly rules them out) and must not trigger anything.",
+    "ground_truth": "A model-serving request: since A4.9 it belongs to fskills-deployment (this label predated that skill).",
     "expected_behavior": [
       "The agent did not load fskills-auto-research/SKILL.md to perform this request",
       "No skill is triggered",

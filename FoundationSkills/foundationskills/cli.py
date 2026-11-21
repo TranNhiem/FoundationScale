@@ -215,6 +215,184 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return _execute("merging", request, args.workdir or "fskills-merge")
 
 
+def _cmd_self_improve(args: argparse.Namespace) -> int:
+    """C9: governed SKILL.md self-improvement.
+
+    propose writes drafts only; hash prints the admission hash for the operator; admit writes SKILL.md on PASS only.
+    """
+    import inspect
+
+    from foundationskills.agent import admit as ad, diagnose, edit_search, prune_verify
+
+    _ensure_skills()
+    skill = get_skill(args.skill)
+    skill_md = Path(inspect.getfile(type(skill))).with_name("SKILL.md")
+    old = skill_md.read_text(encoding="utf-8")
+    if args.si_cmd == "propose":
+        from foundationskills.skills.data_engine.llm_backend import make_backend
+
+        hyps = [h for path in args.report
+                for h in diagnose.hypotheses(json.loads(Path(path).read_text(encoding="utf-8")))]
+        if not hyps:
+            print(json.dumps({"status": "UNMEASURED", "reason": "no repeated with_skill misses in the given reports"}))
+            return 95
+        cfg: dict[str, Any] = {"kind": "openai_compatible", "base_url": args.base_url, "model": args.model,
+                               "api_key_env": args.api_key_env}
+        backend = make_backend(cfg, "self_improve")
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        kept = []
+        for i, cand in enumerate(edit_search.propose(backend, old, hyps, n=args.n)):
+            problems = prune_verify.stage0(old, cand, skill, build_parser())
+            target = out / f"{args.skill}.candidate{i}.md"
+            if not problems:
+                target.write_text(cand, encoding="utf-8")
+                kept.append(str(target))
+        print(json.dumps({"status": "PASS" if kept else "UNMEASURED", "hypotheses": len(hyps), "drafts": kept,
+                          "next": "measure each draft, then `fskills self-improve hash` and `admit`"}, indent=2))
+        return 0 if kept else 95
+    if args.si_cmd == "evidence":
+        from foundationskills.agent.self_improve_evidence import build_evidence
+
+        load = lambda path: json.loads(Path(path).read_text(encoding="utf-8"))  # noqa: E731
+        sides = {side: {"routing_behaviour": load(getattr(args, f"{side}_behaviour")),
+                        "oracle": load(getattr(args, f"{side}_oracle")), "routing": load(getattr(args, f"{side}_routing"))}
+                 for side in ("inc", "cand")}
+        ev = build_evidence(args.package, sides["inc"], sides["cand"])
+        Path(args.out).write_text(json.dumps(ev, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(ev, indent=2))
+        return 0 if ev["measured"] else 95
+    new = Path(args.candidate).read_text(encoding="utf-8")
+    evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+    if args.si_cmd == "hash":
+        print(ad.admission_hash(ad.admission_payload(args.skill, old, new, evidence)))
+        return 0
+    result = ad.admit(args.skill, old, new, evidence, args.confirm)
+    if result["verdict"] == "PASS":
+        skill_md.write_text(new, encoding="utf-8")  # the only writer: after the conjunctive gate and a typed-back hash
+        result["written"] = str(skill_md)
+    print(json.dumps(result, indent=2))
+    return {"PASS": 0, "RED": 5, "UNMEASURED": 95, "REFUSED": 96}[result["verdict"]]
+
+
+def _cmd_lifecycle(args: argparse.Namespace) -> int:
+    """C10.2: propose lifecycle changes from a ledger (never applied), or record an operator-approved change."""
+    from foundationskills.core import ledger, lifecycle
+
+    if args.lifecycle_cmd == "approve":
+        try:
+            entry = lifecycle.approve(args.state, args.skill, args.to, args.approver, {"note": args.note or ""})
+        except ValueError as exc:
+            print(f"[fskills:lifecycle:refuse] {exc}", file=sys.stderr)
+            return 96
+        print(json.dumps({args.skill: entry}, indent=2))
+        return 0
+    rows = ledger.read(args.ledger) if Path(args.ledger).is_file() else []
+    if not rows:
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no ledger rows at {args.ledger}"}))
+        return 95
+    names = sorted({r.get("skill_name") for r in rows if r.get("kind") == "skill" and r.get("skill_name")})
+    found = lifecycle.proposals(rows, lifecycle.load_state(args.state), names)
+    print(json.dumps({"status": "PASS", "proposals": found, "note": "proposals only; approve each with "
+                      "`fskills lifecycle approve`"}, indent=2))
+    return 0
+
+
+def _cmd_triage(args: argparse.Namespace) -> int:
+    """C8: SkillTriage over behaviour reports (run) and operator approval of proposed regression cases (approve)."""
+    from foundationskills.agent import skill_triage as st
+
+    if args.triage_cmd == "approve":
+        try:
+            row = st.approve(args.proposals, args.id, args.approver)
+        except (KeyError, ValueError) as exc:
+            print(f"[fskills:triage:refuse] {exc}", file=sys.stderr)
+            return 96
+        print(json.dumps(row, indent=2))
+        return 0
+    findings, totals = [], {"pairs": 0}
+    for path in args.report:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+        result = st.triage(report)
+        totals["pairs"] += result["pairs"]
+        findings += result["findings"]
+        if args.proposals:
+            st.propose(result["findings"], args.proposals, report)
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding["direction"]] = counts.get(finding["direction"], 0) + 1
+    print(json.dumps({"status": "PASS" if totals["pairs"] else "UNMEASURED", **totals, "counts": counts}, indent=2))
+    return 0 if totals["pairs"] else 95
+
+
+def _cmd_experience(args: argparse.Namespace) -> int:
+    """C6: promoted lessons (>= 3 independent measured outcomes) from an experience bank. Advisory only."""
+    from foundationskills.core import experience
+
+    path = experience.bank_path(args.workdir)
+    rows = experience.read(path) if path else []
+    if not rows:
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no experience recorded at {path}"}))
+        return 95
+    found = experience.lessons(rows, skill=args.skill)
+    print(json.dumps({"status": "PASS", "rows": len(rows), "lessons": found, "note": "advisory only"}, indent=2))
+    return 0
+
+
+def _cmd_ledger(args: argparse.Namespace) -> int:
+    """C4: summarize a run's ledger.jsonl per skill (read-only). 95 when there is no ledger to read."""
+    from foundationskills.core import ledger
+
+    path = Path(args.workdir) / ledger.FILENAME
+    if not path.is_file():
+        print(json.dumps({"status": "UNMEASURED", "reason": f"no ledger at {path}"}))
+        return 95
+    rows = [r for r in ledger.read(path) if not args.skill or r.get("skill_name") == args.skill]
+    print(json.dumps({"status": "PASS", "rows": len(rows), "skills": ledger.summarize(rows)}, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_change_contract(args: argparse.Namespace) -> int:
+    """C2: a diff touching protected code must carry a Change-Contract block; exit 5 (RED) when it does not."""
+    from foundationskills.core.change_contract import check, needs_contract
+
+    message = Path(args.message_file).read_text(encoding="utf-8")
+    paths = [line.strip() for line in Path(args.paths_file).read_text(encoding="utf-8").splitlines() if line.strip()]
+    problems = check(message, paths)
+    print(json.dumps({"status": "RED" if problems else "PASS", "needs_contract": needs_contract(paths),
+                      "problems": problems}, indent=2))
+    return 5 if problems else 0
+
+
+def _cmd_skillmd(args: argparse.Namespace) -> int:
+    """C1: generated SKILL.md usage blocks. check exits 5 (RED) on any missing/stale block; build rewrites one skill."""
+    import inspect
+
+    from foundationskills.agent import skillmd
+    from foundationskills.core.registry import REGISTRY
+
+    _ensure_skills()
+    parser = build_parser()
+    names = [args.skill] if args.skill else sorted(REGISTRY.names())
+    problems: dict[str, list[str]] = {}
+    for name in names:
+        skill = get_skill(name)
+        path = Path(inspect.getfile(type(skill))).with_name("SKILL.md")
+        if not path.is_file() or skillmd.cli_path(skill) is None:
+            continue  # no SKILL.md, or no CLI surface to document
+        text = path.read_text(encoding="utf-8")
+        if args.skillmd_cmd == "build":
+            block = skillmd.render_block(skillmd.usage_model(skill, parser))
+            path.write_text(skillmd.replace_block(text, block), encoding="utf-8")
+            print(f"{name}: wrote generated usage block ({skillmd.block_sha256(block)[:12]})")
+        elif found := skillmd.check(skill, parser, text):
+            problems[name] = found
+    if args.skillmd_cmd == "check":
+        print(json.dumps({"status": "RED" if problems else "PASS", "problems": problems}, indent=2, sort_keys=True))
+        return 5 if problems else 0
+    return 0
+
+
 def _cmd_compress(args: argparse.Namespace) -> int:
     """A4.8: preflight check, plan an RTN weight-only measurement (emits a launch spec; never launches), or verify it."""
     if args.compress_cmd == "check":
@@ -223,7 +401,7 @@ def _cmd_compress(args: argparse.Namespace) -> int:
     elif args.compress_cmd == "plan":
         request = {"action": "plan", "model": args.model, "text_file": args.text_file, "bits": args.bits,
                    "group_size": args.group_size, "budget_ppl_ratio": args.budget_ppl_ratio, "results": args.results,
-                   "artifact_root": args.artifact_root, "format": args.format}
+                   "artifact_root": args.artifact_root, "format": args.format, "ctx": args.ctx}
     else:
         request = {"action": "verify", "spec": args.spec}
     if getattr(args, "python", None):
@@ -529,15 +707,28 @@ def _cmd_behaviour_eval(args: argparse.Namespace) -> int:
         if args.packages:
             packages = tuple(part.strip() for part in args.packages.split(",") if part.strip())
         resume = json.loads(Path(args.resume).read_text(encoding="utf-8")) if args.resume else None
+        cal_from = [json.loads(Path(path).read_text(encoding="utf-8"))
+                    for path in (getattr(args, "calibration_from", None) or [])] or None
+        overrides = {}
+        for item in getattr(args, "skill_md_override", None) or []:
+            name, _, path = item.partition("=")
+            overrides[name] = Path(path).read_text(encoding="utf-8")
         report = be_.run_behaviour_eval(index, agent, judge, cases=_case_source_of(args), reps=args.reps,
                                         workers=args.workers, agent_max_tokens=args.agent_max_tokens,
                                         threshold=args.threshold, judge_max_tokens=args.judge_max_tokens,
-                                        packages=packages, resume=resume)
+                                        packages=packages, resume=resume, calibration_from=cal_from,
+                                        skill_md_overrides=overrides or None)
     except (be_.BehaviourEvalRefused, oc_.OracleCasesRefused, LLMOpError, OSError,
             json.JSONDecodeError) as exc:
         print(f"[fskills:behaviour-eval:refuse] {exc}", file=sys.stderr)
         return 96
     be_.write_report(report, Path(args.out))
+    from foundationskills.core import ledger as _ledger  # C4.3: eval-call token rows beside the report
+
+    for row in be_.ledger_rows(report):
+        _ledger.append(Path(args.out).parent, row)
+        if _ledger.shared_dir() is not None:
+            _ledger.append(_ledger.shared_dir(), row)
     if args.write_behaviour and report["verdict"] != "unmeasured":
         for path in be_.write_behaviour(report, index):
             print(path, file=sys.stderr)
@@ -737,6 +928,89 @@ def build_parser() -> argparse.ArgumentParser:
     p_mv.add_argument("--workdir", default=None)
     p_mv.set_defaults(func=_cmd_merge)
 
+    p = sub.add_parser("self-improve", help="C9 governed SKILL.md self-improvement: propose drafts | hash | admit")
+    si_sub = p.add_subparsers(dest="si_cmd", required=True)
+    q = si_sub.add_parser("propose", help="mine misses, generate prose-only drafts, stage-0 prune (writes drafts only)")
+    q.add_argument("--skill", required=True)
+    q.add_argument("--report", action="append", required=True, help="behaviour-eval report(s) of this skill")
+    q.add_argument("--out", required=True, help="drafts directory (never the skill package)")
+    q.add_argument("--n", type=int, default=3)
+    q.add_argument("--base-url", dest="base_url", required=True)
+    q.add_argument("--model", required=True)
+    q.add_argument("--api-key-env", dest="api_key_env", default=None)
+    q.set_defaults(func=_cmd_self_improve)
+    q = si_sub.add_parser("evidence", help="build admission evidence from measured incumbent/candidate reports")
+    q.add_argument("--skill", required=True)
+    q.add_argument("--package", required=True, help="routing package name, e.g. fskills-compression")
+    for side in ("inc", "cand"):
+        for kind in ("behaviour", "oracle", "routing"):
+            q.add_argument(f"--{side}-{kind}", dest=f"{side}_{kind}", required=True)
+    q.add_argument("--out", required=True)
+    q.set_defaults(func=_cmd_self_improve)
+    for verb in ("hash", "admit"):
+        q = si_sub.add_parser(verb)
+        q.add_argument("--skill", required=True)
+        q.add_argument("--candidate", required=True)
+        q.add_argument("--evidence", required=True, help="JSON: measured, target, incumbent{...}, candidate{...}")
+        if verb == "admit":
+            q.add_argument("--confirm", default=None, help="the admission hash you read from `self-improve hash`")
+        q.set_defaults(func=_cmd_self_improve)
+
+    p = sub.add_parser("lifecycle", help="C10.2 skill lifecycle: propose from the ledger; operator approves each change")
+    lc_sub = p.add_subparsers(dest="lifecycle_cmd", required=True)
+    q = lc_sub.add_parser("propose")
+    q.add_argument("--ledger", required=True, help="a ledger.jsonl (e.g. FSKILLS_LEDGER_DIR/ledger.jsonl)")
+    q.add_argument("--state", required=True, help="the lifecycle state file (FSKILLS_LIFECYCLE_FILE)")
+    q.set_defaults(func=_cmd_lifecycle)
+    q = lc_sub.add_parser("approve")
+    q.add_argument("--state", required=True)
+    q.add_argument("--skill", required=True)
+    q.add_argument("--to", required=True, help="active | downweighted | quarantined | retired")
+    q.add_argument("--approver", required=True)
+    q.add_argument("--note", default=None)
+    q.set_defaults(func=_cmd_lifecycle)
+
+    p = sub.add_parser("triage", help="C8 SkillTriage: attribute failures/cost to skills; approve proposed regressions")
+    tr_sub = p.add_subparsers(dest="triage_cmd", required=True)
+    q = tr_sub.add_parser("run")
+    q.add_argument("--report", action="append", required=True, help="behaviour-eval report(s) with both arms")
+    q.add_argument("--proposals", default=None, help="JSONL file to append proposed regression cases to")
+    q.set_defaults(func=_cmd_triage)
+    q = tr_sub.add_parser("approve")
+    q.add_argument("--proposals", required=True)
+    q.add_argument("--id", required=True)
+    q.add_argument("--approver", required=True, help="who approves (recorded)")
+    q.set_defaults(func=_cmd_triage)
+
+    p = sub.add_parser("experience", help="C6 experience bank: promoted lessons from measured outcomes (advisory)")
+    ex_sub = p.add_subparsers(dest="experience_cmd", required=True)
+    q = ex_sub.add_parser("lessons")
+    q.add_argument("--workdir", default=None, help="skill workdir (ignored when FSKILLS_EXPERIENCE_DIR is set)")
+    q.add_argument("--skill", default=None)
+    q.set_defaults(func=_cmd_experience)
+
+    p = sub.add_parser("ledger", help="C4 cost/trace ledger: summarize a run directory's ledger.jsonl")
+    ld_sub = p.add_subparsers(dest="ledger_cmd", required=True)
+    q = ld_sub.add_parser("summarize")
+    q.add_argument("--workdir", required=True, help="directory holding ledger.jsonl (a skill workdir or run dir)")
+    q.add_argument("--skill", default=None)
+    q.set_defaults(func=_cmd_ledger)
+
+    p = sub.add_parser("change-contract", help="C2: check a commit message carries a Change-Contract for protected paths")
+    cc_sub = p.add_subparsers(dest="cc_cmd", required=True)
+    q = cc_sub.add_parser("check")
+    q.add_argument("--message-file", dest="message_file", required=True, help="the commit message")
+    q.add_argument("--paths-file", dest="paths_file", required=True, help="changed paths, one per line (git diff --name-only)")
+    q.set_defaults(func=_cmd_change_contract)
+
+    p = sub.add_parser("skillmd", help="generated SKILL.md usage blocks (C1): build one skill | check (5 on drift)")
+    skillmd_sub = p.add_subparsers(dest="skillmd_cmd", required=True)
+    for verb in ("build", "check"):
+        q = skillmd_sub.add_parser(verb)
+        q.add_argument("--skill", required=(verb == "build"), default=None,
+                       help="registered skill name (build: required, never rewrites every skill at once)")
+        q.set_defaults(func=_cmd_skillmd)
+
     p = sub.add_parser("compress", help="compression (A4.8 v1, RTN weight-only): check | plan -> fskills launch --confirm -> verify")
     compress_sub = p.add_subparsers(dest="compress_cmd", required=True)
     p_cc = compress_sub.add_parser("check", help="run the vendored preflight.py; exit 0/95/96")
@@ -750,6 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
         q.set_defaults(func=_cmd_compress)
     p_cp.add_argument("--text-file", dest="text_file", required=True, help="held-out .txt/.jsonl for the ppl ratio")
     p_cp.add_argument("--group-size", dest="group_size", type=int, default=128)
+    p_cp.add_argument("--ctx", type=int, default=2048, help="eval window length (a harness config of the fragility grid)")
     p_cp.add_argument("--budget-ppl-ratio", dest="budget_ppl_ratio", type=float, default=None,
                       help="pre-registered max compressed/base ppl ratio in (1.0, 2.0]; absent -> REFUSED (CP-IN-004)")
     p_cp.add_argument("--results", required=True, help="results JSON the worker writes (must not exist)")
@@ -906,6 +1181,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--out", required=True)
     p_run.add_argument("--resume", default=None,
                        help="earlier report of the same run: reuse its measured calls, re-ask only the rest")
+    p_run.add_argument("--calibration-from", dest="calibration_from", action="append", default=None,
+                       help="earlier report(s) judged by the same judge model; their Tier A calibration is pooled "
+                            "(repeatable) to cover judge-only cases")
+    p_run.add_argument("--skill-md-override", dest="skill_md_override", action="append", default=None,
+                       help="NAME=PATH: measure candidate SKILL.md text for one package (C9 stage 1; never published)")
     p_run.add_argument("--write-behaviour", action="store_true",
                        help="write BEHAVIOUR.md per package unless unmeasured")
     p_run.set_defaults(func=_cmd_behaviour_eval)
