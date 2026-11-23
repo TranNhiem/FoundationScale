@@ -122,3 +122,12 @@ def test_config_key_defaults_to_none_and_refuses_non_positive() -> None:
     assert build(publish_deadline_s=10800).rollout.publish_deadline_s == 10800
     with pytest.raises(AgenticConfigRefusal, match="publish_deadline_s"):
         build(publish_deadline_s=0)
+
+
+def test_deadline_exit_ends_the_process_through_os_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real seam (not the monkeypatched one above): it must call os._exit with the code,
+    which skips every finally/atexit a hung thread could block on."""
+    codes: list[int] = []
+    monkeypatch.setattr(rh.os, "_exit", codes.append)
+    rh._deadline_exit(5)
+    assert codes == [5]
