@@ -867,7 +867,9 @@ class RolloutHost:
                 try:
                     faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
                 except (OSError, ValueError, AttributeError):
-                    faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
+                    fallback = sys.__stderr__  # the process's original stderr; None if closed
+                    if fallback is not None:
+                        faulthandler.dump_traceback(file=fallback, all_threads=True)
                 sys.stderr.flush()
             finally:
                 _deadline_exit(5)
