@@ -416,6 +416,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         recovery_rerun=config.rollout.recovery_rerun,
         dynamic_sampling=config.rollout.dynamic_sampling,
         max_refill_rounds=config.rollout.max_refill_rounds,
+        publish_deadline_s=config.rollout.publish_deadline_s,
         declared_max_lag=config.engine.max_policy_lag,
         servable_base_model_dir=(
             config.policy.model_path if config.policy.servable_publish else None

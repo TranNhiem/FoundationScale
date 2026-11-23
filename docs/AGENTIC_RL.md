@@ -103,6 +103,14 @@ unbiased task sample), and one `[agentic-rl:dynamic-sampling]` line reports
 rounds and groups kept/dropped. With no informative group anywhere the step
 keeps round 0 and is reported UNMEASURED as before.
 
+**Publish deadline.** `rollout.publish_deadline_s` (default `null`, off) puts
+a wall-clock deadline on one whole `RolloutHost.publish` -- save, serving
+completion, push and any push recovery. On expiry the run prints a
+`[fs:agentic-rl:red]` line, dumps every thread's stack and exits RED (5). Two
+GB200 math runs each hung about two days between writing the checkpoint shards
+and the push (no reload ever reached the engine), holding four GPUs that no
+recovery path could see; the example configs set 10800 s.
+
 **Per-session policy versions.** With a real `EngineFleet`, `RolloutHost`
 keeps a per-server version ledger: every server starts at
 `fleet_launch_version` (0, the `policy.model_path` weights `cli.py` launches),

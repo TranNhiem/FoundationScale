@@ -17,8 +17,11 @@ except ``rollout_async`` and ``_run_episode`` themselves.
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import json
+import os
 import sys
+import threading
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -142,6 +145,11 @@ def _all_engine_infra(trajectories: Sequence[Trajectory]) -> bool:
 _RECOVERY_RERUN = ("all", "engine_rows")
 
 
+def _deadline_exit(code: int) -> None:
+    """End the process immediately with ``code`` (seam for tests: monkeypatch this)."""
+    os._exit(code)
+
+
 def _is_engine_infra(trajectory: Trajectory) -> bool:
     """True iff this row is an ENGINE infra failure (same reading as ``_all_engine_infra``)."""
     reason = trajectory.abstention_reason
@@ -263,6 +271,12 @@ class RolloutHost:
     # fresh tasks until ``tasks_per_step`` groups carry signal (see ``_refill``).
     dynamic_sampling: str = "off"
     max_refill_rounds: int = 2
+    # Wall-clock deadline (seconds) on one whole ``publish`` -- save, serving completion,
+    # push and any push recovery. None (default) = no deadline. On expiry every thread's
+    # stack is dumped to stderr and the process exits RED (5): GB200 arl_pg_s10/arl_g_s10
+    # each hung ~2 days between writing the checkpoint shards and the push (no reload
+    # ever reached the engine), holding 4 GPUs, with nothing able to notice or recover.
+    publish_deadline_s: float | None = None
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -339,6 +353,15 @@ class RolloutHost:
                 f"must be one of 'off', 'refill'"
             )
         _real_int_at_least(self.max_refill_rounds, 1, where=where, name="max_refill_rounds")
+        if self.publish_deadline_s is not None and (
+            type(self.publish_deadline_s) is bool
+            or not isinstance(self.publish_deadline_s, (int, float))
+            or not (0.0 < float(self.publish_deadline_s) < float("inf"))
+        ):
+            raise RolloutHostRefusal(
+                f"{where}: field 'publish_deadline_s' is {_described(self.publish_deadline_s)}: "
+                f"it must be None or a finite number of seconds > 0"
+            )
         if self.engine_recovery_retries > 0 and self.fleet is None:
             raise RolloutHostRefusal(
                 f"{where}: field 'engine_recovery_retries' is {self.engine_recovery_retries} "
@@ -814,6 +837,50 @@ class RolloutHost:
         return asyncio.run(self.rollout_async(step))
 
     def publish(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
+        """Publish under ``publish_deadline_s`` (see ``_publish_body`` for the publish itself).
+
+        With a deadline declared, a daemon timer armed before the body and cancelled after it
+        (success or exception) fires only if the body is still running when the deadline
+        passes: it prints a ``[fs:agentic-rl:red]`` line naming the step and the deadline,
+        dumps every thread's stack (``faulthandler``) so the hang is diagnosable, and ends
+        the process with exit code 5 (RED, inside the 0/5/95/96 contract) via
+        ``_deadline_exit``. A hung save or serving completion can block in an uninterruptible
+        file-system call, so raising into the stuck thread is not an option; ending the
+        process is the only way to free the GPUs and let the run's supervisor move on.
+        """
+        if self.publish_deadline_s is None:
+            self._publish_body(model, tokenizer, ctx, step)
+            return
+        deadline = float(self.publish_deadline_s)
+
+        def expire() -> None:
+            # The exit is unconditional: the message and the stack dump are best effort (a
+            # stderr without a file descriptor makes faulthandler raise), the RED exit is not.
+            try:
+                print(
+                    f"[fs:agentic-rl:red] RolloutHost.publish: step {step} did not finish "
+                    f"within publish_deadline_s={deadline:g}s -- dumping every thread's stack "
+                    f"and exiting RED (5) rather than holding the GPUs on a hung save/push",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                try:
+                    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                except (OSError, ValueError, AttributeError):
+                    faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
+                sys.stderr.flush()
+            finally:
+                _deadline_exit(5)
+
+        timer = threading.Timer(deadline, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            self._publish_body(model, tokenizer, ctx, step)
+        finally:
+            timer.cancel()
+
+    def _publish_body(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
         """Push the policy trained through ``step`` to the generation fleet.
 
         No-op when ``weight_sync`` is ``None``. The save itself is built HERE,

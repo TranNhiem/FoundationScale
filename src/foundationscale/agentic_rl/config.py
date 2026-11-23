@@ -380,6 +380,9 @@ class RolloutConfig:
     # (drop zero-spread, fully measured groups and refill with fresh tasks, DAPO-style).
     dynamic_sampling: str = "off"
     max_refill_rounds: int = 2
+    # RolloutHost.publish_deadline_s: wall-clock deadline on one whole publish; on expiry
+    # the run dumps every thread's stack and exits RED (5). None (default) = no deadline.
+    publish_deadline_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1065,6 +1068,7 @@ def _build_rollout(
             "recovery_rerun",
             "dynamic_sampling",
             "max_refill_rounds",
+            "publish_deadline_s",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1188,6 +1192,21 @@ def _build_rollout(
     )
     if max_refill_rounds < 1:
         raise AgenticConfigRefusal(f"rollout.max_refill_rounds: {max_refill_rounds!r} must be >= 1")
+    publish_deadline_s = _resolve_scalar(
+        dotted_key="rollout.publish_deadline_s",
+        field_name="publish_deadline_s",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=float | None,
+        default=None,
+        required=False,
+        provenance=provenance,
+    )
+    if publish_deadline_s is not None and not (0.0 < publish_deadline_s < float("inf")):
+        raise AgenticConfigRefusal(
+            f"rollout.publish_deadline_s: {publish_deadline_s!r} must be null or a finite "
+            f"number of seconds > 0"
+        )
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1200,6 +1219,7 @@ def _build_rollout(
         recovery_rerun=recovery_rerun,
         dynamic_sampling=dynamic_sampling,
         max_refill_rounds=max_refill_rounds,
+        publish_deadline_s=publish_deadline_s,
     )
 
 

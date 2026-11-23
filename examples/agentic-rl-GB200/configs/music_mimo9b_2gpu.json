@@ -80,7 +80,8 @@
     "group_by_harness": false,
     "seed": 6,
     "max_infra_rate": 0.5,
-    "engine_recovery_retries": 1
+    "engine_recovery_retries": 1,
+    "publish_deadline_s": 10800
   },
   "reward": {
     "kind": "music",
