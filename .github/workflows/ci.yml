@@ -1366,9 +1366,12 @@ jobs:
     # `manifest` at 11 rows); 38 -> 75 with inner 30m -> 60m (#530, `perf_telemetry`
     # at 15 rows needed ~44m at 2n+1 = 31 runs and ~1.4 min per suite run);
     # 75 -> 113 with inner 60m -> 90m (the agentic-RL tests added ~900 tests to
-    # every suite run). If the suite gets faster rather than longer, prefer
-    # re-measuring the per-run cost over raising the walls again.
-    timeout-minutes: 113
+    # every suite run); 113 -> 180 with inner 90m -> 160m (2026-11-23: a full
+    # suite run measured 278 s on the py3.12 job -- 7992 tests -- so
+    # `perf_telemetry`'s 2n+1 = 31 runs need ~144m and the shard had hit its
+    # deadline, scoring nothing, on every run). If the suite gets faster rather
+    # than longer, prefer re-measuring the per-run cost over raising the walls again.
+    timeout-minutes: 180
     strategy:
       # Every shard reports. fail-fast would cancel the siblings of the first
       # red one, and a cancelled sibling is an unmeasured module wearing the
@@ -1413,12 +1416,12 @@ jobs:
         # masquerading as some other failure.
         run: |
           set +e
-          timeout --signal=INT --kill-after=60s 90m \
+          timeout --signal=INT --kill-after=60s 160m \
             python tools/mutate.py --module "${{ matrix.module }}"
           rc=$?
           set -e
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            echo "::error::mutation shard ${{ matrix.module }} exceeded its 90-minute deadline."
+            echo "::error::mutation shard ${{ matrix.module }} exceeded its 160-minute deadline."
             echo "::error::NOTHING WAS MEASURED for this module. This is exit 2 (never"
             echo "::error::measured), not a cancellation and not a pass: no mutant in"
             echo "::error::${{ matrix.module }} was scored, so no claim about it holds."
