@@ -353,13 +353,49 @@ def _fs_gemma4_unified_lce_forward(
             logits = logits * final_logit_softcapping
 
     result = Gemma4UnifiedCausalLMOutputWithPast(
+        **_gemma4_unified_output_fields(Gemma4UnifiedCausalLMOutputWithPast, outputs),
         loss=loss,
         logits=logits,
-        past_key_values=outputs.past_key_values,
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.attentions,
-        image_hidden_states=outputs.image_hidden_states,
-        audio_hidden_states=outputs.audio_hidden_states,
-        shared_kv_states=outputs.shared_kv_states,
     )
     return result if return_dict else result.to_tuple()
+
+
+# Output fields carried over from the base model's output, in the names each transformers
+# release uses: 5.24 renamed past_key_values -> cache and image_hidden_states ->
+# image_outputs, and dropped audio_hidden_states. Each entry is (output-class field, the
+# base-output attribute names to read it from, in preference order).
+_GEMMA4_UNIFIED_CARRIED_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("past_key_values", ("past_key_values", "cache")),
+    ("cache", ("cache", "past_key_values")),
+    ("hidden_states", ("hidden_states",)),
+    ("attentions", ("attentions",)),
+    ("image_hidden_states", ("image_hidden_states",)),
+    ("image_outputs", ("image_outputs",)),
+    ("video_outputs", ("video_outputs",)),
+    ("audio_outputs", ("audio_outputs",)),
+    ("audio_hidden_states", ("audio_hidden_states",)),
+    ("shared_kv_states", ("shared_kv_states",)),
+)
+
+
+def _gemma4_unified_output_fields(output_cls: Any, outputs: Any) -> dict[str, Any]:
+    """The carried-over fields ``output_cls`` actually declares, read from ``outputs``.
+
+    The stock forward's output class changes field names across transformers releases
+    (5.24: ``cache``/``image_outputs``/``video_outputs``/``audio_outputs``, no
+    ``audio_hidden_states``); passing a field the
+    installed class does not declare raises TypeError, so only declared fields are passed,
+    each read from the first base-output attribute that exists (else ``None``, exactly the
+    stock dataclass default).
+    """
+    import dataclasses  # noqa: PLC0415
+
+    declared = {field.name for field in dataclasses.fields(output_cls)}
+    carried: dict[str, Any] = {}
+    for name, sources in _GEMMA4_UNIFIED_CARRIED_FIELDS:
+        if name not in declared:
+            continue
+        carried[name] = next(
+            (getattr(outputs, src) for src in sources if hasattr(outputs, src)), None
+        )
+    return carried

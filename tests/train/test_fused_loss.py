@@ -400,3 +400,46 @@ def test_gemma4_unified_lce_forward_without_labels_applies_softcapping(
     # reaches infinity, so some entries legitimately equal the cap exactly.)
     assert bool((result.logits.abs() <= 5.0 + 1e-5).all())
     assert bool((result.logits.abs() > 4.9).any())  # genuinely large, not a no-op
+
+
+def test_gemma4_unified_output_fields_follow_the_installed_output_class() -> None:
+    """transformers 5.24 renamed past_key_values -> cache and image_hidden_states ->
+    image_outputs (and dropped audio_hidden_states); the fused forward must build whichever
+    output class is installed, reading each field from the base output's matching name."""
+    import dataclasses
+
+    from foundationscale.train.fused_loss import _gemma4_unified_output_fields
+
+    def output_class(*names: str) -> type:
+        return dataclasses.make_dataclass(
+            "Out", [(n, object, dataclasses.field(default=None)) for n in names]
+        )
+
+    old = output_class(
+        "loss", "logits", "past_key_values", "hidden_states", "attentions",
+        "image_hidden_states", "audio_hidden_states", "shared_kv_states",
+    )  # fmt: skip
+    new = output_class(
+        "loss", "logits", "cache", "hidden_states", "attentions",
+        "image_outputs", "video_outputs", "audio_outputs", "shared_kv_states",
+    )  # fmt: skip
+
+    class OldBase:
+        past_key_values, hidden_states, attentions = "PKV", "H", "A"
+        image_hidden_states, audio_hidden_states, shared_kv_states = "IH", "AH", "S"
+
+    class NewBase:
+        cache, hidden_states, attentions, image_outputs, shared_kv_states = "C", "H", "A", "IO", "S"
+
+    old_kw = _gemma4_unified_output_fields(old, OldBase())
+    assert old_kw == {
+        "past_key_values": "PKV", "hidden_states": "H", "attentions": "A",
+        "image_hidden_states": "IH", "audio_hidden_states": "AH", "shared_kv_states": "S",
+    }  # fmt: skip
+    new_kw = _gemma4_unified_output_fields(new, NewBase())
+    assert new_kw == {
+        "cache": "C", "hidden_states": "H", "attentions": "A", "image_outputs": "IO",
+        "video_outputs": None, "audio_outputs": None, "shared_kv_states": "S",
+    }  # fmt: skip
+    built = new(**new_kw, loss=1.0, logits=None)  # never a TypeError on a renamed field
+    assert built.cache == "C" and built.image_outputs == "IO"
