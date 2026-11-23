@@ -45,9 +45,9 @@ async def evaluate(a: argparse.Namespace) -> dict:
         sampling=sampling,
         tokenizer=tok,
     )
-    reward = SweReward()
-    backend = get_env_backend("enroot_task")
-    spec = EnvSpec(backend="enroot_task", env={}, exec_timeout_s=60.0, episode_timeout_s=1500.0)
+    reward = SweReward(partial_credit=a.partial_credit)
+    backend = get_env_backend(a.backend)
+    spec = EnvSpec(backend=a.backend, env={}, exec_timeout_s=60.0, episode_timeout_s=1500.0)
     budget = EpisodeBudget(
         step_limit=a.step_limit, max_response_tokens=a.total_tokens, max_observation_chars=4096
     )
@@ -103,6 +103,9 @@ def main() -> None:
     p.add_argument("--total-tokens", type=int, default=16000, help="per episode")
     p.add_argument("--concurrency", type=int, default=16)
     p.add_argument("--parser", choices=["qwen_xml", "hermes_json"], default="qwen_xml")
+    p.add_argument("--partial-credit", action="store_true", help="score the fraction of fail_to_pass tests passing")
+    p.add_argument("--backend", choices=["enroot_task", "harbor_task"], default="enroot_task",
+                   help="harbor_task for Harbor-format tasks (make_harbor_tasks.py)")
     p.add_argument("--dump", default=None, help="write per-episode transcripts here (JSONL)")
     print(json.dumps(asyncio.run(evaluate(p.parse_args()))))
 

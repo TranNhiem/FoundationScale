@@ -245,7 +245,7 @@ def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward | 
     if config.reward.kind == "math":
         return MathAnswerReward()
     if config.reward.kind == "swe":
-        return SweReward()
+        return SweReward(partial_credit=config.reward.partial_credit)
     return _music_reward(config)
 
 

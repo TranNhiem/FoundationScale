@@ -117,3 +117,16 @@ def test_swe_reward_kind_builds_the_swe_reward() -> None:
     assert isinstance(cli_module._build_real_run(config).reward, SweReward)
     with pytest.raises(AgenticConfigRefusal, match="kind='swe' never uses it"):
         build_config(_raw({"kind": "swe", "abc2midi_bin": "abc2midi"}), {})
+
+
+def test_swe_partial_credit_reaches_the_scorer() -> None:
+    import foundationscale.agentic_rl.cli as cli_module
+
+    assert build_config(_raw({"kind": "swe"}), {}).reward.partial_credit is False
+    config = build_config(_raw({"kind": "swe", "partial_credit": True}), {})
+    reward = cli_module._build_real_run(config).reward
+    assert isinstance(reward, SweReward) and reward.partial_credit is True
+    overridden = build_config(_raw({"kind": "swe"}), {"reward.partial_credit": "true"})
+    assert overridden.reward.partial_credit is True
+    with pytest.raises(AgenticConfigRefusal, match="only the 'swe' scorer"):
+        build_config(_raw({"kind": "math", "partial_credit": True}), {})

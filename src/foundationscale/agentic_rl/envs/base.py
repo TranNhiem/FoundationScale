@@ -550,3 +550,13 @@ def _make_enroot_task_backend() -> EnvBackend:
 
 
 register_env_backend("enroot_task", _make_enroot_task_backend)
+
+
+def _make_harbor_task_backend() -> EnvBackend:
+    """Build one per-task Enroot backend graded by Harbor reward files (lazy import, as above)."""
+    from foundationscale.agentic_rl.envs.harbor_task import HarborTaskBackend
+
+    return HarborTaskBackend()
+
+
+register_env_backend("harbor_task", _make_harbor_task_backend)
