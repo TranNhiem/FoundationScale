@@ -21,7 +21,7 @@ stable ID, a status, where to start, and what "done" means.
 | `MM` | [Multimodal LLM](#mm--multimodal-llm) | image/video paths in `src/foundationscale/train/`, `src/foundationscale/video.py` | MM-1 … MM-4 |
 | `VLA` | [Vision-language-action](#vla--vision-language-action) | `src/foundationscale/vla/` | VLA-1 … VLA-3 |
 | `RL` | [Preference & RL core](#rl--preference--rl-core) | `src/foundationscale/rl/` | RL-1 … RL-4 |
-| `ARL` | [Agentic RL](#arl--agentic-rl) | `src/foundationscale/agentic_rl/` | ARL-1 … ARL-10 |
+| `ARL` | [Agentic RL](#arl--agentic-rl) | `src/foundationscale/agentic_rl/` | ARL-1 … ARL-19 |
 | `PT` | [Pre-training & CPT](#pt--pre-training--cpt) | CPT path in `src/foundationscale/train/`, FoundationSkills CPT stage | PT-1 … PT-2 |
 | `FSK` | [FoundationSkills](#fsk--foundationskills) | `FoundationSkills/` | FSK-1 … FSK-4 |
 | `PLAT` | [Platform — distributed, checkpoints, releases](#plat--platform) | `src/foundationscale/topology.py`, `src/foundationscale/checkpoint/`, `launchers/` | PLAT-1 … PLAT-4 |
@@ -222,7 +222,7 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Done when:** agentic RL improves task success on a spoken tool-use benchmark over the base omni model.
 
 #### ARL-5 · Rollout staleness tracking
-**Status:** Planned
+**Status:** Partly done (2026-11) — each session records the version of the server it ran on, from a per-server ledger advanced only by push reports, and `StalenessGate` checks those versions in updates, not trainer steps; a test blocks a server left on old weights. Remaining: see the gate block a stale batch in a live run.
 - **Goal:** record the policy version of every in-flight rollout so the staleness gate can fire; the rollout host does not track it yet.
 - **Start from:** [src/foundationscale/agentic_rl/rollout_host.py](src/foundationscale/agentic_rl/rollout_host.py) and the gate in [src/foundationscale/gates/agentic_gates.py](src/foundationscale/gates/agentic_gates.py).
 - **Done when:** the gate receives real policy versions and blocks an over-stale batch in a test and a live run.
@@ -256,6 +256,51 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Goal:** overlap rollout and training (one-step-off) and sync weights over NCCL instead of disk.
 - **Start from:** [weight_sync.py](src/foundationscale/agentic_rl/weight_sync.py) and the rollout host.
 - **Done when:** step time drops on the same task with no loss in reward.
+
+#### ARL-11 · Per-turn process shaping
+**Status:** Done (2026-11), measured null on math
+- **What landed:** `agentic_process_grpo` subtracts declared penalties from the advantage of every token in a turn with an unparseable tool call or a repetition hit, after the group baseline; rewards are untouched.
+- **Result:** on MiMo-9B math (MATH-500, AIME25) shaped and unshaped runs differ by less than the seed-to-seed spread, and tool-call errors fall in both arms. Re-test on a task with long tool-use episodes (SWE) before relying on it.
+
+#### ARL-12 · Judge and rubric rewards
+**Status:** Done (2026-11), not yet GPU-verified
+- **What landed:** `reward.kind="judge"` scores a declared rubric with an OpenAI-compatible judge; the run refuses to start without a calibration report against gold labels. Judge outages abstain as `infra:judge_*`.
+- **Next:** build a gold-labelled calibration set and run one judged task on GB200.
+
+#### ARL-13 · SWE test-harness tamper guard
+**Status:** Done (2026-11)
+- **What landed:** the SWE environment fingerprints `conftest.py`, pytest/tox/setup configs and site-packages `sitecustomize`/`*.pth` from the host side before the hidden tests run; `reward.swe_tamper="zero"` scores a tampered episode 0.
+
+#### ARL-14 · Evaluation you can trust
+**Status:** Done (2026-11)
+- **What landed:** per-task eval output, unbiased pass@k, and `compare_evals.py`, whose `--seeds` mode resamples training seeds and then tasks. On GB200, two seeds of one recipe differed by up to 2.7 points on MATH-500; compare recipes with `--seeds`.
+
+#### ARL-15 · Dynamic sampling
+**Status:** Done (2026-11), not yet GPU-verified
+- **What landed:** `rollout.dynamic_sampling="refill"` drops groups with zero reward spread (about half of all groups on GB200 math) and refills the step with fresh tasks; groups with infra rows are never dropped.
+- **Next:** one GB200 run comparing gradient-carrying steps and wall-clock with the default.
+
+#### ARL-16 · Publish deadline
+**Status:** Done (2026-11)
+- **What landed:** `rollout.publish_deadline_s` ends a run RED with a stack dump when one publish hangs, instead of holding the GPUs indefinitely (two GB200 runs hung about two days each before this).
+
+#### ARL-17 · Context compaction that stays trainable
+**Status:** Planned
+- **Goal:** long episodes compact their context (summaries, tool-output trimming) without breaking the token-trace and loss-mask invariants.
+- **Start from:** [token_trace.py](src/foundationscale/agentic_rl/token_trace.py) and the episode budget in the harness.
+- **Done when:** a 50+ turn SWE episode trains at a matched budget with compaction on.
+
+#### ARL-18 · Environment snapshots and a warm pool
+**Status:** Planned
+- **Goal:** snapshot and restore episode environments so a crashed or retried session resumes instead of rebuilding.
+- **Start from:** [envs/sandbox_task.py](src/foundationscale/agentic_rl/envs/sandbox_task.py).
+- **Done when:** a retried SWE session restores from a snapshot and scores the same as an uninterrupted one.
+
+#### ARL-19 · Multi-turn roles and branches in trajectories
+**Status:** Planned
+- **Goal:** trajectories carry role, segment and branch identifiers, so multi-agent and tree-search rollouts can be credited correctly.
+- **Start from:** [contracts.py](src/foundationscale/agentic_rl/contracts.py) and `trajectory_v2.py`.
+- **Done when:** an orchestrator/worker rollout trains with per-role credit, with tests.
 
 ---
 
