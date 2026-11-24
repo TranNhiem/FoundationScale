@@ -302,7 +302,7 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Done when:** a 50+ turn SWE episode trains at a matched budget with compaction on.
 
 #### ARL-18 · Environment snapshots and a warm pool
-**Status:** Planned
+**Status:** In progress -- slice 1 done (environment signature: `env.signature` = `manifest`|`content` records `env_signature` in verifier metadata, `unmeasured` when the rootfs can't be read; two clean starts sign identically). Next: snapshot/restore keyed on the signature.
 - **Goal:** snapshot and restore episode environments so a crashed or retried session resumes instead of rebuilding.
 - **Start from:** [envs/sandbox_task.py](src/foundationscale/agentic_rl/envs/sandbox_task.py).
 - **Done when:** a retried SWE session restores from a snapshot and scores the same as an uninterrupted one.

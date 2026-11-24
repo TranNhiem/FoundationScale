@@ -6,6 +6,7 @@ here (``host_path`` and ``exec``), so tests can substitute a fake over a tmp dir
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import shlex
@@ -213,6 +214,28 @@ class HiddenVault:
                 f"assert_sealed: expected sealed vault, got unsealed "
                 f"(0 of {len(self._spec.hidden_container_paths())} paths moved)"
             )
+
+    def sealed_manifest(self, *, content: bool) -> str:
+        """ARL-18: a deterministic fingerprint of exactly what the vault holds while sealed --
+        each hidden container path with the tree manifest of its vaulted copy (metadata, plus
+        file bytes when ``content``). Refused unless sealed: an unsealed vault's fingerprint
+        would describe a state no episode ever starts from."""
+        from foundationscale.agentic_rl.envs.env_signature import tree_manifest
+
+        if not self._sealed:
+            raise IntegrityRefusal("sealed_manifest: the vault is not sealed")
+        digest = hashlib.sha256()
+        for container_path in sorted(self._moved):
+            target = self._moved[container_path]
+            part = (
+                tree_manifest(target, content=content)
+                if target.is_dir()
+                else hashlib.sha256(target.read_bytes()).hexdigest()
+                if content
+                else str(target.stat().st_size)
+            )
+            digest.update(f"{container_path}\0{part}\n".encode())
+        return digest.hexdigest()
 
     def unseal(self) -> tuple[str, ...]:
         """Move everything back for the verifier phase."""

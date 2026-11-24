@@ -32,6 +32,13 @@ from foundationscale.agentic_rl.envs.base import (
     ExecResult,
 )
 from foundationscale.agentic_rl.envs.diff_guard import changed_paths, fingerprint
+from foundationscale.agentic_rl.envs.env_signature import (
+    DEFAULT_EXCLUDES,
+    EnvSignatureRefusal,
+    compute_signature,
+    image_digest,
+    tree_manifest,
+)
 from foundationscale.agentic_rl.integrity import IntegrityRefusal
 from foundationscale.agentic_rl.sandbox.broker import BrokerRunner
 from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, SandboxError, SandboxSpec
@@ -354,6 +361,9 @@ class TaskSandboxEnvironment:
         # DiffGuard baseline (envs.diff_guard): guarded-file digests at the end of start();
         # None until taken, or when the host-side walk could not read the rootfs (unmeasured).
         self._guard_before: dict[str, str] | None = None
+        # ARL-18 environment signature taken at the end of start() (None until taken or when
+        # EnvSpec.signature is "off"; "unmeasured" when the walk could not complete).
+        self._signature: str | None = None
 
     @property
     def workdir(self) -> str:
@@ -513,6 +523,36 @@ class TaskSandboxEnvironment:
                     f"-- a failing setup leaves the environment in an unknown state",
                 )
         self._guard_before = self._guard_fingerprint()
+        if self._spec.signature != "off":
+            self._signature = self._measure_signature()
+
+    def _measure_signature(self) -> str:
+        """ARL-18: fingerprint the started state -- rootfs tree (hidden paths and runtime dirs
+        excluded), image file, task config, setup commands and the sealed vault -- or
+        "unmeasured" when any part cannot be read (never a partial signature)."""
+        content = self._spec.signature == "content"
+        try:
+            rootfs = self._sandbox.host_path("/")
+            hidden = tuple(p.strip("/") for p in self._config.hidden_paths)
+            manifest = tree_manifest(rootfs, content=content, exclude=DEFAULT_EXCLUDES + hidden)
+            image_path = getattr(self._sandbox, "image_path", None)
+            image = (
+                image_digest(image_path()) if callable(image_path) else f"name:{self._config.image}"
+            )
+            sealed = getattr(self._vault, "sealed_manifest", None)
+            hidden_manifest = sealed(content=content) if callable(sealed) else None
+        except (OSError, EnvSignatureRefusal, IntegrityRefusal):
+            return "unmeasured"
+        return compute_signature(
+            mode=self._spec.signature,
+            rootfs_manifest=manifest,
+            image=image,
+            workdir=self._config.workdir,
+            test_cmd=self._config.test_cmd,
+            hidden_paths=self._config.hidden_paths,
+            setup_commands=self._spec.setup_commands,
+            hidden_manifest=hidden_manifest,
+        )
 
     def _guard_fingerprint(self) -> dict[str, str] | None:
         """Host-side DiffGuard fingerprint, or None when the rootfs could not be read."""
@@ -558,6 +598,8 @@ class TaskSandboxEnvironment:
                 "swe_guard": "measured",
                 "swe_tampered": json.dumps(changed_paths(self._guard_before, after)),
             }
+        if self._signature is not None:
+            guard["env_signature"] = self._signature
         try:
             self._vault.unseal()
             result = self._sandbox.exec(

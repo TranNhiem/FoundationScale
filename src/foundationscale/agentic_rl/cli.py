@@ -225,6 +225,7 @@ def _env_spec(config: AgenticRLConfig) -> EnvSpec:
         episode_timeout_s=config.env.episode_timeout_s,
         max_output_bytes=config.env.max_output_bytes,
         allow_unsandboxed=config.env.allow_unsandboxed,
+        signature=config.env.signature,
     )
 
 

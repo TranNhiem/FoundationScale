@@ -361,6 +361,12 @@ PENDING_ENROLMENT: dict[str, str] = {
         "prefixes, append-only JSONL reader/writer): covered by tests/agentic_rl/test_fs_trace.py, "
         "but no mutation row yet proves a flipped fold or fork rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/envs/env_signature.py": (
+        "ARL-18 environment signature (tree manifest without timestamps or symlink following, "
+        "cached image digest, canonical signature hash): line-covered by "
+        "tests/agentic_rl/test_env_signature.py and test_env_signature_hook.py, but no mutation "
+        "row yet proves a dropped record field or exclude rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/curriculum.py": (
         "frontier curriculum (Beta pass-rate registry, 4p(1-p) weighted draws, saturation "
         "floor): line-covered by tests/agentic_rl/test_curriculum.py, but no mutation row yet "

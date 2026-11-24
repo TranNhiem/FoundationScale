@@ -94,6 +94,9 @@ class EnvSpec:
     max_output_bytes: int = 65536
     setup_commands: tuple[str, ...] = ()
     allow_unsandboxed: bool = False
+    # ARL-18: environment signature recorded at start by backends that support it --
+    # "off" (default), "manifest" (rootfs metadata) or "content" (also hashes file bytes).
+    signature: str = "off"
 
     def __post_init__(self) -> None:
         """Freeze ``env``/``setup_commands`` into canonical read-only copies and refuse any
@@ -101,6 +104,11 @@ class EnvSpec:
         than mid-episode.
         """
         where = "EnvSpec.__post_init__"
+        if self.signature not in ("off", "manifest", "content"):
+            raise EnvRefusal(
+                f"{where}: field 'signature' is {_described(self.signature)}: the legal set is "
+                f"('off', 'manifest', 'content')"
+            )
         if not isinstance(self.backend, str):
             raise EnvRefusal(
                 f"{where}: field 'backend' is {_described(self.backend)}: a spec names its "

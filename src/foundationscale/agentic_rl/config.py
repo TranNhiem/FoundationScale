@@ -327,6 +327,7 @@ class EnvConfig:
     max_output_bytes: int = 65536
     env: Mapping[str, str] = field(default_factory=dict)
     allow_unsandboxed: bool = False
+    signature: str = "off"
 
 
 @dataclass(frozen=True)
@@ -883,6 +884,7 @@ def _build_env(
             "max_output_bytes",
             "env",
             "allow_unsandboxed",
+            "signature",
         }
     )
     _refuse_unknown_keys(section, allowed, section="env")
@@ -949,6 +951,21 @@ def _build_env(
         required=False,
         provenance=provenance,
     )
+    signature = _resolve_scalar(
+        dotted_key="env.signature",
+        field_name="signature",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="off",
+        required=False,
+        provenance=provenance,
+    )
+    if signature not in ("off", "manifest", "content"):
+        raise AgenticConfigRefusal(
+            f"env.signature: is {_described(signature)}, expected one of "
+            f"('off', 'manifest', 'content')"
+        )
     return EnvConfig(
         backend=backend,
         exec_timeout_s=exec_timeout_s,
@@ -956,6 +973,7 @@ def _build_env(
         max_output_bytes=max_output_bytes,
         env=dict(env_mapping),
         allow_unsandboxed=allow_unsandboxed,
+        signature=signature,
     )
 
 
