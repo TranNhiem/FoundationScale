@@ -367,6 +367,12 @@ PENDING_ENROLMENT: dict[str, str] = {
         "tests/agentic_rl/test_env_signature.py and test_env_signature_hook.py, but no mutation "
         "row yet proves a dropped record field or exclude rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/sandbox/snapshot_store.py": (
+        "ARL-18 snapshot artifact store (reservation quota, JSON-last commit, size/sha256 "
+        "revalidation, lease-safe TTL reap, RLIMIT_FSIZE export launcher): line-covered by "
+        "tests/agentic_rl/test_snapshot_store.py, but no mutation row yet proves a dropped "
+        "digest check or a reaped lease would be caught."
+    ),
     "src/foundationscale/agentic_rl/curriculum.py": (
         "frontier curriculum (Beta pass-rate registry, 4p(1-p) weighted draws, saturation "
         "floor): line-covered by tests/agentic_rl/test_curriculum.py, but no mutation row yet "

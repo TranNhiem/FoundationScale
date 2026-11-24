@@ -302,7 +302,7 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Done when:** a 50+ turn SWE episode trains at a matched budget with compaction on.
 
 #### ARL-18 · Environment snapshots and a warm pool
-**Status:** In progress -- slice 1 done (environment signature: `env.signature` = `manifest`|`content` records `env_signature` in verifier metadata, `unmeasured` when the rootfs can't be read; two clean starts sign identically). Next: snapshot/restore keyed on the signature.
+**Status:** In progress -- slice 1 done (environment signature: `env.signature` = `manifest`|`content` records `env_signature` in verifier metadata, `unmeasured` when the rootfs can't be read; two clean starts sign identically). Slice 2 done (atomic snapshot store `sandbox/snapshot_store.py`: quota reservations, JSON-last commit, size/sha256 checks on commit and restore, lease-safe TTL reap, export bounded by RLIMIT_FSIZE; rootless setuid/setgid entries refused up front -- measured on GB200: rootless extraction clears the setgid bit, so such a rootfs can never restore to an equal signature). Next: sealed restore without setup replay (slice 3).
 - **Goal:** snapshot and restore episode environments so a crashed or retried session resumes instead of rebuilding.
 - **Start from:** [envs/sandbox_task.py](src/foundationscale/agentic_rl/envs/sandbox_task.py).
 - **Done when:** a retried SWE session restores from a snapshot and scores the same as an uninterrupted one.
