@@ -125,6 +125,24 @@ def unsafe_spans(old_text: str, new_text: str) -> list[str]:
            [f"unsafe span added ({r.id}): {r.note}" for r in results if r.status in ("RED", "REFUSED") and not r.hits]
 
 
+_PRIVATE_PATH = __import__("re").compile(r"(/home/[^\s/]+|/Users/[^\s/]+|[A-Za-z]:\\Users\\)")
+
+
+def overfit_spans(old_text: str, new_text: str, case_ids=()) -> list[str]:
+    """Generalization Gate lint (HarnessCompass 2608.01918) on the ADDED lines: a globally loaded skill must not name
+    the evaluation cases it was measured on, nor private absolute paths. Case ids shorter than 4 characters are
+    ignored (too generic to attribute)."""
+    added = added_text(old_text, new_text)
+    found = []
+    lowered = added.lower()
+    for case in sorted({str(c) for c in case_ids if len(str(c)) >= 4}):
+        if case.lower() in lowered:
+            found.append(f"overfit: added text names evaluation case {case!r}")
+    for match in sorted(set(_PRIVATE_PATH.findall(added))):
+        found.append(f"overfit: added text contains a private path {match!r}")
+    return found
+
+
 def admit(skill: str, old_text: str, new_text: str, evidence: dict,
           confirm: str | None) -> dict:
     """Return the admission verdict: REFUSED, UNMEASURED, RED or PASS with the measured gain.
@@ -139,8 +157,8 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
         reasons.append(CONFIRM_REASON)
     if reasons:
         return {"verdict": "REFUSED", "reasons": reasons}
-    unsafe = unsafe_spans(old_text, new_text)
-    if unsafe:  # an unsafe increment is never admitted, whatever its measured gain
+    unsafe = unsafe_spans(old_text, new_text) + overfit_spans(old_text, new_text, evidence.get("eval_case_ids") or ())
+    if unsafe:  # an unsafe or eval-memorising increment is never admitted, whatever its measured gain
         return {"verdict": "RED", "reasons": unsafe}
 
     target = evidence.get("target")

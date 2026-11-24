@@ -116,6 +116,10 @@ def build_evidence(package: str, incumbent: Mapping[str, Mapping[str, Any]], can
                 "paired": {"target": target,
                            "pairs": paired_cases(incumbent.get("routing_behaviour") or {},
                                                  candidate.get("routing_behaviour") or {}, package)}}
+    # the case ids the evidence was measured on: the admit gate's Generalization lint refuses text naming them
+    evidence["eval_case_ids"] = sorted({str(c["case_id"]) for side in (incumbent, candidate)
+                                        for c in ((side.get("routing_behaviour") or {}).get("calls") or [])
+                                        if c.get("case_id") is not None})
     if isinstance(beacon, str) and beacon:
         evidence["beacon"] = {
             "condition": beacon,

@@ -228,3 +228,23 @@ def test_preexisting_text_is_not_rescanned_only_added_lines():
 
     assert added_text("a\nb\n", "a\nb\nc\n") == "c"
     assert unsafe_spans(OLD, PROSE) == []
+
+
+def test_generalization_lint_blocks_eval_case_ids_and_private_paths():
+    from foundationskills.agent.admit import overfit_spans
+
+    named = PROSE.replace("explains the admission flow clearly.", "explains the admission flow for case-0042 clearly.")
+    assert overfit_spans(OLD, named, ["case-0042", "abc"]) == ["overfit: added text names evaluation case 'case-0042'"]
+    assert overfit_spans(OLD, named, ["abc"]) == []  # ids under 4 characters are too generic to attribute
+    private = PROSE.replace("explains the admission flow clearly.", "explains the flow in /home/alice/notes clearly.")
+    assert any("private path" in s for s in overfit_spans(OLD, private))
+    evidence = ev(measured=True, gain=0.1)
+    evidence["eval_case_ids"] = ["case-0042"]
+    res = admit(NAME, OLD, named, evidence, hash_for(named, evidence))
+    assert res["verdict"] == "RED" and "case-0042" in res["reasons"][0]
+
+
+def test_build_evidence_lists_the_measured_case_ids():
+    reports = {"routing_behaviour": {"calls": [{"case_id": "c1"}, {"case_id": "c2"}, {"case_id": None}]},
+               "oracle": {}, "routing": {}}
+    assert build_evidence(NAME, reports, reports)["eval_case_ids"] == ["c1", "c2"]
