@@ -356,6 +356,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "fully line-covered by tests/agentic_rl/test_diff_guard.py, but no mutation row yet "
         "proves a dropped guarded name or a followed symlink would be caught."
     ),
+    "src/foundationscale/agentic_rl/curriculum.py": (
+        "frontier curriculum (Beta pass-rate registry, 4p(1-p) weighted draws, saturation "
+        "floor): line-covered by tests/agentic_rl/test_curriculum.py, but no mutation row yet "
+        "proves a flipped weight or saturation rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/eval_stats.py": (
         "evaluation statistics (unbiased pass@k, paired task and seed+task bootstrap): "
         "line-covered by tests/agentic_rl/test_eval_stats.py, but no mutation row yet proves a "
