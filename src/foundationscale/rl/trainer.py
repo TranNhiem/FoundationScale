@@ -161,6 +161,45 @@ def _token_logprobs(
     )
 
 
+def _chunked_token_logprobs(
+    model: Any, input_ids: Any, attention_mask: Any, target_ids: Any, *, chunk: int,
+    temperature: float, top_p: float, top_k: int,
+) -> torch.Tensor:
+    """``_token_logprobs`` of ``model(input_ids).logits`` computed chunk by chunk (see ``logprob_chunk_tokens``).
+
+    Hidden states come from ``model.get_decoder()``; each chunk of target positions goes through the output
+    embedding and ``_token_logprobs`` under non-reentrant activation checkpointing, so its full-vocabulary logits
+    are rebuilt during backward instead of being kept. Refuses heads it cannot reproduce exactly.
+    """
+    import torch  # function-local: see module docstring
+    from torch.utils.checkpoint import checkpoint
+
+    head = model.get_output_embeddings() if hasattr(model, "get_output_embeddings") else None
+    decoder = model.get_decoder() if hasattr(model, "get_decoder") else None
+    configs = [getattr(model, "config", None)]
+    configs.append(getattr(configs[0], "text_config", None))
+    softcap = [getattr(c, "final_logit_softcapping", None) for c in configs if c is not None]
+    if not isinstance(head, torch.nn.Linear) or decoder is None or any(v not in (None, 0) for v in softcap):
+        raise TrainerRefusal(
+            f"logprob_chunk_tokens: model {type(model).__name__} needs a plain nn.Linear output embedding, "
+            f"get_decoder() and no final_logit_softcapping to be scored in chunks (head="
+            f"{type(head).__name__}, softcapping={softcap}); set logprob_chunk_tokens=0"
+        )
+    hidden = decoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+    hidden = hidden[:, : target_ids.shape[1]]
+
+    def piece(h: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return _token_logprobs(head(h), t, temperature=temperature, top_p=top_p, top_k=top_k)
+
+    return torch.cat(
+        [
+            checkpoint(piece, hidden[:, s : s + chunk], target_ids[:, s : s + chunk], use_reentrant=False)
+            for s in range(0, target_ids.shape[1], chunk)
+        ],
+        dim=1,
+    )
+
+
 # Vocabulary entries one scoring chunk may sort at once (~32M -> ~128 MB of fp32 logits
 # plus their int64 sort order); positions are batched to stay under it.
 _SCORE_CHUNK_ENTRIES = 1 << 25
@@ -1192,6 +1231,13 @@ class RLTrainConfig:
     # The loss, kept-row selection and metrics still describe one logical
     # batch, while full-vocabulary scorer activations are bounded per slice.
     logprob_micro_batch: int = 0
+    # Opt-in: score log-probs in chunks of this many target positions through the LM head (hidden states from
+    # model.get_decoder(), each chunk recomputed under activation checkpointing), so full-vocabulary logits exist
+    # for one chunk at a time instead of the whole sequence. Zero keeps the full-logits path. Measured on
+    # Qwen3.5-4B (GB200, 2026-11-24): identical log-probs/grads; 32k tokens 145 GB -> 32 GB, 64k OOM -> 39 GB.
+    # Text-only and unsharded: multimodal rows fall back to the full path; a non-Linear head, logit
+    # soft-capping or sharding != "none" is refused.
+    logprob_chunk_tokens: int = 0
     # The distribution the SCORED tokens were sampled from. When an external rollout
     # source (the agentic engine fleet) samples with temperature / top-p / top-k,
     # scoring raw logits trains on a different policy than the one that acted. The
@@ -1336,6 +1382,15 @@ class RLTrainer:
             )
         if type(config.score_top_k) is not int or config.score_top_k < 0:
             raise TrainerRefusal(f"score_top_k={config.score_top_k!r}: an int >= 0 is required")
+        if type(config.logprob_chunk_tokens) is not int or config.logprob_chunk_tokens < 0:
+            raise TrainerRefusal(
+                f"logprob_chunk_tokens={config.logprob_chunk_tokens!r}: an int >= 0 is required (0 = full logits)"
+            )
+        if config.logprob_chunk_tokens and getattr(config, "sharding", "none") != "none":
+            raise TrainerRefusal(
+                f"logprob_chunk_tokens={config.logprob_chunk_tokens} needs sharding='none': calling the decoder "
+                f"directly would bypass the {config.sharding!r} wrapper's forward"
+            )
         if config.logprob_micro_batch < 0:
             raise ValueError(
                 f"logprob_micro_batch={config.logprob_micro_batch}: a negative row "
@@ -2586,6 +2641,17 @@ class RLTrainer:
             # The scorer defaults to the policy; the frozen reference is the
             # only other caller, and every per-row tensor still follows the
             # same half-open row range.
+            if self.config.logprob_chunk_tokens and not sliced_modalities:
+                return _chunked_token_logprobs(
+                    model if scorer_model is None else scorer_model,
+                    kept_sequences.narrow(0, start, width),
+                    attention.narrow(0, start, width),
+                    target_ids.narrow(0, start, width),
+                    chunk=self.config.logprob_chunk_tokens,
+                    temperature=self.config.score_temperature,
+                    top_p=self.config.score_top_p,
+                    top_k=self.config.score_top_k,
+                )
             logits = (model if scorer_model is None else scorer_model)(
                 input_ids=kept_sequences.narrow(0, start, width),
                 attention_mask=attention.narrow(0, start, width),
