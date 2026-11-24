@@ -42,6 +42,19 @@ _STDERR_TAIL = 2000
 _DRAIN_GRACE_S = 2.0
 
 
+# Rootfs paths `enroot start` (re)creates on EVERY exec, measured on GB200 enroot 4.0.1: the
+# container lock, two empty mode-000 bind-mount targets and enroot's apt hook. They are runtime
+# state, not episode state, so the ARL-18 environment signature excludes them (a mode-000 file
+# cannot even be read for a content hash). /etc/passwd and /etc/group are also rewritten per
+# exec, but with identical bytes, so they stay measured.
+RUNTIME_ROOTFS_FILES: tuple[str, ...] = (
+    ".lock",
+    "etc/hosts",
+    "etc/machine-id",
+    "etc/apt/apt.conf.d/enroot",
+)
+
+
 class SandboxRefusal(ValueError):
     """Bad input or unsupported request; the message names expected vs got."""
 
@@ -381,12 +394,17 @@ class EnrootSandbox:
         Path(partial).replace(path)
         return path
 
-    def start(self) -> None:
+    def start(self, *, restore_from: str | None = None) -> None:
+        """Create and start the container from the task image -- or, for an ARL-18 restore,
+        from ``restore_from`` (a committed snapshot archive written by ``export_rootfs``). A
+        restore skips the rootfs initialisation writes (the proxy config): the archive already
+        holds them, and rewriting them would make the restored state differ from the
+        snapshotted one."""
         if self._started:
             raise SandboxRefusal(
                 f"start: expected not-started sandbox, got already-started {self.spec.name!r}"
             )
-        image_path = self.image_path()
+        image_path = self.image_path() if restore_from is None else restore_from
         if self.spec.memory_mb:
             # Fail closed: a requested memory limit that cannot be enforced must not run unbounded.
             probe = self._runner.run([*_memory_scope(self.spec.memory_mb), "true"])
@@ -467,7 +485,8 @@ class EnrootSandbox:
                 ]
             )
             if self.spec.isolate_network:
-                self._write_proxy_config()
+                if restore_from is None:
+                    self._write_proxy_config()
                 self.set_policy(self.spec.network, self.spec.allowed_hosts)
                 sock = self._socket_path("egress")
                 self._helpers.append(
@@ -698,6 +717,52 @@ class EnrootSandbox:
         kill_all = getattr(self._runner, "kill_all", None)
         if callable(kill_all):
             kill_all()
+
+    def start_restored(self, archive: str) -> None:
+        """ARL-18: ``start()`` from a committed snapshot archive (see ``start``)."""
+        self.start(restore_from=archive)
+
+    def export_rootfs(self, destination: str | Path, *, max_bytes: int, timeout_s: float) -> None:
+        """ARL-18: write this container's rootfs as a squashfs archive at ``destination``
+        (``enroot export``), bounded WHILE writing by ``prlimit --fsize`` -- the kernel kills a
+        runaway exporter at ``max_bytes`` (util-linux, present wherever ``unshare`` is; unlike a
+        Python launcher it needs no interpreter on a broker host).
+
+        Refused while any process still runs inside the container: a filesystem snapshot of a
+        live daemon is not a faithful fork, and ARL-18 never kills one to pretend it is."""
+        if not self._started:
+            raise SandboxRefusal(
+                f"export_rootfs: expected a started sandbox, got not-started {self.spec.name!r}"
+            )
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise SandboxRefusal(f"export_rootfs: max_bytes={max_bytes!r} must be an int > 0")
+        live = self._container_pids()
+        if live:
+            raise SandboxError(
+                f"export_rootfs: {len(live)} process(es) still running inside "
+                f"{self.spec.name!r} (pids {sorted(live)[:8]}): a snapshot of a live process "
+                f"is not a faithful fork"
+            )
+        result = self._runner.run(
+            [
+                "prlimit",
+                f"--fsize={max_bytes}",
+                "--",
+                "enroot",
+                "export",
+                "-o",
+                str(destination),
+                self.spec.name,
+            ],
+            env=self._enroot_env(),
+            timeout_s=timeout_s,
+        )
+        if result.timed_out or result.returncode != 0:
+            detail = "timed out" if result.timed_out else f"exit {result.returncode}"
+            raise SandboxError(
+                f"enroot export failed for {self.spec.name!r} ({detail}; a SIGXFSZ exit means "
+                f"the archive hit max_bytes={max_bytes}): {result.stderr[-_STDERR_TAIL:]}"
+            )
 
     def _container_pids(self) -> list[int]:
         """Host pids of this user's processes running inside this sandbox (daemons included).

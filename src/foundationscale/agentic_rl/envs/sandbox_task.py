@@ -12,11 +12,13 @@ The backend is NOT registered here -- registration happens where backends are as
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import os
 import re
 import secrets
+import shutil
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -41,8 +43,21 @@ from foundationscale.agentic_rl.envs.env_signature import (
 )
 from foundationscale.agentic_rl.integrity import IntegrityRefusal
 from foundationscale.agentic_rl.sandbox.broker import BrokerRunner
-from foundationscale.agentic_rl.sandbox.enroot import EnrootSandbox, SandboxError, SandboxSpec
+from foundationscale.agentic_rl.sandbox.enroot import (
+    RUNTIME_ROOTFS_FILES,
+    EnrootSandbox,
+    SandboxError,
+    SandboxSpec,
+)
 from foundationscale.agentic_rl.sandbox.hidden import HiddenSpec, HiddenVault, SandboxLike
+from foundationscale.agentic_rl.sandbox.snapshot_store import (
+    SnapshotIntegrityError,
+    SnapshotQuotaError,
+    SnapshotRecord,
+    SnapshotRefusal,
+    SnapshotStore,
+    rootless_lossy_entries,
+)
 
 if TYPE_CHECKING:
     from foundationscale.agentic_rl.harness.base import EpisodeTask
@@ -526,6 +541,185 @@ class TaskSandboxEnvironment:
         if self._spec.signature != "off":
             self._signature = self._measure_signature()
 
+    async def snapshot(self, store: SnapshotStore, *, vault_root: str | Path) -> SnapshotRecord:
+        """ARL-18: commit the current (turn-boundary) state as a snapshot in ``store``.
+
+        The rootfs is exported while the hidden paths are sealed away, so the archive never
+        holds hidden tests; the sealed vault is cloned into a fresh 0700 dir under
+        ``vault_root`` (outside the archive) and referenced from the descriptor. The recorded
+        signature is measured NOW -- the boundary state, not the start state -- and the
+        DiffGuard baseline from ``start()`` travels with it, so a fork still sees tampering
+        done before the fork. Call between agent commands, never concurrently with one: a
+        command still running is a live process and refuses the export.
+
+        Refusals: not started / already verified / closed, or ``EnvSpec.signature`` "off"
+        (``EnvRefusal``). Setuid/setgid entries (rootless restore clears them -- measured),
+        a live process, an unmeasurable rootfs or a backend without export support give
+        ``EnvInfraError("snapshot_unsupported")``; a vault that is not sealed gives
+        ``snapshot_integrity``; an export or store fault gives ``snapshot_failed``."""
+        if not self._started or self._verified or self._closed:
+            raise EnvRefusal(
+                "snapshot: expected a started environment before verify() and close(): a "
+                "snapshot is only defined for the agent phase, while the hidden tests are sealed"
+            )
+        if self._spec.signature == "off":
+            raise EnvRefusal(
+                "snapshot: EnvSpec.signature is 'off': a snapshot is restored only when the "
+                "restored state's signature equals the recorded one, so signatures must be on"
+            )
+        return await asyncio.to_thread(self._snapshot_sync, store, Path(vault_root))
+
+    def _snapshot_sync(self, store: SnapshotStore, vault_root: Path) -> SnapshotRecord:
+        export = getattr(self._sandbox, "export_rootfs", None)
+        clone = getattr(self._vault, "clone_sealed", None)
+        assert_sealed = getattr(self._vault, "assert_sealed", None)
+        if not (callable(export) and callable(clone) and callable(assert_sealed)):
+            raise EnvInfraError(
+                "snapshot_unsupported",
+                "TaskSandboxEnvironment.snapshot: this sandbox/vault pair has no "
+                "export_rootfs/clone_sealed/assert_sealed support",
+            )
+        try:
+            assert_sealed()
+        except IntegrityRefusal as exc:
+            raise EnvInfraError(
+                "snapshot_integrity",
+                f"TaskSandboxEnvironment.snapshot: the hidden paths are not sealed ({exc}): "
+                f"exporting now could put hidden tests into the archive",
+            ) from exc
+        hidden = tuple(p.strip("/") for p in self._config.hidden_paths)
+        try:
+            lossy = rootless_lossy_entries(
+                self._sandbox.host_path("/"),
+                exclude=DEFAULT_EXCLUDES + RUNTIME_ROOTFS_FILES + hidden,
+            )
+        except OSError as exc:
+            raise EnvInfraError(
+                "snapshot_unsupported",
+                f"TaskSandboxEnvironment.snapshot: the rootfs could not be walked ({exc})",
+            ) from exc
+        if lossy:
+            raise EnvInfraError(
+                "snapshot_unsupported",
+                f"TaskSandboxEnvironment.snapshot: {len(lossy)} setuid/setgid entr(y/ies) "
+                f"{list(lossy[:8])}: rootless enroot extraction clears these bits (measured on "
+                f"GB200), so the restored state could never match the snapshotted signature",
+            )
+        signature = self._measure_signature()
+        if signature == "unmeasured":
+            raise EnvInfraError(
+                "snapshot_unsupported",
+                "TaskSandboxEnvironment.snapshot: the boundary signature is unmeasured, so a "
+                "restore could not be checked against it",
+            )
+        clone_dir = vault_root / f"vault-{secrets.token_hex(16)}"
+        try:
+            held = clone(clone_dir)
+            meta = {
+                "mode": self._spec.signature,
+                "image": self._config.image,
+                "vault_clone": str(clone_dir),
+                "hidden": json.dumps(list(held)),
+                "guard_before": json.dumps(self._guard_before),
+            }
+            return store.commit(
+                export=lambda tmp, timeout_s: export(
+                    tmp, max_bytes=store.limits.max_bytes, timeout_s=timeout_s
+                ),
+                env_signature=signature,
+                meta=meta,
+            )
+        except (
+            SandboxError,
+            IntegrityRefusal,
+            OSError,
+            SnapshotIntegrityError,
+            SnapshotQuotaError,
+        ) as exc:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+            raise EnvInfraError(
+                "snapshot_failed",
+                f"TaskSandboxEnvironment.snapshot: {type(exc).__name__} {exc}",
+            ) from exc
+
+    async def restore(self, store: SnapshotStore, snapshot_id: str) -> None:
+        """ARL-18: bring this fresh environment up from a committed snapshot INSTEAD of
+        ``start()`` -- no setup commands replayed, no second seal.
+
+        The archive's size and digest are revalidated, the container is created from it, an
+        independent copy of the retained vault is adopted (``assert_sealed()`` must pass), the
+        DiffGuard baseline is carried over, and the signature is re-measured: anything but
+        exact equality with the recorded one is ``EnvInfraError("snapshot_integrity")`` and the
+        container is deleted before any agent command can run. The snapshot is leased for
+        the duration so a concurrent reap cannot delete it mid-restore."""
+        if self._started or self._closed:
+            raise EnvRefusal(
+                "restore: expected a fresh environment: restore() replaces start() and runs "
+                "exactly once"
+            )
+        self._started = True
+        await asyncio.to_thread(self._restore_sync, store, snapshot_id)
+
+    def _restore_sync(self, store: SnapshotStore, snapshot_id: str) -> None:
+        start_restored = getattr(self._sandbox, "start_restored", None)
+        adopt = getattr(self._vault, "adopt_sealed", None)
+        if not (callable(start_restored) and callable(adopt)):
+            self._closed = True
+            raise EnvInfraError(
+                "snapshot_unsupported",
+                "TaskSandboxEnvironment.restore: this sandbox/vault pair has no "
+                "start_restored/adopt_sealed support",
+            )
+        try:
+            record = store.lease(snapshot_id)
+        except (SnapshotRefusal, SnapshotIntegrityError) as exc:
+            self._closed = True
+            raise EnvInfraError(
+                "snapshot_integrity",
+                f"TaskSandboxEnvironment.restore: snapshot {snapshot_id!r} is not usable: {exc}",
+            ) from exc
+        try:
+            if record.meta.get("mode") != self._spec.signature:
+                raise EnvRefusal(
+                    f"restore: snapshot signature mode {record.meta.get('mode')!r} differs from "
+                    f"EnvSpec.signature {self._spec.signature!r}: the signatures could never be "
+                    f"compared"
+                )
+            archive = store.archive_path(snapshot_id)
+            hidden = tuple(json.loads(record.meta["hidden"]))
+            guard = json.loads(record.meta["guard_before"])
+            start_restored(str(archive))
+            adopt(Path(record.meta["vault_clone"]), hidden)
+            self._guard_before = guard
+            signature = self._measure_signature()
+            if signature != record.env_signature:
+                raise SnapshotIntegrityError(
+                    f"restored signature {signature} != recorded {record.env_signature}"
+                )
+            self._signature = signature
+        except EnvRefusal:
+            self._closed = True
+            raise
+        except (
+            SandboxError,
+            IntegrityRefusal,
+            OSError,
+            SnapshotIntegrityError,
+            KeyError,
+            ValueError,
+        ) as exc:
+            self._closed = True
+            with contextlib.suppress(SandboxError, IntegrityRefusal, OSError, ValueError):
+                self._sandbox.stop(delete=True)
+            raise EnvInfraError(
+                "snapshot_integrity",
+                f"TaskSandboxEnvironment.restore: {type(exc).__name__} {exc}: the restored "
+                f"environment is destroyed, never handed to the agent",
+            ) from exc
+        finally:
+            with contextlib.suppress(SnapshotRefusal, SnapshotIntegrityError, OSError):
+                store.release(snapshot_id)
+
     def _measure_signature(self) -> str:
         """ARL-18: fingerprint the started state -- rootfs tree (hidden paths and runtime dirs
         excluded), image file, task config, setup commands and the sealed vault -- or
@@ -534,7 +728,9 @@ class TaskSandboxEnvironment:
         try:
             rootfs = self._sandbox.host_path("/")
             hidden = tuple(p.strip("/") for p in self._config.hidden_paths)
-            manifest = tree_manifest(rootfs, content=content, exclude=DEFAULT_EXCLUDES + hidden)
+            manifest = tree_manifest(
+                rootfs, content=content, exclude=DEFAULT_EXCLUDES + RUNTIME_ROOTFS_FILES + hidden
+            )
             image_path = getattr(self._sandbox, "image_path", None)
             image = (
                 image_digest(image_path()) if callable(image_path) else f"name:{self._config.image}"

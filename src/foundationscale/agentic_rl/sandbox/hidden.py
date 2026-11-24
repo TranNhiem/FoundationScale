@@ -237,6 +237,69 @@ class HiddenVault:
             digest.update(f"{container_path}\0{part}\n".encode())
         return digest.hexdigest()
 
+    def clone_sealed(self, destination: str | Path) -> tuple[str, ...]:
+        """ARL-18: copy what the sealed vault holds into ``destination`` (created 0700, laid out
+        like a vault dir, symlinks copied as links, never followed) and return the container
+        paths it holds. Refused unless sealed, and when ``destination`` exists or lies inside
+        the sandbox rootfs -- a retained copy of the hidden tests must stay out of the agent's
+        reach and must never merge into an older copy."""
+        if not self._sealed:
+            raise IntegrityRefusal("clone_sealed: the vault is not sealed")
+        target_root = Path(destination)
+        if _is_within(_resolved(target_root), self._root):
+            raise IntegrityRefusal(
+                f"clone_sealed: destination {target_root} lies inside the sandbox rootfs "
+                f"{self._root}"
+            )
+        target_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+        for container_path in sorted(self._moved):
+            source = self._moved[container_path]
+            target = target_root / container_path.lstrip("/")
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if source.is_dir() and not source.is_symlink():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target, follow_symlinks=False)
+        return tuple(sorted(self._moved))
+
+    def adopt_sealed(self, clone: str | Path, container_paths: tuple[str, ...]) -> None:
+        """ARL-18 restore: populate this (fresh, unsealed) vault from a ``clone_sealed`` copy
+        and mark it sealed, for a sandbox restored from a snapshot whose rootfs never held the
+        hidden paths. The copy is independent, so one fork's ``unseal()`` never consumes
+        another fork's tests. Every path must be a declared hidden path present in ``clone``
+        and absent from this vault dir; then ``assert_sealed()`` must pass."""
+        if self._sealed:
+            raise IntegrityRefusal("adopt_sealed: expected an unsealed vault, got a sealed one")
+        self._check_vault_location()
+        declared = set(self._spec.hidden_container_paths())
+        source_root = Path(clone)
+        moved: dict[str, Path] = {}
+        for container_path in container_paths:
+            if container_path not in declared:
+                raise IntegrityRefusal(
+                    f"adopt_sealed: {container_path!r} is not a declared hidden path "
+                    f"{sorted(declared)!r}"
+                )
+            source = source_root / container_path.lstrip("/")
+            target = self._vault_target(container_path)
+            if not os.path.lexists(source):
+                raise IntegrityRefusal(
+                    f"adopt_sealed: retained copy of {container_path!r} is missing: {source}"
+                )
+            if os.path.lexists(target):
+                raise IntegrityRefusal(
+                    f"adopt_sealed: vault target already exists for {container_path!r}: {target}"
+                )
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if source.is_dir() and not source.is_symlink():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target, follow_symlinks=False)
+            moved[container_path] = target
+        self._moved = moved
+        self._sealed = True
+        self.assert_sealed()
+
     def unseal(self) -> tuple[str, ...]:
         """Move everything back for the verifier phase."""
         if not self._sealed:
