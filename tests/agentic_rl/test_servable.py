@@ -476,8 +476,10 @@ def test_link_or_copy_replaces_an_existing_destination(tmp_path: Path) -> None:
     assert dst.stat().st_ino == src.stat().st_ino
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def _no_fs_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    # autouse: every refusal test in this file would otherwise sleep through the real ~91 s
+    # backoff; the one test that pins the schedule restores the real base explicitly.
     import foundationscale.agentic_rl.servable as servable_mod
 
     monkeypatch.setattr(servable_mod, "_FS_RETRY_SLEEP_S", 0.0)
@@ -521,3 +523,17 @@ def test_directory_check_still_refuses_a_missing_directory(
     with pytest.raises(servable_mod.ServableRefusal, match="gone"):
         servable_mod.complete_for_serving(str(missing), str(tmp_path), cache_dir=str(tmp_path))
     assert calls["n"] == servable_mod._FS_RETRY_ATTEMPTS
+
+
+def test_directory_check_backs_off_long_enough_for_a_shared_fs_stall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GB200 stalls outlasted the old 5 x 2 s window; the backoff must ride out ~a minute."""
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    monkeypatch.setattr(servable_mod, "_FS_RETRY_SLEEP_S", 1.0)  # the real base, not the 0 above
+    slept: list[float] = []
+    monkeypatch.setattr(servable_mod.time, "sleep", slept.append)
+    assert servable_mod._is_dir_settled(tmp_path / "absent") is False
+    assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]  # doubling, capped, no sleep after last
+    assert sum(slept) >= 60.0

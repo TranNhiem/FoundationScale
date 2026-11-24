@@ -114,6 +114,11 @@ class FrontierTaskSource:
     seed: int = 0
     min_obs: int = 4
     floor: float = 0.05
+    # Share of each batch reserved for tasks already measured and not saturated (the frontier
+    # proper), weighted by 4p(1-p). Without it a frontier task competes with every unseen task
+    # at the same weight, so in a large pool (GB200 math: 40k tasks, ~400 drawn per run) it is
+    # almost never revisited and the curriculum degenerates to uniform sampling.
+    revisit_fraction: float = 0.5
     registry: DifficultyRegistry = field(default_factory=DifficultyRegistry)
     # Optional JSON path: loaded at construction when it exists, saved after every observe(),
     # so a resumed run -- or a later run on the same task pool -- keeps the measured difficulty.
@@ -133,6 +138,15 @@ class FrontierTaskSource:
             raise TaskSourceRefusal(
                 f"{where}: field 'floor' is {self.floor!r}: it must lie in (0, 1] -- a zero floor "
                 f"would never revisit a solved or dead task, so its estimate could not recover"
+            )
+        if (
+            type(self.revisit_fraction) is bool
+            or not isinstance(self.revisit_fraction, (int, float))
+            or not 0.0 <= float(self.revisit_fraction) <= 1.0
+        ):
+            raise TaskSourceRefusal(
+                f"{where}: field 'revisit_fraction' is {self.revisit_fraction!r}: it must lie in "
+                f"[0, 1]"
             )
         if self.state_path is not None and Path(self.state_path).exists():
             self.registry = DifficultyRegistry.load(self.state_path)
@@ -159,9 +173,22 @@ class FrontierTaskSource:
         if n > len(pool):
             return self.base.batch(step, n)
         rng = random.Random(f"frontier:{self.seed}:{step}")
-        keyed = [(rng.random() ** (1.0 / self.weight(task.uid)), i) for i, task in enumerate(pool)]
-        keyed.sort(reverse=True)
-        return tuple(pool[i] for _, i in keyed[:n])
+        # One Efraimidis-Spirakis key per task (weighted sampling without replacement).
+        keys = [rng.random() ** (1.0 / self.weight(task.uid)) for task in pool]
+        revisitable = [
+            i
+            for i, task in enumerate(pool)
+            if self.registry.counts.get(task.uid, 0) > 0
+            and not self.registry.saturated(task.uid, self.min_obs)
+        ]
+        quota = min(round(float(self.revisit_fraction) * n), len(revisitable))
+        chosen = sorted(revisitable, key=lambda i: keys[i], reverse=True)[:quota]
+        taken = set(chosen)
+        rest = sorted(
+            (i for i in range(len(pool)) if i not in taken), key=lambda i: keys[i], reverse=True
+        )
+        chosen += rest[: n - len(chosen)]
+        return tuple(pool[i] for i in chosen)
 
     def observe(self, trajectories: Iterable[Any]) -> None:
         """Feed every rollout's measured reward into the registry (abstentions are ignored)."""
@@ -180,4 +207,10 @@ class FrontierTaskSource:
             "frontier": sum(1 for p in rates if 0.2 <= p <= 0.8),
             "saturated": sum(1 for uid in seen if self.registry.saturated(uid, self.min_obs)),
             "mean_pass_rate": round(sum(rates) / len(rates), 4) if rates else 0.5,
+            "revisitable": sum(
+                1
+                for uid in seen
+                if self.registry.counts.get(uid, 0) > 0
+                and not self.registry.saturated(uid, self.min_obs)
+            ),
         }

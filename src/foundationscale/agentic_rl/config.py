@@ -388,6 +388,8 @@ class RolloutConfig:
     curriculum: str = "off"
     curriculum_min_obs: int = 4
     curriculum_floor: float = 0.05
+    # Share of each batch reserved for measured, unsaturated tasks (see FrontierTaskSource).
+    curriculum_revisit_fraction: float = 0.5
     # Optional registry file: loaded if present, saved after every step (resume / reuse).
     curriculum_state_path: str | None = None
     # ARL-21: directory for fs.trace/v1 span traces of every step's trajectories; None = off.
@@ -1081,6 +1083,7 @@ def _build_rollout(
             "curriculum",
             "curriculum_min_obs",
             "curriculum_floor",
+            "curriculum_revisit_fraction",
             "curriculum_state_path",
             "trace_dir",
         }
@@ -1260,6 +1263,21 @@ def _build_rollout(
             f"rollout.curriculum_min_obs / rollout.curriculum_floor: {curriculum_min_obs!r} / "
             f"{curriculum_floor!r}: min_obs must be >= 1 and the floor must lie in (0, 1]"
         )
+    curriculum_revisit_fraction = _resolve_scalar(
+        dotted_key="rollout.curriculum_revisit_fraction",
+        field_name="curriculum_revisit_fraction",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=float,
+        default=0.5,
+        required=False,
+        provenance=provenance,
+    )
+    if not 0.0 <= curriculum_revisit_fraction <= 1.0:
+        raise AgenticConfigRefusal(
+            f"rollout.curriculum_revisit_fraction: {curriculum_revisit_fraction!r} must lie in "
+            f"[0, 1]"
+        )
     curriculum_state_path = _resolve_scalar(
         dotted_key="rollout.curriculum_state_path",
         field_name="curriculum_state_path",
@@ -1304,6 +1322,7 @@ def _build_rollout(
         curriculum_min_obs=curriculum_min_obs,
         curriculum_floor=curriculum_floor,
         curriculum_state_path=curriculum_state_path,
+        curriculum_revisit_fraction=curriculum_revisit_fraction,
         trace_dir=trace_dir,
     )
 

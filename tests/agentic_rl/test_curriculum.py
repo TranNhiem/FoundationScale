@@ -151,3 +151,31 @@ def test_a_malformed_registry_file_is_refused_not_silently_emptied(tmp_path: Pat
     state.write_text(json.dumps([1, 2, 3]))  # not even an object
     with pytest.raises(TaskSourceRefusal, match="not a registry"):
         _source(tmp_path, 3, state_path=str(state))
+
+
+def test_revisit_fraction_brings_frontier_tasks_back_even_in_a_huge_pool(tmp_path: Path) -> None:
+    """GB200 math has 40k tasks: without a revisit share a measured frontier task competes with
+    every unseen task and is practically never drawn again."""
+    src = _source(tmp_path, 400, seed=0, revisit_fraction=0.5)
+    for k in range(8):  # two frontier tasks (p ~ 1/2) and one saturated task
+        src.registry.update("t7", float(k % 2))
+        src.registry.update("t9", float(k % 2))
+        src.registry.update("t11", 1.0)
+    batch = [t.uid for t in src.batch(1, 4)]
+    assert {"t7", "t9"} <= set(batch)  # both revisited (quota = 2)
+    assert "t11" not in batch or src.weight("t11") == src.floor
+    assert len(set(batch)) == 4
+    none = _source(tmp_path, 400, seed=0, revisit_fraction=0.0)
+    none.registry = src.registry
+    drawn = Counter(t.uid for step in range(50) for t in none.batch(step, 4))
+    assert drawn["t7"] + drawn["t9"] < 5  # without the share they are almost never drawn
+
+
+def test_revisit_quota_falls_through_when_few_tasks_are_revisitable(tmp_path: Path) -> None:
+    src = _source(tmp_path, 10, seed=0, revisit_fraction=1.0)
+    for k in range(8):
+        src.registry.update("t3", float(k % 2))  # one revisitable task, quota of 4
+    batch = [t.uid for t in src.batch(0, 4)]
+    assert batch[0] == "t3" and len(set(batch)) == 4
+    with pytest.raises(TaskSourceRefusal, match="revisit_fraction"):
+        _source(tmp_path, 10, revisit_fraction=1.5)

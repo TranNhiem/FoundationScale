@@ -113,6 +113,12 @@ are deterministic given the seed, the step and the registry; one
 `[agentic-rl:curriculum]` line per step reports tasks seen, frontier and
 saturated counts. Dynamic sampling discards zero-spread groups after their
 rollouts; the curriculum avoids drawing those tasks in the first place.
+`rollout.curriculum_revisit_fraction` (default 0.5) reserves that share of
+each batch for tasks already measured and not saturated, weighted by
+`4p(1-p)`; without it a measured frontier task competes with every unseen
+task at the same weight, so in a large pool (GB200 math: about 40k tasks,
+about 400 drawn per run) it is practically never revisited and the curriculum
+degenerates to uniform sampling.
 `rollout.curriculum_state_path` (optional) loads the registry when the file
 exists and saves it atomically after every step, so a resumed run -- or a
 later run on the same task pool -- keeps the measured difficulty; without it

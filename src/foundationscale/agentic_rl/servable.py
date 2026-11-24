@@ -270,12 +270,15 @@ def _link_or_copy(src: Path, dst: Path) -> tuple[Literal["hardlink", "copy"], st
     return "hardlink", None
 
 
-# A shared /home (NFS) can report an existing directory as absent for a moment: on GB200 one such
-# blip at publish time refused a 25 h run at step 11 while the base model directory was intact.
-# A directory check is therefore retried briefly before it refuses; a genuinely missing directory
-# still refuses, after _FS_RETRY_ATTEMPTS checks.
-_FS_RETRY_ATTEMPTS = 5
-_FS_RETRY_SLEEP_S = 2.0
+# A shared /home (NFS/WEKA) can report an existing directory as absent for a moment: on GB200 one
+# such blip at publish time refused a 25 h run at step 11 while the base model directory was
+# intact, and later stalls outlasted the first 5 x 2 s window (arl_ds_s10 died at step 20 of the
+# same refusal on 2026-11-24). A directory check is therefore retried with exponential backoff --
+# _FS_RETRY_SLEEP_S doubling per attempt, capped at _FS_RETRY_MAX_SLEEP_S, ~91 s in total -- before
+# it refuses; a genuinely missing directory still refuses, after _FS_RETRY_ATTEMPTS checks.
+_FS_RETRY_ATTEMPTS = 8
+_FS_RETRY_SLEEP_S = 1.0
+_FS_RETRY_MAX_SLEEP_S = 30.0
 
 
 def _is_dir_settled(path: Path) -> bool:
@@ -283,7 +286,7 @@ def _is_dir_settled(path: Path) -> bool:
         if path.is_dir():
             return True
         if attempt + 1 < _FS_RETRY_ATTEMPTS:
-            time.sleep(_FS_RETRY_SLEEP_S)
+            time.sleep(min(_FS_RETRY_SLEEP_S * (2**attempt), _FS_RETRY_MAX_SLEEP_S))
     return False
 
 
