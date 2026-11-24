@@ -25,7 +25,7 @@ from foundationscale.agentic_rl.sandbox.enroot import SandboxError
 
 META = {"image": "img.sqsh", "workdir": "/workspace", "test_cmd": "bash /tests/test.sh",
         "hidden_paths": '["/tests"]', "test_timeout_s": "60", "fail_to_pass": json.dumps([ALL_TEST]),
-        "pass_to_pass": "[]"}
+        "pass_to_pass": "[]", "verify_mode": "inplace"}
 
 
 @dataclass(frozen=True)
@@ -174,3 +174,53 @@ def test_long_instance_ids_fit_the_enroot_name_limit(tmp_path) -> None:
     )
     backend.create_for_task(_spec(), _task(), instance_id=long_id)
     assert len(names[0]) <= 63
+
+
+class FreshRootfs(RootfsSandbox):
+    """Each instance owns its own rootfs (a pristine verifier container), and records being deleted."""
+
+    stopped: list[str] = []
+
+    def stop(self, *, delete: bool = True) -> None:
+        FreshRootfs.stopped.append(str(self.root))
+
+
+def _fresh_env(tmp_path, verifier):
+    roots = iter([tmp_path / "agent", tmp_path / "verifier"])
+    backend = HarborTaskBackend(
+        roots=SandboxRoots(data_root="/d", image_store="/i", scratch_root=str(tmp_path / "s")),
+        sandbox_factory=lambda spec: FreshRootfs(next(roots), verifier),
+        vault_factory=lambda sandbox, spec, vault_dir: Vault(),
+    )
+    meta = {k: v for k, v in META.items() if k != "verify_mode"}
+    return backend.create_for_task(_spec(), _task(meta), instance_id="t#0")
+
+
+def test_fresh_mode_copies_the_workdir_and_ignores_tampering_outside_it(tmp_path):
+    agent = tmp_path / "agent"
+    (agent / "workspace").mkdir(parents=True)
+    (agent / "workspace" / "answer.txt").write_text("42", encoding="utf-8")
+    (agent / "usr" / "bin").mkdir(parents=True)
+    (agent / "usr" / "bin" / "node").write_text("#!/bin/sh\necho hacked", encoding="utf-8")  # tampering, agent side
+    (agent / "logs" / "verifier").mkdir(parents=True)
+    (agent / "logs" / "verifier" / "reward.json").write_text('{"x": 1}', encoding="utf-8")  # planted, agent side
+
+    def verifier(root):
+        assert (root / "workspace" / "answer.txt").read_text(encoding="utf-8") == "42"
+        assert not (root / "usr" / "bin" / "node").exists()  # the verifier never sees the agent's binaries
+        out = root / "logs" / "verifier"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "reward.json").write_text('{"x": 0}', encoding="utf-8")
+        return Result()
+
+    FreshRootfs.stopped.clear()
+    out = _verify(_fresh_env(tmp_path, verifier))
+    assert out["harbor_verify_mode"] == "fresh" and json.loads(out["swe_tests"])[ALL_TEST] == "failed"
+    assert FreshRootfs.stopped == [str(tmp_path / "verifier")]  # the verifier container is always deleted
+
+
+def test_fresh_mode_infra_failure_still_deletes_the_verifier(tmp_path):
+    FreshRootfs.stopped.clear()
+    with pytest.raises(EnvInfraError):
+        _verify(_fresh_env(tmp_path, SandboxError("boom")))
+    assert FreshRootfs.stopped == [str(tmp_path / "verifier")]

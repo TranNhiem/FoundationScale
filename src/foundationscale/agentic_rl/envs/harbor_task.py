@@ -17,10 +17,12 @@ leaf-less reward file is ``swe_status="error"`` (the reward abstains), never a s
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+import shutil
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -85,56 +87,95 @@ def reward_tests(name: str, text: str) -> dict[str, str] | None:
 
 
 class HarborTaskEnvironment(TaskSandboxEnvironment):
-    """``TaskSandboxEnvironment`` whose verifier reads Harbor's reward file instead of pytest."""
+    """``TaskSandboxEnvironment`` whose verifier reads Harbor's reward file instead of pytest.
 
-    def _reward_path(self, name: str) -> Path:
-        # host_path refuses any path (symlinks included) that resolves outside the rootfs
-        return self._sandbox.host_path(f"{REWARD_DIR}/{name}")
+    With ``fresh_sandbox`` (the default for the ``harbor_task`` backend) the verifier runs in a NEW container from the
+    pristine image, into which only the agent's workdir is copied: the agent is root in its own container and could
+    otherwise shadow an interpreter the verifier calls (measured 2026-11-24: replacing ``node`` with a script that writes
+    reward.json scored 1.0 on a held-out task without doing it). Task metadata ``verify_mode="inplace"`` opts out.
+    """
+
+    def __init__(self, *, fresh_sandbox: Callable[[], object] | None = None, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._fresh_sandbox = fresh_sandbox
 
     def _verify_sync(self) -> dict[str, str]:
+        if self._fresh_sandbox is None:
+            return self._verify_inplace()
+        return self._verify_fresh()
+
+    def _verify_inplace(self) -> dict[str, str]:
         try:
             for name in REWARD_FILES:  # a reward the agent planted must never be read back
-                path = self._reward_path(name)
+                path = self._sandbox.host_path(f"{REWARD_DIR}/{name}")
                 if path.is_file() or path.is_symlink():
                     path.unlink()
             self._vault.unseal()
             result = self._sandbox.exec(
-                self._config.test_cmd,
-                cwd=self._config.workdir,
-                env=dict(self._spec.env) or None,
+                self._config.test_cmd, cwd=self._config.workdir, env=dict(self._spec.env) or None,
                 timeout_s=self._config.test_timeout_s,
             )
         except (SandboxError, IntegrityRefusal, OSError) as exc:
             raise EnvInfraError(
                 "verify_failed",
-                f"HarborTaskEnvironment.verify: clearing old rewards, restoring the hidden tests "
-                f"and running {_described(self._config.test_cmd)} raised {type(exc).__name__} "
-                f"{exc}: the verifier phase could not run at all -- an infra failure, never a "
+                f"HarborTaskEnvironment.verify: clearing old rewards, restoring the hidden tests and running "
+                f"{_described(self._config.test_cmd)} raised {type(exc).__name__} {exc}: the verifier phase could "
+                f"not run at all -- an infra failure, never a scored zero",
+            ) from exc
+        return _read_rewards(self._sandbox, result, verify_mode="inplace")
+
+    def _verify_fresh(self) -> dict[str, str]:
+        fresh = None
+        try:
+            fresh = self._fresh_sandbox()
+            fresh.start()
+            src = self._sandbox.host_path(self._config.workdir)
+            dst = fresh.host_path(self._config.workdir)
+            if dst.exists() or dst.is_symlink():
+                shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
+            if src.is_dir():
+                shutil.copytree(src, dst, symlinks=True)
+            result = fresh.exec(
+                self._config.test_cmd, cwd=self._config.workdir, env=dict(self._spec.env) or None,
+                timeout_s=self._config.test_timeout_s,
+            )
+            return _read_rewards(fresh, result, verify_mode="fresh")
+        except (SandboxError, IntegrityRefusal, OSError, shutil.Error) as exc:
+            raise EnvInfraError(
+                "verify_failed",
+                f"HarborTaskEnvironment.verify: starting the pristine verifier container, copying "
+                f"{self._config.workdir} into it and running {_described(self._config.test_cmd)} raised "
+                f"{type(exc).__name__} {exc}: the verifier phase could not run at all -- an infra failure, never a "
                 f"scored zero",
             ) from exc
-        if result.timed_out:
-            return {"swe_status": "error", "swe_error": "test_cmd timed out"}
-        for name in REWARD_FILES:
-            try:
-                path = self._reward_path(name)
-                if not path.is_file() or path.stat().st_size > _MAX_REWARD_BYTES:
-                    continue
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except (SandboxError, OSError):
+        finally:
+            if fresh is not None:
+                try:
+                    fresh.stop(delete=True)
+                except (SandboxError, OSError):
+                    pass
+
+
+def _read_rewards(sandbox: object, result: object, *, verify_mode: str) -> dict[str, str]:
+    """The ``swe_*`` mapping from the reward file ``test_cmd`` left in ``sandbox`` (see the module docstring)."""
+    if result.timed_out:
+        return {"swe_status": "error", "swe_error": "test_cmd timed out", "harbor_verify_mode": verify_mode}
+    for name in REWARD_FILES:
+        try:
+            path = sandbox.host_path(f"{REWARD_DIR}/{name}")  # refuses paths resolving outside the rootfs
+            if not path.is_file() or path.stat().st_size > _MAX_REWARD_BYTES:
                 continue
-            tests = reward_tests(name, text)
-            if tests is not None:
-                return {
-                    "swe_status": "ok",
-                    "swe_tests": json.dumps(tests, sort_keys=True),
-                    "swe_exit_code": str(result.return_code),
-                    "harbor_reward_file": name,
-                }
-            return {"swe_status": "error", "swe_error": f"{name} has no numeric reward"}
-        return {
-            "swe_status": "error",
-            "swe_error": f"no reward file under {REWARD_DIR} (exit {result.return_code})",
-        }
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except (SandboxError, OSError):
+            continue
+        tests = reward_tests(name, text)
+        if tests is not None:
+            return {"swe_status": "ok", "swe_tests": json.dumps(tests, sort_keys=True),
+                    "swe_exit_code": str(result.return_code), "harbor_reward_file": name,
+                    "harbor_verify_mode": verify_mode}
+        return {"swe_status": "error", "swe_error": f"{name} has no numeric reward", "harbor_verify_mode": verify_mode}
+    return {"swe_status": "error", "swe_error": f"no reward file under {REWARD_DIR} (exit {result.return_code})",
+            "harbor_verify_mode": verify_mode}
 
 
 class HarborTaskBackend(EnrootTaskBackend):
@@ -143,8 +184,23 @@ class HarborTaskBackend(EnrootTaskBackend):
     name: str = "harbor_task"
 
     def create_for_task(self, spec: EnvSpec, task: Any, *, instance_id: str) -> HarborTaskEnvironment:
-        # Harbor task names (Skill2Env uids) run long; the enroot name limit would refuse every episode
-        env = super().create_for_task(spec, task, instance_id=short_instance_id(instance_id))
+        captured: dict[str, Any] = {}
+        factory = self._sandbox_factory
+
+        def capture(sandbox_spec: Any) -> Any:
+            captured["spec"] = sandbox_spec
+            return factory(sandbox_spec)
+
+        self._sandbox_factory = capture
+        try:
+            # Harbor task names (Skill2Env uids) run long; the enroot name limit would refuse every episode
+            env = super().create_for_task(spec, task, instance_id=short_instance_id(instance_id))
+        finally:
+            self._sandbox_factory = factory
+        fresh = None
+        if str((getattr(task, "metadata", None) or {}).get("verify_mode", "fresh")) != "inplace":
+            base = captured["spec"]
+            fresh = lambda: factory(dataclasses.replace(base, name=base.name + "-v"))  # noqa: E731
         return HarborTaskEnvironment(
-            spec=env._spec, config=env._config, sandbox=env._sandbox, vault=env._vault
+            spec=env._spec, config=env._config, sandbox=env._sandbox, vault=env._vault, fresh_sandbox=fresh
         )
