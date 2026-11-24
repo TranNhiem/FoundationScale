@@ -300,6 +300,7 @@ def _task_source(config: AgenticRLConfig) -> TaskSource | FrontierTaskSource:
             seed=config.rollout.seed,
             min_obs=config.rollout.curriculum_min_obs,
             floor=config.rollout.curriculum_floor,
+            state_path=config.rollout.curriculum_state_path,
         )
     return base
 

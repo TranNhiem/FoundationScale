@@ -99,8 +99,11 @@ or all 1 drops to `rollout.curriculum_floor`, so it is still revisited. Draws
 are deterministic given the seed, the step and the registry; one
 `[agentic-rl:curriculum]` line per step reports tasks seen, frontier and
 saturated counts. Dynamic sampling discards zero-spread groups after their
-rollouts; the curriculum avoids drawing those tasks in the first place. The
-registry is in memory, so a resumed run starts uniform.
+rollouts; the curriculum avoids drawing those tasks in the first place.
+`rollout.curriculum_state_path` (optional) loads the registry when the file
+exists and saves it atomically after every step, so a resumed run -- or a
+later run on the same task pool -- keeps the measured difficulty; without it
+the registry is in memory and a resumed run starts uniform.
 
 **Dynamic sampling.** On GB200 math runs about half of all groups had zero
 reward spread (every sample solved, or every sample failed), so a centred

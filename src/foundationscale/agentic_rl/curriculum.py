@@ -25,10 +25,13 @@ in-memory; a resumed run starts with an empty registry, i.e. uniform sampling.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import random
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from foundationscale.agentic_rl.harness.base import EpisodeTask
@@ -63,6 +66,37 @@ class DifficultyRegistry:
         """Beta(1, 1) posterior mean: 1/2 for an unseen task."""
         return (self.sums.get(uid, 0.0) + 1.0) / (self.counts.get(uid, 0) + 2.0)
 
+    def save(self, path: str) -> None:
+        """Write the registry atomically (temp file + rename): a crash mid-write leaves the
+        previous file intact, never a torn one."""
+        tmp = Path(f"{path}.tmp.{os.getpid()}")
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump({"counts": self.counts, "sums": self.sums}, handle, sort_keys=True)
+        tmp.replace(path)
+
+    @classmethod
+    def load(cls, path: str) -> DifficultyRegistry:
+        """Read a registry written by :meth:`save`; refuses a malformed file rather than
+        silently starting empty (an empty registry would quietly mean uniform sampling)."""
+        with Path(path).open(encoding="utf-8") as handle:
+            raw = json.load(handle)
+        counts = raw.get("counts") if isinstance(raw, dict) else None
+        sums = raw.get("sums") if isinstance(raw, dict) else None
+        if (
+            not isinstance(counts, dict)
+            or not isinstance(sums, dict)
+            or set(counts) != set(sums)
+            or not all(type(v) is int and v >= 0 for v in counts.values())
+            or not all(
+                isinstance(v, (int, float)) and 0.0 <= v <= counts[k] for k, v in sums.items()
+            )
+        ):
+            raise TaskSourceRefusal(
+                f"DifficultyRegistry.load: {path} is not a registry written by save() "
+                f"(counts/sums missing, mismatched or out of range)"
+            )
+        return cls(counts=dict(counts), sums={k: float(v) for k, v in sums.items()})
+
     def saturated(self, uid: str, min_obs: int) -> bool:
         """Observed ``min_obs``+ times with every reward 0 or every reward 1."""
         n = self.counts.get(uid, 0)
@@ -81,6 +115,9 @@ class FrontierTaskSource:
     min_obs: int = 4
     floor: float = 0.05
     registry: DifficultyRegistry = field(default_factory=DifficultyRegistry)
+    # Optional JSON path: loaded at construction when it exists, saved after every observe(),
+    # so a resumed run -- or a later run on the same task pool -- keeps the measured difficulty.
+    state_path: str | None = None
 
     def __post_init__(self) -> None:
         where = "FrontierTaskSource"
@@ -97,6 +134,8 @@ class FrontierTaskSource:
                 f"{where}: field 'floor' is {self.floor!r}: it must lie in (0, 1] -- a zero floor "
                 f"would never revisit a solved or dead task, so its estimate could not recover"
             )
+        if self.state_path is not None and Path(self.state_path).exists():
+            self.registry = DifficultyRegistry.load(self.state_path)
 
     def __len__(self) -> int:
         return len(self.base)
@@ -128,6 +167,8 @@ class FrontierTaskSource:
         """Feed every rollout's measured reward into the registry (abstentions are ignored)."""
         for trajectory in trajectories:
             self.registry.update(trajectory.uid, trajectory.reward)
+        if self.state_path is not None:
+            self.registry.save(self.state_path)
 
     def stats(self) -> dict[str, float | int]:
         """Registry summary for the ``[agentic-rl:curriculum]`` line."""

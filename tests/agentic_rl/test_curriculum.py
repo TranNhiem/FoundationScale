@@ -132,3 +132,22 @@ def test_config_keys_default_off_accept_frontier_and_refuse_bad_values() -> None
         build(curriculum="easy-first")
     with pytest.raises(AgenticConfigRefusal, match="curriculum_floor"):
         build(curriculum_floor=0.0)
+
+
+def test_registry_state_round_trips_and_resumes_a_source(tmp_path: Path) -> None:
+    state = str(tmp_path / "curriculum.json")
+    src = _source(tmp_path, 3, state_path=state)
+    src.observe([SimpleNamespace(uid="t0", reward=1.0), SimpleNamespace(uid="t1", reward=0.0)])
+    resumed = _source(tmp_path, 3, state_path=state)  # a restarted run on the same pool
+    assert resumed.registry.counts == {"t0": 1, "t1": 1}
+    assert resumed.registry.sums == {"t0": 1.0, "t1": 0.0}
+
+
+def test_a_malformed_registry_file_is_refused_not_silently_emptied(tmp_path: Path) -> None:
+    state = tmp_path / "curriculum.json"
+    state.write_text(json.dumps({"counts": {"t0": 2}, "sums": {"t0": 5.0}}))  # sum > count
+    with pytest.raises(TaskSourceRefusal, match="not a registry"):
+        _source(tmp_path, 3, state_path=str(state))
+    state.write_text(json.dumps([1, 2, 3]))  # not even an object
+    with pytest.raises(TaskSourceRefusal, match="not a registry"):
+        _source(tmp_path, 3, state_path=str(state))

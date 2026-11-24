@@ -388,6 +388,8 @@ class RolloutConfig:
     curriculum: str = "off"
     curriculum_min_obs: int = 4
     curriculum_floor: float = 0.05
+    # Optional registry file: loaded if present, saved after every step (resume / reuse).
+    curriculum_state_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1077,6 +1079,7 @@ def _build_rollout(
             "curriculum",
             "curriculum_min_obs",
             "curriculum_floor",
+            "curriculum_state_path",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1254,6 +1257,21 @@ def _build_rollout(
             f"rollout.curriculum_min_obs / rollout.curriculum_floor: {curriculum_min_obs!r} / "
             f"{curriculum_floor!r}: min_obs must be >= 1 and the floor must lie in (0, 1]"
         )
+    curriculum_state_path = _resolve_scalar(
+        dotted_key="rollout.curriculum_state_path",
+        field_name="curriculum_state_path",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str | None,
+        default=None,
+        required=False,
+        provenance=provenance,
+    )
+    if curriculum_state_path is not None and curriculum != "frontier":
+        raise AgenticConfigRefusal(
+            f"rollout.curriculum_state_path: is set, but rollout.curriculum={curriculum!r} "
+            f"never reads it"
+        )
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1270,6 +1288,7 @@ def _build_rollout(
         curriculum=curriculum,
         curriculum_min_obs=curriculum_min_obs,
         curriculum_floor=curriculum_floor,
+        curriculum_state_path=curriculum_state_path,
     )
 
 
