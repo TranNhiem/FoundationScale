@@ -491,16 +491,16 @@ def test_directory_check_rides_out_a_transient_nfs_blip(
     """An existing directory reported absent twice (an NFS blip) is still accepted."""
     import foundationscale.agentic_rl.servable as servable_mod
 
-    real_is_dir = Path.is_dir
+    real_probe = servable_mod._dir_probe
     misses = {"left": 2}
 
-    def flaky_is_dir(self: Path) -> bool:
-        if self == tmp_path and misses["left"] > 0:
+    def flaky_probe(path: Path) -> str | None:
+        if path == tmp_path and misses["left"] > 0:
             misses["left"] -= 1
-            return False
-        return real_is_dir(self)
+            return "ESTALE"
+        return real_probe(path)
 
-    monkeypatch.setattr(Path, "is_dir", flaky_is_dir)
+    monkeypatch.setattr(servable_mod, "_dir_probe", flaky_probe)
     assert servable_mod._is_dir_settled(tmp_path) is True
     assert misses["left"] == 0
 
@@ -512,17 +512,27 @@ def test_directory_check_still_refuses_a_missing_directory(
     import foundationscale.agentic_rl.servable as servable_mod
 
     calls = {"n": 0}
-    real_is_dir = Path.is_dir
+    real_probe = servable_mod._dir_probe
 
-    def counting_is_dir(self: Path) -> bool:
+    def counting_probe(path: Path) -> str | None:
         calls["n"] += 1
-        return real_is_dir(self)
+        return real_probe(path)
 
-    monkeypatch.setattr(Path, "is_dir", counting_is_dir)
+    monkeypatch.setattr(servable_mod, "_dir_probe", counting_probe)
     missing = tmp_path / "gone"
-    with pytest.raises(servable_mod.ServableRefusal, match="gone"):
+    # the refusal names the path AND the real reason (ENOENT), not a bare "not a directory"
+    with pytest.raises(servable_mod.ServableRefusal, match="gone.*ENOENT"):
         servable_mod.complete_for_serving(str(missing), str(tmp_path), cache_dir=str(tmp_path))
     assert calls["n"] == servable_mod._FS_RETRY_ATTEMPTS
+
+
+def test_dir_probe_names_a_file_that_is_not_a_directory(tmp_path: Path) -> None:
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    plain = tmp_path / "file.txt"
+    plain.write_text("x")
+    assert servable_mod._dir_probe(plain) == "not a directory"
+    assert servable_mod._dir_probe(tmp_path) is None
 
 
 def test_directory_check_backs_off_long_enough_for_a_shared_fs_stall(

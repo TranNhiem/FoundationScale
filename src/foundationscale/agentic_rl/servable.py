@@ -48,11 +48,13 @@ exactly the tensors the published checkpoint lacks, is ever placed there.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import json
 import os
 import shutil
+import stat
 import time
 import uuid
 from dataclasses import dataclass
@@ -281,13 +283,36 @@ _FS_RETRY_SLEEP_S = 1.0
 _FS_RETRY_MAX_SLEEP_S = 30.0
 
 
+def _dir_probe(path: Path) -> str | None:
+    """None if ``path`` is a directory now, else why not: an OSError's errno name (ESTALE,
+    ENOENT, ...) or "not a directory". ``Path.is_dir()`` swallows the OSError, which is
+    exactly the evidence a shared-filesystem stall needs."""
+    try:
+        mode = path.stat().st_mode
+    except OSError as exc:
+        return errno.errorcode.get(exc.errno or 0, str(exc.errno))
+    return None if stat.S_ISDIR(mode) else "not a directory"
+
+
 def _is_dir_settled(path: Path) -> bool:
+    return _dir_settled_reason(path) is None
+
+
+def _dir_settled_reason(path: Path) -> str | None:
+    """Retry ``_dir_probe`` with exponential backoff. Between attempts the parent directory is
+    listed: on NFS that revalidates a stale cached entry, which time alone does not (two GB200
+    runs on one tray failed this check after the full backoff while the directory existed).
+    Returns None once the path is a directory, else the last failure reason."""
+    reason: str | None = "not checked"
     for attempt in range(_FS_RETRY_ATTEMPTS):
-        if path.is_dir():
-            return True
+        reason = _dir_probe(path)
+        if reason is None:
+            return None
         if attempt + 1 < _FS_RETRY_ATTEMPTS:
+            with contextlib.suppress(OSError):
+                next(path.parent.iterdir(), None)  # a directory read revalidates NFS entries
             time.sleep(min(_FS_RETRY_SLEEP_S * (2**attempt), _FS_RETRY_MAX_SLEEP_S))
-    return False
+    return reason
 
 
 def complete_for_serving(
@@ -304,10 +329,16 @@ def complete_for_serving(
     where = "complete_for_serving"
     publish = Path(publish_dir)
     base = Path(base_model_dir)
-    if not _is_dir_settled(publish):
-        raise ServableRefusal(f"{where}: publish_dir {publish_dir!r} is not a directory")
-    if not _is_dir_settled(base):
-        raise ServableRefusal(f"{where}: base_model_dir {base_model_dir!r} is not a directory")
+    for label, value, path in (
+        ("publish_dir", publish_dir, publish),
+        ("base_model_dir", base_model_dir, base),
+    ):
+        reason = _dir_settled_reason(path)
+        if reason is not None:
+            raise ServableRefusal(
+                f"{where}: {label} {value!r} is not a directory ({reason} after "
+                f"{_FS_RETRY_ATTEMPTS} checks with backoff)"
+            )
 
     published_config = _read_json_object(publish / "config.json", where=f"{where}: publish_dir")
     base_config = _read_json_object(base / "config.json", where=f"{where}: base_model_dir")

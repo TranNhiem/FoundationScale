@@ -238,3 +238,53 @@ def test_rollout_host_writes_closed_live_traces_that_join_the_episode_trace(
         started = [e for e in events if e["event"] == "generation_started"]
         assert started and started[0]["policy_version"] == 7  # no fleet ledger: the step
         assert {e["trace_id"] for e in events} <= episode_ids
+
+
+def test_read_live_refuses_a_line_that_is_not_an_object(tmp_path: Path) -> None:
+    from foundationscale.agentic_rl.fs_trace import TraceRefusal
+
+    path = tmp_path / "live.jsonl"
+    path.write_text('{"event":"generation_started","turn_index":0}\n[1,2]\n')
+    with pytest.raises(TraceRefusal, match="line 2"):
+        read_live(path)
+
+
+def test_last_open_operation_ignores_events_it_does_not_track() -> None:
+    events = [
+        {"event": 7},  # not a string
+        {"event": "heartbeat"},  # no started/finished phase
+        {"event": "upload_started", "turn_index": 1},  # not a generation or tool
+        {"event": "generation_started", "turn_index": 2, "policy_version": 3},
+    ]
+    assert last_open_operation(events) == events[-1]
+
+
+def test_rollout_host_leaves_a_harness_without_the_observer_keywords_untouched(
+    tmp_path: Path,
+) -> None:
+    """A harness whose run_episode lacks observer/policy_version keeps the old call."""
+    try:
+        import test_engine_recovery as fakes  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - package-style collection
+        from tests.agentic_rl import test_engine_recovery as fakes  # type: ignore[no-redef]
+
+    trace_dir = tmp_path / "run-plain"
+    host = fakes._host(
+        tmp_path,
+        uids=["taskA"],
+        client_factory=lambda i: fakes.SubmitClient("xy"),
+        trace_dir=str(trace_dir),
+        gates=False,
+    )
+    real = host.harness
+
+    class PlainHarness:
+        name = real.name
+
+        async def run_episode(self, task: Any, *, client: Any, env: Any, budget: Any) -> Any:
+            return await real.run_episode(task, client=client, env=env, budget=budget)
+
+    object.__setattr__(host, "harness", PlainHarness())
+    host.rollout(0)
+    assert not (trace_dir / "live").exists()  # no live writer for this harness
+    assert (trace_dir / "step_000000.jsonl").exists()  # the episode trace is still written
