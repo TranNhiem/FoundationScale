@@ -1,8 +1,9 @@
-"""Unit tests for MODULES A and B: frozen surface and admission gate."""
+"""Unit tests for MODULES A and B: frozen surface, beacon and paired admission gates, and evidence building."""
 import pytest
 
 from foundationskills.agent.frozen_surface import assert_editable, fingerprint
-from foundationskills.agent.admit import admit, admission_hash, admission_payload
+from foundationskills.agent.admit import admit, admission_hash, admission_payload, paired_signflip_p
+from foundationskills.agent.self_improve_evidence import beacon_fired, build_evidence, paired_cases
 
 FENCE = '`' * 3
 NAME = "self-improve-gates"
@@ -36,7 +37,7 @@ PROSE = OLD.replace("This body sentence explains the flow.",
                     "This body sentence explains the admission flow clearly.")
 
 
-def ev(gain=0.1, measured=True, drop=None, inc_drop=None, **cand):
+def ev(gain=0.1, measured=True, drop=None, inc_drop=None, fired=1, pairs=None, **cand):
     candidate = {"behaviour_case_pass": 0.8 + gain, "oracle_item_pass": 0.9, "routing_recall": 0.7}
     incumbent = {"behaviour_case_pass": 0.8, "oracle_item_pass": 0.9, "routing_recall": 0.7}
     candidate.update(cand)
@@ -44,8 +45,12 @@ def ev(gain=0.1, measured=True, drop=None, inc_drop=None, **cand):
         del candidate[drop]
     if inc_drop is not None:
         del incumbent[inc_drop]
+    if pairs is None:
+        pairs = [[0.0, 1.0] for _ in range(8)]
     return {"measured": measured, "target": "behaviour_case_pass",
-            "incumbent": incumbent, "candidate": candidate}
+            "incumbent": incumbent, "candidate": candidate,
+            "beacon": {"condition": "atlas-activation-beacon", "fired": fired},
+            "paired": {"target": "behaviour_case_pass", "pairs": pairs}}
 
 
 def hash_for(new, evidence):
@@ -101,6 +106,46 @@ def test_unmeasured_evidence_is_flagged():
         assert res["verdict"] == "UNMEASURED"
 
 
+def test_missing_beacon_is_unmeasured():
+    evidence = ev()
+    del evidence["beacon"]
+    res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
+    assert res["verdict"] == "UNMEASURED"
+    assert any("candidate declares no activation beacon" in r for r in res["reasons"])
+
+
+def test_beacon_fired_zero_is_red_naming_inert():
+    evidence = ev(fired=0)
+    res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
+    assert res["verdict"] == "RED"
+    assert any("inert" in r for r in res["reasons"])
+
+
+def test_fewer_than_three_pairs_is_unmeasured():
+    evidence = ev(pairs=[[0.0, 1.0], [0.0, 1.0]])
+    res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
+    assert res["verdict"] == "UNMEASURED"
+    assert any("paired evidence missing" in r for r in res["reasons"])
+
+
+def test_noisy_pairs_are_red_naming_not_significant():
+    pairs = [[0, 1], [1, 0], [0, 1], [1, 0], [0, 1]]
+    evidence = ev(pairs=pairs)
+    res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
+    assert res["verdict"] == "RED"
+    assert any("not significant" in r for r in res["reasons"])
+
+
+def test_paired_signflip_p_exact_values():
+    mean, p = paired_signflip_p([[0, 1]] * 5)
+    assert mean == 1.0
+    assert p == 1 / 32
+
+    mean, p = paired_signflip_p([[0, 0]] * 4)
+    assert mean == 0.0
+    assert p == 1.0
+
+
 def test_no_gain_is_red():
     for evidence in (ev(gain=0.0), ev(gain=-0.05)):
         res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
@@ -116,12 +161,43 @@ def test_protected_metric_down_is_red_naming_it():
         assert any(metric in r for r in res["reasons"])
 
 
-def test_valid_candidate_passes_with_gain():
+def test_valid_candidate_passes_with_gain_and_paired_significance():
     evidence = ev(gain=0.1)
     res = admit(NAME, OLD, PROSE, evidence, hash_for(PROSE, evidence))
     assert res["verdict"] == "PASS"
     assert res["gain"] == pytest.approx(0.1)
+    assert res["paired_p"] < 0.05
+    assert res["n_pairs"] == 8
     assert res["reasons"] == []
+
+
+def _call(case_id, rep, met, graded=2, measured=True, arm="with_skill", package=NAME, answer=""):
+    return {"arm": arm, "package": package, "case_id": case_id, "rep": rep, "items_met": met,
+            "items_graded": graded, "measured": measured, "answer": answer}
+
+
+def test_paired_cases_aligns_shared_measured_case_reps_incumbent_first():
+    incumbent = {"calls": [_call("shared", 0, 1), _call("shared", 1, 2), _call("incumbent-only", 0, 2),
+                           _call("unmeasured", 0, 0), _call("shared", 0, 2, arm="without_skill"),
+                           _call("shared", 0, 2, package="another-package")]}
+    candidate = {"calls": [_call("candidate-only", 0, 2), _call("unmeasured", 0, 2, measured=False),
+                           _call("shared", 1, 2), _call("shared", 0, 2)]}
+    assert paired_cases(incumbent, candidate, NAME) == [[0.0, 1.0], [1.0, 1.0]]
+
+
+def test_beacon_fired_is_case_insensitive_and_arm_and_package_filtered():
+    report = {"calls": [_call("a", 0, 2, answer="prefix AtLaS-BeAcOn suffix"), _call("b", 0, 2, answer="atlas-beacon"),
+                        _call("c", 0, 2, answer="no activation marker"),
+                        _call("d", 0, 2, arm="without_skill", answer="ATLAS-BEACON"),
+                        _call("e", 0, 2, package="another-package", answer="ATLAS-BEACON"),
+                        _call("f", 0, 2, measured=False, answer="ATLAS-BEACON")]}
+    assert beacon_fired(report, "atlas-beacon", NAME) == 2
+
+
+def test_build_evidence_omits_beacon_when_beacon_is_none():
+    reports = {"routing_behaviour": {}, "oracle": {}, "routing": {}}
+    evidence = build_evidence(NAME, reports, reports, beacon=None)
+    assert "beacon" not in evidence
 
 
 def test_admission_hash_changes_with_new_text():

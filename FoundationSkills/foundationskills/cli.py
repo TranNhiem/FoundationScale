@@ -258,7 +258,7 @@ def _cmd_self_improve(args: argparse.Namespace) -> int:
         sides = {side: {"routing_behaviour": load(getattr(args, f"{side}_behaviour")),
                         "oracle": load(getattr(args, f"{side}_oracle")), "routing": load(getattr(args, f"{side}_routing"))}
                  for side in ("inc", "cand")}
-        ev = build_evidence(args.package, sides["inc"], sides["cand"])
+        ev = build_evidence(args.package, sides["inc"], sides["cand"], beacon=args.beacon)
         Path(args.out).write_text(json.dumps(ev, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(ev, indent=2))
         return 0 if ev["measured"] else 95
@@ -945,6 +945,8 @@ def build_parser() -> argparse.ArgumentParser:
     for side in ("inc", "cand"):
         for kind in ("behaviour", "oracle", "routing"):
             q.add_argument(f"--{side}-{kind}", dest=f"{side}_{kind}", required=True)
+    q.add_argument("--beacon", default=None,
+                   help="activation beacon: text the candidate's answers show when the increment fires (required to admit)")
     q.add_argument("--out", required=True)
     q.set_defaults(func=_cmd_self_improve)
     for verb in ("hash", "admit"):
