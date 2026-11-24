@@ -291,9 +291,9 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Next:** a GB200 run against the uniform baseline, then an Oracle/NOP gate for synthesized tasks (the reference solution must pass and a no-op must fail).
 
 #### ARL-21 · Trajectory trace contract
-**Status:** Slice 1 done (2026-11)
-- **What landed:** `rollout.trace_dir` writes `fs.trace/v1` span traces (session, turns, tool calls, reward) with deterministic span ids; `fold()` rebuilds the exact `Trajectory` and `fork_prefix()` names a branch at any response turn.
-- **Next:** emit start records before each generation and tool call (crash evidence), join verifier runs to the spans they check, then use forks for snapshot restore (ARL-18) and branching rollouts.
+**Status:** Slices 1–2 done (2026-11)
+- **What landed:** `rollout.trace_dir` writes `fs.trace/v1` span traces (session, turns, tool calls, reward) with deterministic span ids; `fold()` rebuilds the exact `Trajectory` and `fork_prefix()` names a branch at any response turn. Live start/end records around every generation and tool call give crash evidence (`last_open_operation()`).
+- **Next:** join verifier runs to the spans they check, then use forks for snapshot restore (ARL-18) and branching rollouts.
 
 #### ARL-17 · Context compaction that stays trainable
 **Status:** Planned

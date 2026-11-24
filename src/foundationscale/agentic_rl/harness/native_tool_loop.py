@@ -11,7 +11,7 @@ import dataclasses
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from foundationscale.agentic_rl.contracts import (
     SegmentKind,
@@ -20,6 +20,9 @@ from foundationscale.agentic_rl.contracts import (
     Turn,
 )
 from foundationscale.agentic_rl.engines import EngineInfraError
+
+if TYPE_CHECKING:
+    from foundationscale.agentic_rl.fs_trace import LoopObserver
 from foundationscale.agentic_rl.envs.base import (
     EnvInfraError,
     Environment,
@@ -204,8 +207,15 @@ class NativeToolLoop(HarnessAdapter):
         client: GenerationClient,
         env: Environment,
         budget: EpisodeBudget,
+        observer: LoopObserver | None = None,
+        policy_version: int | None = None,
     ) -> EpisodeOutcome:
         """Run one episode and return its turns, prompt turns, and termination.
+
+        ``observer`` (ARL-21 crash evidence, optional) is told immediately before and
+        after every generation and every tool execution; a started call with no finished
+        call is the record of what a hung or killed episode was doing. ``policy_version``
+        is only forwarded to it. With ``observer=None`` nothing extra happens.
 
         Ends on a valid submit call, a plain-text answer, a response/step/observation
         budget exhaustion, the episode timeout, an aborted generation, an environment
@@ -295,6 +305,9 @@ class NativeToolLoop(HarnessAdapter):
 
             effective_max_new = min(self.sampling.max_new_tokens, trace.remaining_budget())
             step_sampling = dataclasses.replace(self.sampling, max_new_tokens=effective_max_new)
+            gen_index = turn_index  # the index the assistant turn of this generation gets
+            if observer is not None:
+                observer.generation_started(gen_index, policy_version)
             try:
                 generation = await client.generate(tuple(trace.token_ids), step_sampling)
             except EngineInfraError as exc:
@@ -302,6 +315,10 @@ class NativeToolLoop(HarnessAdapter):
                 abstention_reason = f"infra:engine_{exc.kind}"
                 break
 
+            if observer is not None:
+                observer.generation_finished(
+                    gen_index, generation.finish_reason, len(generation.token_ids)
+                )
             parsed_calls, visible_text = self.parser.parse(generation.text)
             tool_calls = tuple(
                 ToolCall(
@@ -367,17 +384,23 @@ class NativeToolLoop(HarnessAdapter):
             # combined observation message for the whole turn.
             observation_parts: list[str] = []
             infra_error: EnvInfraError | None = None
-            for pc, tc in zip(parsed_calls, tool_calls, strict=True):
+            for call_index, (pc, tc) in enumerate(zip(parsed_calls, tool_calls, strict=True)):
                 if tc.parse_error is not None:
                     observation_parts.append(f"[{pc.name or '<unknown>'}] error: {tc.parse_error}")
                     continue
                 if pc.name == "bash":
                     command = pc.arguments["command"] if pc.arguments is not None else ""
+                    if observer is not None:
+                        observer.tool_started(gen_index, call_index, pc.name)
                     try:
                         result = await env.execute(str(command))
                     except EnvInfraError as exc:
                         infra_error = exc
                         break
+                    if observer is not None:
+                        observer.tool_finished(
+                            gen_index, call_index, result.exit_code, result.timed_out
+                        )
                     observation_parts.append(_format_exec_result(pc.name, result))
                 else:
                     observation_parts.append(

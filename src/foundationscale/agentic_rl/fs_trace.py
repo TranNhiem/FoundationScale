@@ -12,16 +12,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Protocol
 
 from .contracts import SegmentKind, Termination, ToolCall, Trajectory, Turn
 
 __all__ = (
+    "LiveTraceWriter",
+    "LoopObserver",
+    "last_open_operation",
+    "read_live",
+    "trace_id_for_session",
     "TRACE_SCHEMA_VERSION",
     "ForkPoint",
     "Span",
@@ -283,8 +289,9 @@ def trace_from_trajectory(
             f"the legal values are a string or None"
         )
 
-    identity = f"{run_id}\0{rollout_step}\0{traj.session_id}\0{invocation}"
-    trace_id = "tr_" + _digest(identity)
+    trace_id = trace_id_for_session(
+        run_id=run_id, rollout_step=rollout_step, session_id=traj.session_id, invocation=invocation
+    )
     branch_id = "br_" + _digest(trace_id + "\0main")
     session_span = _make_span(
         trace_id=trace_id,
@@ -907,3 +914,150 @@ def read_trace(
         grouped.setdefault(span.trace_id, []).append(span)
 
     return {trace_id: tuple(group) for trace_id, group in grouped.items()}
+
+
+def trace_id_for_session(
+    *,
+    run_id: str,
+    rollout_step: int,
+    session_id: str,
+    invocation: int = 0,
+) -> str:
+    """Derive the trace id used by trace_from_trajectory for one session."""
+    identity = f"{run_id}\0{rollout_step}\0{session_id}\0{invocation}"
+    return "tr_" + _digest(identity)
+
+
+class LoopObserver(Protocol):
+    """Synchronous notifications for operations whose start must survive a crash."""
+
+    def generation_started(self, turn_index: int, policy_version: int | None) -> None: ...
+
+    def generation_finished(
+        self, turn_index: int, finish_reason: str | None, n_tokens: int
+    ) -> None: ...
+
+    def tool_started(self, turn_index: int, call_index: int, name: str | None) -> None: ...
+
+    def tool_finished(
+        self,
+        turn_index: int,
+        call_index: int,
+        exit_code: int | None,
+        timed_out: bool,
+    ) -> None: ...
+
+
+class LiveTraceWriter:
+    """Append and durably flush one JSON record for every loop operation."""
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        trace_id: str,
+        session_id: str,
+    ) -> None:
+        self.path = os.fspath(path)
+        self.trace_id = trace_id
+        self.session_id = session_id
+        self._seq = 0
+
+    def _append(self, event: str, turn_index: int, **fields: Any) -> None:
+        payload: dict[str, Any] = {
+            "schema_version": "fs.trace.live/v1",
+            "trace_id": self.trace_id,
+            "session_id": self.session_id,
+            "seq": self._seq,
+            "event": event,
+            "turn_index": turn_index,
+            **fields,
+            "at_ts": time.time(),
+        }
+        record = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with Path(self.path).open("a", encoding="utf-8") as handle:
+            handle.write(record + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._seq += 1
+
+    def generation_started(self, turn_index: int, policy_version: int | None) -> None:
+        self._append("generation_started", turn_index, policy_version=policy_version)
+
+    def generation_finished(
+        self, turn_index: int, finish_reason: str | None, n_tokens: int
+    ) -> None:
+        self._append(
+            "generation_finished",
+            turn_index,
+            finish_reason=finish_reason,
+            n_tokens=n_tokens,
+        )
+
+    def tool_started(self, turn_index: int, call_index: int, name: str | None) -> None:
+        self._append("tool_started", turn_index, call_index=call_index, name=name)
+
+    def tool_finished(
+        self,
+        turn_index: int,
+        call_index: int,
+        exit_code: int | None,
+        timed_out: bool,
+    ) -> None:
+        self._append(
+            "tool_finished",
+            turn_index,
+            call_index=call_index,
+            exit_code=exit_code,
+            timed_out=timed_out,
+        )
+
+
+def read_live(path: str | os.PathLike[str]) -> list[dict[str, Any]]:
+    """Read live events, ignoring only a possibly torn, unterminated final line."""
+
+    with Path(path).open("rb") as handle:
+        contents = handle.read()
+    raw_lines = contents.splitlines(keepends=True)
+    events: list[dict[str, Any]] = []
+    for offset, raw_line in enumerate(raw_lines):
+        line_number = offset + 1
+        terminated = raw_line.endswith((b"\n", b"\r"))
+        if offset == len(raw_lines) - 1 and not terminated:
+            break
+        try:
+            line = raw_line.decode("utf-8")
+            payload = json.loads(line, parse_constant=_reject_json_constant)
+        except (UnicodeDecodeError, TypeError, ValueError) as exc:
+            raise TraceRefusal(f"read_live(): malformed line {line_number}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise TraceRefusal(
+                f"read_live(): line {line_number} is {_described(payload)}: "
+                "the legal top-level value is a JSON object"
+            )
+        events.append(payload)
+    return events
+
+
+def last_open_operation(events: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the latest started operation that has no matching finished record."""
+
+    open_operations: dict[tuple[object, ...], tuple[int, dict[str, Any]]] = {}
+    for position, event in enumerate(events):
+        event_name = event.get("event")
+        if not isinstance(event_name, str):
+            continue
+        operation, separator, phase = event_name.rpartition("_")
+        if not separator or phase not in ("started", "finished"):
+            continue
+        if operation not in ("generation", "tool"):
+            continue
+        call_index = event.get("call_index") if operation == "tool" else None
+        key = (operation, event.get("turn_index"), call_index)
+        if phase == "started":
+            open_operations[key] = (position, event)
+        else:
+            open_operations.pop(key, None)
+    if not open_operations:
+        return None
+    return max(open_operations.values(), key=lambda item: item[0])[1]

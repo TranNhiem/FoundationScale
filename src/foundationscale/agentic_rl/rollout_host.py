@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import inspect
 import json
 import os
+import re
 import sys
 import threading
 from collections import Counter
@@ -39,7 +41,12 @@ from foundationscale.agentic_rl.envs.base import (
     TaskAwareEnvBackend,
     VerifiableEnvironment,
 )
-from foundationscale.agentic_rl.fs_trace import TraceWriter, trace_from_trajectory
+from foundationscale.agentic_rl.fs_trace import (
+    LiveTraceWriter,
+    TraceWriter,
+    trace_from_trajectory,
+    trace_id_for_session,
+)
 from foundationscale.agentic_rl.harness.base import (
     EpisodeBudget,
     EpisodeOutcome,
@@ -461,7 +468,11 @@ class RolloutHost:
             try:
                 await instance.start()
                 outcome = await self.harness.run_episode(
-                    task, client=client, env=instance, budget=self.budget
+                    task,
+                    client=client,
+                    env=instance,
+                    budget=self.budget,
+                    **self._live_trace_kwargs(step, session_id, version),
                 )
                 reward_value: float | None
                 abstention: str | None
@@ -595,23 +606,55 @@ class RolloutHost:
             )
         return merged
 
+    def _live_trace_kwargs(self, step: int, session_id: str, version: int) -> dict[str, Any]:
+        """ARL-21 crash evidence: with ``trace_dir`` set and a harness whose ``run_episode``
+        accepts ``observer``/``policy_version``, a ``LiveTraceWriter`` that fsyncs a start and
+        an end record around every generation and tool call to
+        ``<trace_dir>/live/step_<NNNNNN>/<session>.jsonl``. Otherwise ``{}`` -- the call is
+        exactly the pre-ARL-21 one."""
+        if self.trace_dir is None:
+            return {}
+        accepts = self._state.get("harness_accepts_observer")
+        if accepts is None:
+            params = inspect.signature(self.harness.run_episode).parameters
+            accepts = "observer" in params and "policy_version" in params
+            self._state["harness_accepts_observer"] = accepts
+        if not accepts:
+            return {}
+        directory = Path(self.trace_dir) / "live" / f"step_{step:06d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)
+        writer = LiveTraceWriter(
+            directory / f"{safe}.jsonl",
+            trace_id=trace_id_for_session(
+                run_id=Path(self.trace_dir).name,
+                rollout_step=step,
+                session_id=session_id,
+                invocation=0,  # unique session ids per step; matches _write_traces
+            ),
+            session_id=session_id,
+        )
+        return {"observer": writer, "policy_version": version}
+
     def _write_traces(self, step: int, trajectories: Sequence[Trajectory]) -> None:
         """ARL-21: one fs.trace/v1 trace per final trajectory of ``step``, appended to
         ``<trace_dir>/step_<NNNNNN>.jsonl``. The run identity in every trace id is the trace
-        directory's name, so traces of different runs never share ids; ``invocation`` is the
-        session's position in the batch. A write failure propagates -- a declared trace that
-        silently went missing would read as a complete record."""
+        directory's name, so traces of different runs never share ids, and a session's live
+        file (``_live_trace_kwargs``) carries the same trace id. A write failure propagates
+        -- a declared trace that silently went missing would read as a complete record."""
         assert self.trace_dir is not None
         directory = Path(self.trace_dir)
         directory.mkdir(parents=True, exist_ok=True)
         writer = TraceWriter(directory / f"step_{step:06d}.jsonl")
-        for position, trajectory in enumerate(trajectories):
+        for trajectory in trajectories:
+            # invocation 0: a session id is unique within a step, and the live writer
+            # (_live_trace_kwargs) derives the same trace id, so the two files join.
             writer.write_episode(
                 trace_from_trajectory(
                     trajectory,
                     run_id=directory.name,
                     rollout_step=step,
-                    invocation=position,
+                    invocation=0,
                 )
             )
 

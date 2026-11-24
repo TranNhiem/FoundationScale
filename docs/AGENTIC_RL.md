@@ -100,8 +100,12 @@ directory's name), step, session and structural position. `fold(spans)`
 rebuilds exactly the original `Trajectory`, and `fork_prefix(spans,
 turn_index=k)` names a new branch with the token-id prefix before response
 turn `k` -- the contract later snapshot/branching work builds on; nothing is
-executed from a fork yet. Traces are written once per finished episode, so
-they record what happened, not a hung operation in progress.
+executed from a fork yet. For crash evidence, the native tool loop also tells
+a `LiveTraceWriter` immediately before and after every generation (with the
+session's policy version) and every tool execution, fsynced to
+`<trace_dir>/live/step_<NNNNNN>/<session>.jsonl`; `last_open_operation()`
+returns the operation a hung or killed episode had started but not finished.
+A session's live file and its episode trace carry the same trace id.
 
 **Frontier curriculum.** `rollout.curriculum="frontier"` (default `"off"`)
 draws each step's tasks with weight `max(floor, 4p(1-p))`, where `p` is a
