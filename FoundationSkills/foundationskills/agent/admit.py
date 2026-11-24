@@ -99,6 +99,32 @@ def _valid_rate_pair(pair) -> bool:
     )
 
 
+def added_text(old_text: str, new_text: str) -> str:
+    """The lines ``new_text`` adds relative to ``old_text`` (difflib), in order, newline-joined."""
+    import difflib
+
+    return "\n".join(line[2:] for line in difflib.ndiff(old_text.splitlines(), new_text.splitlines())
+                     if line.startswith("+ "))
+
+
+def unsafe_spans(old_text: str, new_text: str) -> list[str]:
+    """Write-time safety screen (SafeEvolve 2608.12851): the deterministic vetting checks run on the ADDED lines only.
+
+    Each finding names the check and the offending added span; an empty list means no check fired.
+    """
+    from foundationskills.vetting import scan
+
+    added = added_text(old_text, new_text)
+    if not added.strip():
+        return []
+    files = {"SKILL.md(added)": added.encode("utf-8")}
+    results = (scan.check_network({}, files), scan.check_credentials(files), scan.check_dynamic_exec(files),
+               scan.check_html_comments(files), scan.check_invisible_unicode(files))
+    return [f"unsafe span added ({r.id}): added line {h.line}: {h.excerpt}"
+            for r in results if r.status in ("RED", "REFUSED") for h in (r.hits or ())] + \
+           [f"unsafe span added ({r.id}): {r.note}" for r in results if r.status in ("RED", "REFUSED") and not r.hits]
+
+
 def admit(skill: str, old_text: str, new_text: str, evidence: dict,
           confirm: str | None) -> dict:
     """Return the admission verdict: REFUSED, UNMEASURED, RED or PASS with the measured gain.
@@ -113,6 +139,9 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
         reasons.append(CONFIRM_REASON)
     if reasons:
         return {"verdict": "REFUSED", "reasons": reasons}
+    unsafe = unsafe_spans(old_text, new_text)
+    if unsafe:  # an unsafe increment is never admitted, whatever its measured gain
+        return {"verdict": "RED", "reasons": unsafe}
 
     target = evidence.get("target")
     incumbent = _table(evidence, "incumbent")

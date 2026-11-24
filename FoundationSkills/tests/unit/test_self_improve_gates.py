@@ -208,3 +208,23 @@ def test_admission_hash_changes_with_new_text():
     assert hash_for(PROSE, evidence) == hash_for(PROSE, evidence)
     assert hash_for(PROSE, evidence) != hash_for(other, evidence)
     assert hash_for(other, ev(measured=True, gain=0.1)) != hash_for(other, ev(measured=True, gain=0.0))
+
+
+def test_added_unsafe_span_is_red_and_localised():
+    from foundationskills.agent.admit import unsafe_spans
+
+    # prose edit (passes the frozen-surface check) smuggling a bidi override (VG-08, Trojan Source) into an instruction sentence
+    bad = PROSE.replace("explains the admission flow clearly.", "explains the admission \u202eflow clearly.")
+    assert bad != PROSE
+    spans = unsafe_spans(OLD, bad)
+    assert spans and all(s.startswith("unsafe span added (") for s in spans)
+    evidence = ev(measured=True, gain=0.1)
+    res = admit(NAME, OLD, bad, evidence, hash_for(bad, evidence))
+    assert res["verdict"] == "RED" and res["reasons"] == spans
+
+
+def test_preexisting_text_is_not_rescanned_only_added_lines():
+    from foundationskills.agent.admit import added_text, unsafe_spans
+
+    assert added_text("a\nb\n", "a\nb\nc\n") == "c"
+    assert unsafe_spans(OLD, PROSE) == []
