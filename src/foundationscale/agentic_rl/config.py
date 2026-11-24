@@ -372,6 +372,8 @@ class RolloutConfig:
     # was an engine infra failure (a hung engine) may restart the fleet, re-push the
     # last published checkpoint and re-run. 0 (the default) keeps recovery off.
     engine_recovery_retries: int = 0
+    # Online learnability curriculum (tasks.CurriculumTaskSource); false keeps the seeded uniform draw.
+    curriculum: bool = False
 
 
 @dataclass(frozen=True)
@@ -1030,6 +1032,7 @@ def _build_rollout(
             "seed",
             "max_infra_rate",
             "engine_recovery_retries",
+            "curriculum",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1113,7 +1116,18 @@ def _build_rollout(
         required=False,
         provenance=provenance,
     )
+    curriculum = _resolve_scalar(
+        dotted_key="rollout.curriculum",
+        field_name="curriculum",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
     return RolloutConfig(
+        curriculum=curriculum,
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
         group_size=group_size,

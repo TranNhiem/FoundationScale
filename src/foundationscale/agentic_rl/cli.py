@@ -65,7 +65,7 @@ from foundationscale.agentic_rl.stability import (
     GuardConfig,
     StabilityGuard,
 )
-from foundationscale.agentic_rl.tasks import TaskSource
+from foundationscale.agentic_rl.tasks import CurriculumTaskSource, TaskSource
 from foundationscale.agentic_rl.tools import (
     HermesJsonToolCallParser,
     QwenXmlToolCallParser,
@@ -250,6 +250,8 @@ def _reward_scorer(config: AgenticRLConfig) -> MusicReward | MathAnswerReward | 
 
 
 def _task_source(config: AgenticRLConfig) -> TaskSource:
+    if config.rollout.curriculum:
+        return CurriculumTaskSource(path=config.rollout.tasks_path, seed=config.rollout.seed)
     return TaskSource(path=config.rollout.tasks_path, seed=config.rollout.seed)
 
 

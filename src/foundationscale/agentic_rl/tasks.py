@@ -137,3 +137,69 @@ class TaskSource:
         else:
             indices = [rng.randrange(pool_size) for _ in range(n)]
         return tuple(self._tasks[index] for index in indices)
+
+
+@dataclass(frozen=True)  # frozen like its parent; the per-task state dict itself is mutated in place
+class CurriculumTaskSource(TaskSource):
+    """``TaskSource`` with an online learnability curriculum (atlas v2 adoption B; opt-in via ``rollout.curriculum``).
+
+    Zero-variance groups carry no GRPO advantage (the trainer zeroes them), so after each step ``observe`` records,
+    per task, whether its group had reward spread and its EMA reward. ``batch`` then draws ``informative_share`` of
+    the tasks from those whose last measured group had spread or partial progress, and the rest uniformly
+    from the active pool (hard and unseen tasks keep coverage). A task flat for ``quarantine_after`` consecutive
+    measured groups is quarantined for ``reprobe_every`` steps, then re-probed. A group with no measured reward
+    (infra abstention) is never evidence of difficulty and changes nothing.
+
+    Unlike ``TaskSource``, a batch depends on what was observed, so a resumed run does not replay the same draws.
+    """
+
+    informative_share: float = 0.8
+    quarantine_after: int = 3
+    reprobe_every: int = 20
+    _state: dict = field(init=False, repr=False, compare=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not 0.0 <= self.informative_share <= 1.0 or self.quarantine_after < 1 or self.reprobe_every < 1:
+            raise TaskSourceRefusal(
+                f"CurriculumTaskSource: informative_share={self.informative_share!r} must be in [0, 1], "
+                f"quarantine_after={self.quarantine_after!r} and reprobe_every={self.reprobe_every!r} >= 1"
+            )
+
+    def batch(self, step: int, n: int) -> tuple[EpisodeTask, ...]:
+        base = super().batch(step, n)  # validates step/n; also the draw when nothing has been observed yet
+        if not self._state:
+            return base
+        rng = random.Random(f"{self.seed}:{step}:curriculum")
+        active = [i for i, t in enumerate(self._tasks) if self._state.get(t.uid, {}).get("quarantined_until", -1) <= step]
+        if not active:
+            active = list(range(len(self._tasks)))
+        informative = [i for i in active if self._state.get(self._tasks[i].uid, {}).get("informative")]
+        k = min(len(informative), round(self.informative_share * n))
+        chosen = rng.sample(informative, k) if k else []
+        rest = [i for i in active if i not in set(chosen)]
+        need = n - len(chosen)
+        chosen += rng.sample(rest, need) if need <= len(rest) else [rng.choice(active) for _ in range(need)]
+        return tuple(self._tasks[i] for i in chosen)
+
+    def observe(self, step: int, trajectories) -> dict:
+        """Update per-task state from one step's trajectories; returns a small summary for the run log."""
+        groups: dict[str, list[float]] = {}
+        for t in trajectories:
+            if t.reward is not None:
+                groups.setdefault(t.uid, []).append(float(t.reward))
+        quarantined = 0
+        for uid, rewards in groups.items():
+            s = self._state.setdefault(uid, {"ema": 0.0, "flat": 0, "quarantined_until": -1})
+            mean = sum(rewards) / len(rewards)
+            spread = len(rewards) > 1 and max(rewards) > min(rewards)
+            s["ema"] = 0.5 * s["ema"] + 0.5 * mean
+            s["informative"] = bool(spread or 0.0 < mean < 1.0)
+            s["flat"] = 0 if spread else s["flat"] + 1
+            if s["flat"] >= self.quarantine_after:
+                s["quarantined_until"], s["flat"] = step + 1 + self.reprobe_every, 0
+                quarantined += 1
+        pool = self._state.values()
+        return {"rollout_step": step, "observed": len(groups), "newly_quarantined": quarantined,
+                "informative": sum(1 for s in pool if s.get("informative")),
+                "quarantined": sum(1 for s in pool if s["quarantined_until"] > step), "seen": len(self._state)}

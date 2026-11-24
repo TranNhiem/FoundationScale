@@ -555,6 +555,10 @@ class RolloutHost:
             trajectories = await self._gather_step(step, tasks)
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, trajectories), file=sys.stderr, flush=True)
+        observe = getattr(self.tasks, "observe", None)
+        if observe is not None:  # curriculum task source (rollout.curriculum): learn from this step's groups
+            print("[agentic-rl:curriculum] " + json.dumps(observe(step, trajectories), sort_keys=True),
+                  file=sys.stderr, flush=True)
         if self.guard is not None:
             verdict = self.guard.update(rollout_stats(step, trajectories))
             print(verdict_line(verdict), file=sys.stderr, flush=True)
