@@ -19,6 +19,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from foundationscale.agentic_rl.contracts import (
+    SegmentKind,
     Termination,
     Trajectory,
     Turn,
@@ -27,6 +28,7 @@ from foundationscale.agentic_rl.contracts import (
 __all__ = [
     "ChatTokenizer",
     "EpisodeBudget",
+    "EpisodeCheckpoint",
     "EpisodeOutcome",
     "EpisodeTask",
     "Generation",
@@ -467,6 +469,58 @@ class EpisodeBudget:
         object.__setattr__(self, "step_limit", step_limit)
         object.__setattr__(self, "max_response_tokens", max_response_tokens)
         object.__setattr__(self, "max_observation_chars", max_observation_chars)
+
+
+@dataclass(frozen=True)
+class EpisodeCheckpoint:
+    """ARL-18: the complete loop state at a response boundary (immediately before a
+    generation), captured so a forked episode can continue from it without re-rendering
+    the prompt or replaying tool calls.
+
+    The token stream is NOT stored separately: it is exactly ``prompt_turns`` followed by
+    ``turns`` (``token_ids``), and the resuming loop rebuilds its TokenTrace by replaying
+    those turns, so masks and logprobs are the ones originally measured. ``messages`` is
+    kept because later observations are rendered as chat-template diffs against it;
+    ``steps_used``/``elapsed_s`` carry the budget so a fork never gets a fresh one.
+    """
+
+    task_uid: str
+    messages: tuple[Mapping[str, Any], ...]
+    prompt_turns: tuple[Turn, ...]
+    turns: tuple[Turn, ...]
+    cursor: int
+    steps_used: int
+    elapsed_s: float
+
+    def __post_init__(self) -> None:
+        where = "EpisodeCheckpoint"
+        if not isinstance(self.task_uid, str) or not self.task_uid:
+            raise HarnessRefusal(f"{where}: field 'task_uid' must be a non-empty str")
+        _turn_list(self.prompt_turns, where=where, name="prompt_turns")
+        _turn_list(self.turns, where=where, name="turns")
+        if not self.prompt_turns:
+            raise HarnessRefusal(f"{where}: field 'prompt_turns' is empty: no prompt to resume")
+        if self.turns and self.turns[-1].kind is SegmentKind.ASSISTANT:
+            raise HarnessRefusal(
+                f"{where}: the last turn is an assistant turn: a response boundary sits after "
+                f"a tool result (or before the first generation), never between a generation "
+                f"and its observation"
+            )
+        for name in ("cursor", "steps_used"):
+            if _real_int(getattr(self, name), where=where, name=name) < 0:
+                raise HarnessRefusal(f"{where}: field {name!r} must be >= 0")
+        if (
+            type(self.elapsed_s) is bool
+            or not isinstance(self.elapsed_s, (int, float))
+            or not isfinite(self.elapsed_s)
+            or self.elapsed_s < 0
+        ):
+            raise HarnessRefusal(f"{where}: field 'elapsed_s' must be a finite real >= 0")
+
+    @property
+    def token_ids(self) -> tuple[int, ...]:
+        """The exact model context at the boundary: prompt turns then trajectory turns."""
+        return tuple(t for turn in (*self.prompt_turns, *self.turns) for t in turn.token_ids)
 
 
 @dataclass(frozen=True)

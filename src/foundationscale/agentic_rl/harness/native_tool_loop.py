@@ -7,9 +7,10 @@ actually sampled.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,7 @@ from foundationscale.agentic_rl.envs.base import (
 from foundationscale.agentic_rl.harness.base import (
     ChatTokenizer,
     EpisodeBudget,
+    EpisodeCheckpoint,
     EpisodeOutcome,
     EpisodeTask,
     GenerationClient,
@@ -153,6 +155,34 @@ def _truncate_observation(text: str, max_chars: int) -> str:
     return f"{head}[... {elided} chars elided ...]{tail}"
 
 
+def _resume_into(
+    resume: EpisodeCheckpoint,
+    task: EpisodeTask,
+    messages: list[dict[str, Any]],
+    trace: TokenTrace,
+    turns: list[Turn],
+) -> tuple[tuple[Turn, ...], int, int]:
+    """ARL-18: load a checkpoint's boundary state into the loop's buffers. The TokenTrace is
+    rebuilt by replaying the turns -- never by re-rendering or decoding -- so its masks and
+    logprobs are the ones originally measured."""
+    if resume.task_uid != task.uid:
+        raise NativeToolLoopRefusal(
+            f"run_episode: checkpoint is for task {resume.task_uid!r}, not {task.uid!r}"
+        )
+    messages[:] = [copy.deepcopy(dict(m)) for m in resume.messages]
+    trace.append_prompt([t for turn in resume.prompt_turns for t in turn.token_ids])
+    for turn in resume.turns:
+        if turn.generated:
+            trace.append_generated(
+                list(turn.token_ids),
+                list(turn.logprobs) if turn.logprobs is not None else None,
+            )
+        else:
+            trace.append_observation(list(turn.token_ids))
+    turns.extend(resume.turns)
+    return resume.prompt_turns, len(resume.prompt_turns) + len(resume.turns), resume.cursor
+
+
 @dataclass(frozen=True)
 class NativeToolLoop(HarnessAdapter):
     """Runs one multi-turn tool-calling episode against a GenerationClient + Environment.
@@ -200,41 +230,17 @@ class NativeToolLoop(HarnessAdapter):
                 f"attributed to the tool results it carries"
             )
 
-    async def run_episode(
+    def _build_prompt(
         self,
-        task: EpisodeTask,
-        *,
-        client: GenerationClient,
-        env: Environment,
-        budget: EpisodeBudget,
-        observer: LoopObserver | None = None,
-        policy_version: int | None = None,
-    ) -> EpisodeOutcome:
-        """Run one episode and return its turns, prompt turns, and termination.
-
-        ``observer`` (ARL-21 crash evidence, optional) is told immediately before and
-        after every generation and every tool execution; a started call with no finished
-        call is the record of what a hung or killed episode was doing. ``policy_version``
-        is only forwarded to it. With ``observer=None`` nothing extra happens.
-
-        Ends on a valid submit call, a plain-text answer, a response/step/observation
-        budget exhaustion, the episode timeout, an aborted generation, an environment
-        infrastructure error (``EnvInfraError`` from ``env.execute``), or a generation
-        engine infrastructure error (``EngineInfraError`` from ``client.generate``,
-        reported as ``abstention_reason=f"infra:engine_{exc.kind}"``) -- never by
-        raising for model-attributable outcomes.
-        """
-        episode_start = time.monotonic()
-        tools_schema: tuple[Mapping[str, Any], ...] = (
-            tuple(t.to_openai() for t in self.tools.values()) if self.advertise_tools else ()
-        )
-        messages: list[dict[str, Any]] = [dict(m) for m in task.messages]
-        trace = TokenTrace(response_length=budget.max_response_tokens)
-
-        # 1. Build the initial prompt + prompt_turns via cumulative-render diffs.
+        messages: list[dict[str, Any]],
+        tools_schema: tuple[Mapping[str, Any], ...],
+        trace: TokenTrace,
+    ) -> tuple[tuple[Turn, ...], int, int]:
+        """Render the initial prompt into ``trace`` via cumulative-render diffs; return the
+        prompt turns, the next turn index and the message cursor."""
         prompt_turn_list: list[Turn] = []
         before_ids: list[int] = []
-        for position in range(len(task.messages)):
+        for position in range(len(messages)):
             after_ids = _render(
                 self.tokenizer,
                 messages[: position + 1],
@@ -285,14 +291,64 @@ class NativeToolLoop(HarnessAdapter):
         trace.append_prompt(full_prompt_ids)
         turn_index = len(prompt_turns)
         cursor = len(messages)
+        return prompt_turns, turn_index, cursor
+
+    async def run_episode(
+        self,
+        task: EpisodeTask,
+        *,
+        client: GenerationClient,
+        env: Environment,
+        budget: EpisodeBudget,
+        observer: LoopObserver | None = None,
+        policy_version: int | None = None,
+        checkpoint_hook: Callable[[EpisodeCheckpoint], Awaitable[None]] | None = None,
+        resume: EpisodeCheckpoint | None = None,
+    ) -> EpisodeOutcome:
+        """Run one episode and return its turns, prompt turns, and termination.
+
+        ``observer`` (ARL-21 crash evidence, optional) is told immediately before and
+        after every generation and every tool execution; a started call with no finished
+        call is the record of what a hung or killed episode was doing. ``policy_version``
+        is only forwarded to it. With ``observer=None`` nothing extra happens.
+
+        Ends on a valid submit call, a plain-text answer, a response/step/observation
+        budget exhaustion, the episode timeout, an aborted generation, an environment
+        infrastructure error (``EnvInfraError`` from ``env.execute``), or a generation
+        engine infrastructure error (``EngineInfraError`` from ``client.generate``,
+        reported as ``abstention_reason=f"infra:engine_{exc.kind}"``) -- never by
+        raising for model-attributable outcomes.
+
+        ARL-18 forks (both optional; with neither, nothing changes): ``checkpoint_hook`` is
+        awaited with an :class:`EpisodeCheckpoint` at every response boundary, immediately
+        before a generation (not at the boundary a resumed run starts from); its exceptions
+        propagate. ``resume`` continues from such a checkpoint instead of rendering the
+        prompt: the TokenTrace is rebuilt by replaying the checkpoint's turns (no
+        tokenizer call, no tool replay) and the step and wall-clock budgets continue from it.
+        """
+        episode_start = time.monotonic()
+        tools_schema: tuple[Mapping[str, Any], ...] = (
+            tuple(t.to_openai() for t in self.tools.values()) if self.advertise_tools else ()
+        )
+        messages: list[dict[str, Any]] = [dict(m) for m in task.messages]
+        trace = TokenTrace(response_length=budget.max_response_tokens)
+
+        # 1. Build the initial prompt (or, for an ARL-18 fork, rebuild the boundary state).
+        turns: list[Turn] = []
+        first_step = 0
+        if resume is None:
+            prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
+        else:
+            prompt_turns, turn_index, cursor = _resume_into(resume, task, messages, trace, turns)
+            first_step = resume.steps_used
+            episode_start -= resume.elapsed_s
 
         # 2. The step loop.
-        turns: list[Turn] = []
         termination: Termination | None = None
         submitted_answer: str | None = None
         abstention_reason: str | None = None
 
-        for _step in range(budget.step_limit):
+        for _step in range(first_step, budget.step_limit):
             if time.monotonic() - episode_start > env.episode_timeout_s:
                 termination = Termination.TIMEOUT
                 break
@@ -302,6 +358,19 @@ class NativeToolLoop(HarnessAdapter):
             except ResponseBudgetExhausted:
                 termination = Termination.LENGTH
                 break
+
+            if checkpoint_hook is not None and not (resume is not None and _step == first_step):
+                await checkpoint_hook(
+                    EpisodeCheckpoint(
+                        task_uid=task.uid,
+                        messages=tuple(copy.deepcopy(m) for m in messages),
+                        prompt_turns=prompt_turns,
+                        turns=tuple(turns),
+                        cursor=cursor,
+                        steps_used=_step,
+                        elapsed_s=time.monotonic() - episode_start,
+                    )
+                )
 
             effective_max_new = min(self.sampling.max_new_tokens, trace.remaining_budget())
             step_sampling = dataclasses.replace(self.sampling, max_new_tokens=effective_max_new)

@@ -373,6 +373,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "tests/agentic_rl/test_snapshot_store.py, but no mutation row yet proves a dropped "
         "digest check or a reaped lease would be caught."
     ),
+    "src/foundationscale/agentic_rl/forking.py": (
+        "ARL-18 fork binding (exact parent trace/branch, kept-turn count and token-prefix "
+        "checks before restore + resume): line-covered by tests/agentic_rl/test_fork_resume.py, "
+        "but no mutation row yet proves a dropped prefix comparison would be caught."
+    ),
     "src/foundationscale/agentic_rl/curriculum.py": (
         "frontier curriculum (Beta pass-rate registry, 4p(1-p) weighted draws, saturation "
         "floor): line-covered by tests/agentic_rl/test_curriculum.py, but no mutation row yet "
