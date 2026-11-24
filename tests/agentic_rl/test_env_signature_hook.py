@@ -182,3 +182,20 @@ def test_config_env_signature_key() -> None:
     assert build_config(env(), {"env.signature": "manifest"}).env.signature == "manifest"
     with pytest.raises(AgenticConfigRefusal, match="env.signature"):
         build_config(env(signature="bytes"), {})
+
+
+def test_clone_and_adopt_a_single_file_hidden_path(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "answer.txt").write_text("42")
+    spec = HiddenSpec(paths=("/answer.txt",))
+    vault = HiddenVault(RootfsSandbox(root, []), spec, tmp_path / "vault")
+    vault.seal()
+    assert vault.clone_sealed(tmp_path / "clone") == ("/answer.txt",)
+    assert (tmp_path / "clone" / "answer.txt").read_text() == "42"
+
+    fresh_root = tmp_path / "fresh"
+    fresh_root.mkdir()
+    fresh = HiddenVault(RootfsSandbox(fresh_root, []), spec, tmp_path / "vault2")
+    fresh.adopt_sealed(tmp_path / "clone", ("/answer.txt",))
+    assert fresh.sealed_manifest(content=True) == vault.sealed_manifest(content=True)
