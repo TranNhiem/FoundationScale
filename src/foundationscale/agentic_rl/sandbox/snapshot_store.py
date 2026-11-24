@@ -351,7 +351,12 @@ class SnapshotStore:
         limits: SnapshotLimits | None = None,
         *,
         clock: Callable[[], float] = time.time,
+        on_remove: Callable[[SnapshotRecord], None] | None = None,
     ) -> None:
+        """``on_remove`` runs after a committed snapshot is uncommitted by ``delete()`` or
+        ``reap()`` (descriptor gone, under the store lock) to release what the snapshot
+        references outside the store -- e.g. its retained hidden-test vault. A failing hook
+        never resurrects the snapshot; the error propagates to the caller."""
         root_path = Path(root)
         if not root_path.is_absolute():
             raise SnapshotRefusal(
@@ -361,6 +366,7 @@ class SnapshotStore:
         self.root = root_path
         self.limits = limits if limits is not None else SnapshotLimits()
         self._clock = clock
+        self._on_remove = on_remove
 
     def _archive_path(self, snapshot_id: str) -> Path:
         return self.root / f"{snapshot_id}.sqsh"
@@ -648,6 +654,8 @@ class SnapshotStore:
                 )
             self._descriptor_path(snapshot_id).unlink()
             self._archive_path(snapshot_id).unlink(missing_ok=True)
+            if self._on_remove is not None:
+                self._on_remove(record)
 
     @staticmethod
     def _is_reapable_temporary_name(name: str) -> bool:
@@ -694,6 +702,8 @@ class SnapshotStore:
                 self._descriptor_path(snapshot_id).unlink(missing_ok=True)
                 self._archive_path(snapshot_id).unlink(missing_ok=True)
                 removed.append(snapshot_id)
+                if self._on_remove is not None:
+                    self._on_remove(record)
 
             for path in entries:
                 name = path.name

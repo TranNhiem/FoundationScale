@@ -832,6 +832,39 @@ class TaskSandboxEnvironment:
 _INSTANCE_ID = re.compile(r"[A-Za-z0-9._#-]+")
 
 
+_RETAINED_VAULT = re.compile(r"^vault-[0-9a-f]{32}$")
+
+
+def retained_vault_cleanup(vault_root: str | Path) -> Callable[[SnapshotRecord], None]:
+    """ARL-18: a ``SnapshotStore(on_remove=...)`` hook deleting a removed snapshot's retained
+    hidden-test vault, so hidden tests do not outlive their snapshot on the host.
+
+    The path comes from the snapshot descriptor, so it is trusted only after checks: it must
+    resolve to a direct child of ``vault_root`` named ``vault-<32 hex>`` (what ``snapshot()``
+    creates) and must not be a symlink -- anything else is refused, never deleted."""
+    root = Path(os.path.realpath(vault_root))
+
+    def remove(record: SnapshotRecord) -> None:
+        raw = record.meta.get("vault_clone")
+        if raw is None:
+            return
+        path = Path(raw)
+        if (
+            path.is_symlink()
+            or Path(os.path.realpath(path)).parent != root
+            or _RETAINED_VAULT.fullmatch(path.name) is None
+        ):
+            raise SnapshotRefusal(
+                f"retained_vault_cleanup: snapshot {record.snapshot_id!r} names vault_clone "
+                f"{raw!r}, which is not a vault-<hex> dir directly under {root}: refusing to "
+                f"delete it"
+            )
+        if path.exists():
+            shutil.rmtree(path)
+
+    return remove
+
+
 def _sandbox_name(instance_id: str) -> str:
     """Safe sandbox name component derived from ``instance_id`` (``#`` becomes ``-``).
 

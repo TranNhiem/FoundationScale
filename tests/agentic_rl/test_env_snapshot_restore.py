@@ -28,6 +28,7 @@ from foundationscale.agentic_rl.sandbox.hidden import HiddenSpec, HiddenVault
 from foundationscale.agentic_rl.sandbox.snapshot_store import (
     SnapshotLimits,
     SnapshotRecord,
+    SnapshotRefusal,
     SnapshotStore,
 )
 
@@ -699,3 +700,65 @@ def test_snapshot_refuses_an_unmeasured_boundary_signature(
     with pytest.raises(EnvInfraError, match="unmeasured") as caught:
         asyncio.run(env.snapshot(_new_store(tmp_path), vault_root=tmp_path / "retained"))
     assert caught.value.kind == "snapshot_unsupported"
+
+
+def test_deleting_or_reaping_a_snapshot_removes_its_retained_vault(tmp_path: Path) -> None:
+    vault_root = tmp_path / "retained"
+    clock = [1000.0]
+    store = SnapshotStore(
+        tmp_path / "store-cleanup",
+        SnapshotLimits(max_bytes=1024 * 1024, total_bytes=8 * 1024 * 1024, ttl_s=10.0),
+        clock=lambda: clock[0],
+        on_remove=sandbox_task.retained_vault_cleanup(vault_root),
+    )
+    env, _, _ = _started_case(tmp_path, "cleanup-a")
+    deleted = asyncio.run(env.snapshot(store, vault_root=vault_root))
+    env_b, _, _ = _started_case(tmp_path, "cleanup-b")
+    reaped = asyncio.run(env_b.snapshot(store, vault_root=vault_root))
+    assert len(list(vault_root.iterdir())) == 2
+
+    store.delete(deleted.snapshot_id)
+    assert not Path(deleted.meta["vault_clone"]).exists()
+    assert Path(reaped.meta["vault_clone"]).exists()
+
+    clock[0] += 100.0
+    assert reaped.snapshot_id in store.reap()
+    assert list(vault_root.iterdir()) == []
+
+
+def test_retained_vault_cleanup_refuses_paths_outside_the_vault_root(tmp_path: Path) -> None:
+    vault_root = tmp_path / "retained"
+    vault_root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    link = vault_root / ("vault-" + "a" * 32)
+    link.symlink_to(victim)
+    cleanup = sandbox_task.retained_vault_cleanup(vault_root)
+
+    def record(path: str) -> SnapshotRecord:
+        return SnapshotRecord(
+            snapshot_id="snap_" + "0" * 32,
+            archive_bytes=1,
+            archive_sha256="0" * 64,
+            env_signature="envsig_x",
+            created_at=0.0,
+            leased=False,
+            meta={"vault_clone": path},
+        )
+
+    for bad in (str(victim), str(link), str(vault_root / "not-a-vault")):
+        with pytest.raises(SnapshotRefusal, match="refusing to delete"):
+            cleanup(record(bad))
+    assert victim.exists()
+    cleanup(record(str(vault_root / ("vault-" + "b" * 32))))  # already gone: nothing to do
+    cleanup(
+        SnapshotRecord(
+            snapshot_id="snap_" + "1" * 32,
+            archive_bytes=1,
+            archive_sha256="0" * 64,
+            env_signature="envsig_x",
+            created_at=0.0,
+            leased=False,
+            meta={},
+        )
+    )
