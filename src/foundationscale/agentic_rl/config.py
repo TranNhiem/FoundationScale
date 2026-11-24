@@ -383,6 +383,11 @@ class RolloutConfig:
     # RolloutHost.publish_deadline_s: wall-clock deadline on one whole publish; on expiry
     # the run dumps every thread's stack and exits RED (5). None (default) = no deadline.
     publish_deadline_s: float | None = None
+    # ARL-20 frontier curriculum: "off" (default, uniform draws) or "frontier" (weight tasks by
+    # 4p(1-p) of their measured pass rate; see agentic_rl.curriculum).
+    curriculum: str = "off"
+    curriculum_min_obs: int = 4
+    curriculum_floor: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -1069,6 +1074,9 @@ def _build_rollout(
             "dynamic_sampling",
             "max_refill_rounds",
             "publish_deadline_s",
+            "curriculum",
+            "curriculum_min_obs",
+            "curriculum_floor",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1207,6 +1215,45 @@ def _build_rollout(
             f"rollout.publish_deadline_s: {publish_deadline_s!r} must be null or a finite "
             f"number of seconds > 0"
         )
+    curriculum = _resolve_scalar(
+        dotted_key="rollout.curriculum",
+        field_name="curriculum",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="off",
+        required=False,
+        provenance=provenance,
+    )
+    if curriculum not in ("off", "frontier"):
+        raise AgenticConfigRefusal(
+            f"rollout.curriculum: {curriculum!r} is not one of 'off', 'frontier'"
+        )
+    curriculum_min_obs = _resolve_scalar(
+        dotted_key="rollout.curriculum_min_obs",
+        field_name="curriculum_min_obs",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=int,
+        default=4,
+        required=False,
+        provenance=provenance,
+    )
+    curriculum_floor = _resolve_scalar(
+        dotted_key="rollout.curriculum_floor",
+        field_name="curriculum_floor",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=float,
+        default=0.05,
+        required=False,
+        provenance=provenance,
+    )
+    if curriculum_min_obs < 1 or not 0.0 < curriculum_floor <= 1.0:
+        raise AgenticConfigRefusal(
+            f"rollout.curriculum_min_obs / rollout.curriculum_floor: {curriculum_min_obs!r} / "
+            f"{curriculum_floor!r}: min_obs must be >= 1 and the floor must lie in (0, 1]"
+        )
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1220,6 +1267,9 @@ def _build_rollout(
         dynamic_sampling=dynamic_sampling,
         max_refill_rounds=max_refill_rounds,
         publish_deadline_s=publish_deadline_s,
+        curriculum=curriculum,
+        curriculum_min_obs=curriculum_min_obs,
+        curriculum_floor=curriculum_floor,
     )
 
 

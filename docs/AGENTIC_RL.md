@@ -90,6 +90,18 @@ per-turn penalties on tool-call parse errors and repetition, added to the
 advantage after the baseline (never to the reward); see
 [RL_ALGORITHMS.md](RL_ALGORITHMS.md).
 
+**Frontier curriculum.** `rollout.curriculum="frontier"` (default `"off"`)
+draws each step's tasks with weight `max(floor, 4p(1-p))`, where `p` is a
+task's measured pass rate (Beta(1,1) posterior over every rollout, rewards
+clipped to [0, 1]): unseen tasks and tasks near a 50% pass rate get full
+weight, and a task seen `rollout.curriculum_min_obs` times with all rewards 0
+or all 1 drops to `rollout.curriculum_floor`, so it is still revisited. Draws
+are deterministic given the seed, the step and the registry; one
+`[agentic-rl:curriculum]` line per step reports tasks seen, frontier and
+saturated counts. Dynamic sampling discards zero-spread groups after their
+rollouts; the curriculum avoids drawing those tasks in the first place. The
+registry is in memory, so a resumed run starts uniform.
+
 **Dynamic sampling.** On GB200 math runs about half of all groups had zero
 reward spread (every sample solved, or every sample failed), so a centred
 baseline gave them zero advantage, and 7-10% of steps carried no gradient at

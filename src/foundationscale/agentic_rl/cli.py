@@ -52,6 +52,7 @@ from foundationscale.agentic_rl.config import (
     AgenticRLConfig,
     load_config,
 )
+from foundationscale.agentic_rl.curriculum import FrontierTaskSource
 from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, EngineServerSpec
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
@@ -291,8 +292,16 @@ def _reward_scorer(
     return _music_reward(config)
 
 
-def _task_source(config: AgenticRLConfig) -> TaskSource:
-    return TaskSource(path=config.rollout.tasks_path, seed=config.rollout.seed)
+def _task_source(config: AgenticRLConfig) -> TaskSource | FrontierTaskSource:
+    base = TaskSource(path=config.rollout.tasks_path, seed=config.rollout.seed)
+    if config.rollout.curriculum == "frontier":
+        return FrontierTaskSource(
+            base=base,
+            seed=config.rollout.seed,
+            min_obs=config.rollout.curriculum_min_obs,
+            floor=config.rollout.curriculum_floor,
+        )
+    return base
 
 
 def _build_non_gpu_objects(config: AgenticRLConfig) -> dict[str, Any]:

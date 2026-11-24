@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from foundationscale.agentic_rl.contracts import Termination, Trajectory, flatten
+from foundationscale.agentic_rl.curriculum import FrontierTaskSource
 from foundationscale.agentic_rl.engines import EngineInfraError
 from foundationscale.agentic_rl.engines.fleet import EngineFleet
 from foundationscale.agentic_rl.envs.base import (
@@ -220,7 +221,7 @@ class RolloutHost:
     an engine to stop and start back up).
     """
 
-    tasks: TaskSource
+    tasks: TaskSource | FrontierTaskSource
     tasks_per_step: int
     group_size: int
     harness: HarnessAdapter
@@ -651,6 +652,9 @@ class RolloutHost:
             file=sys.stderr,
             flush=True,
         )
+        # Every gathered row (dropped groups included) is a measurement of its task's
+        # difficulty; the curriculum (if any) reads them from here.
+        self._state["last_gathered"] = list(gathered)
         if not keep:
             return round0
         kept = set(keep)
@@ -786,8 +790,19 @@ class RolloutHost:
         # Summary and stability guard read ROUND 0 only: an unbiased sample of the drawn tasks.
         # Refilled batches over-represent groups with spread, which would inflate the reward EMA.
         round0 = trajectories
+        self._state["last_gathered"] = list(round0)
         if self.dynamic_sampling == "refill":
             trajectories = await self._refill(step, trajectories, reserve)
+        if isinstance(self.tasks, FrontierTaskSource):
+            # ARL-20: every measured rollout this step (refill rounds included) updates the
+            # difficulty registry the NEXT step's draw is weighted by.
+            self.tasks.observe(self._state["last_gathered"])
+            print(
+                "[agentic-rl:curriculum] "
+                + json.dumps({"rollout_step": step, **self.tasks.stats()}, sort_keys=True),
+                file=sys.stderr,
+                flush=True,
+            )
         # The measured per-session versions publish hands StalenessGate; () when no
         # ledger exists (nothing measured -- never the asserted step).
         # The freshest version the fleet COULD serve at this rollout: the last completed push

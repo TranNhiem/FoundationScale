@@ -21,7 +21,7 @@ stable ID, a status, where to start, and what "done" means.
 | `MM` | [Multimodal LLM](#mm--multimodal-llm) | image/video paths in `src/foundationscale/train/`, `src/foundationscale/video.py` | MM-1 … MM-4 |
 | `VLA` | [Vision-language-action](#vla--vision-language-action) | `src/foundationscale/vla/` | VLA-1 … VLA-3 |
 | `RL` | [Preference & RL core](#rl--preference--rl-core) | `src/foundationscale/rl/` | RL-1 … RL-4 |
-| `ARL` | [Agentic RL](#arl--agentic-rl) | `src/foundationscale/agentic_rl/` | ARL-1 … ARL-19 |
+| `ARL` | [Agentic RL](#arl--agentic-rl) | `src/foundationscale/agentic_rl/` | ARL-1 … ARL-20 |
 | `PT` | [Pre-training & CPT](#pt--pre-training--cpt) | CPT path in `src/foundationscale/train/`, FoundationSkills CPT stage | PT-1 … PT-2 |
 | `FSK` | [FoundationSkills](#fsk--foundationskills) | `FoundationSkills/` | FSK-1 … FSK-4 |
 | `PLAT` | [Platform — distributed, checkpoints, releases](#plat--platform) | `src/foundationscale/topology.py`, `src/foundationscale/checkpoint/`, `launchers/` | PLAT-1 … PLAT-4 |
@@ -283,6 +283,12 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 #### ARL-16 · Publish deadline
 **Status:** Done (2026-11)
 - **What landed:** `rollout.publish_deadline_s` ends a run RED with a stack dump when one publish hangs, instead of holding the GPUs indefinitely (two GB200 runs hung about two days each before this).
+
+#### ARL-20 · Frontier curriculum
+**Status:** Done (2026-11), not yet GPU-verified
+- **What landed:** `rollout.curriculum="frontier"` weights each task by `4p(1-p)` of its measured pass rate, so steps draw tasks where GRPO has gradient; always-solved and never-solved tasks keep a small floor weight.
+- **Why:** about half of all GB200 math groups had zero reward spread; the 2026-11 atlas review ranked a frontier curriculum and a verified task factory first.
+- **Next:** a GB200 run against the uniform baseline, then an Oracle/NOP gate for synthesized tasks (the reference solution must pass and a no-op must fail).
 
 #### ARL-17 · Context compaction that stays trainable
 **Status:** Planned

@@ -113,6 +113,11 @@ class TaskSource:
     def __len__(self) -> int:
         return len(self._tasks)
 
+    @property
+    def tasks(self) -> tuple[EpisodeTask, ...]:
+        """The immutable task pool, in file order (read by ``curriculum.FrontierTaskSource``)."""
+        return self._tasks
+
     def batch(self, step: int, n: int) -> tuple[EpisodeTask, ...]:
         """``n`` tasks for ``step``, deterministic given ``(self.seed, step, n)``.
 
