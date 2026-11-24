@@ -94,8 +94,10 @@ advantage after the baseline (never to the reward); see
 step's final trajectories as `fs.trace/v1` span traces to
 `<trace_dir>/step_<NNNNNN>.jsonl` (`agentic_rl/fs_trace.py`): a session span,
 one span per prompt/response turn (exact token ids, logprobs, flags), one per
-tool call (raw arguments and parse verdict), and a reward span joined to the
-session it scores. Span ids are deterministic hashes of the run (the trace
+tool call (raw arguments and parse verdict), a verifier span holding exactly
+what a verifiable environment's `verify()` reported (hidden-test results for
+SWE), and a reward span joined to the session it scores and to that verifier
+span. Span ids are deterministic hashes of the run (the trace
 directory's name), step, session and structural position. `fold(spans)`
 rebuilds exactly the original `Trajectory`, and `fork_prefix(spans,
 turn_index=k)` names a new branch with the token-id prefix before response

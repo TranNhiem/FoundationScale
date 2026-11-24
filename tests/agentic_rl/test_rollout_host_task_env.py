@@ -328,3 +328,37 @@ def test_a_failing_close_is_logged_and_the_step_survives(
     )  # fmt: skip
     assert list(host.rollout(0).columns["reward"]) == [1.0, 1.0]
     assert capsys.readouterr().err.count("[agentic-rl:env] close failed for taskA#") == 2
+
+
+def test_traced_rollout_joins_a_verifier_span_to_the_reward(tmp_path: Path) -> None:
+    """ARL-21: with trace_dir set, each verified episode's trace carries a VERIFIER_RUN span
+    holding exactly verify()'s report, and the reward span points at it."""
+    from foundationscale.agentic_rl.fs_trace import SpanKind, fold, read_trace
+
+    trace_dir = tmp_path / "run-verify"
+    host = _host(
+        tmp_path, client_factory=lambda i: SubmitClient(), uids=["taskA"],
+        env_backend=TaskBackend({"tests": "pass"}), reward=MetadataReward(),
+        trace_dir=str(trace_dir),
+    )  # fmt: skip
+    host.rollout(0)
+    traces = read_trace(trace_dir / "step_000000.jsonl")
+    assert len(traces) == 2
+    for spans in traces.values():
+        verifier = [s for s in spans if s.kind is SpanKind.VERIFIER_RUN]
+        reward = [s for s in spans if s.kind is SpanKind.REWARD]
+        assert len(verifier) == 1 and len(reward) == 1
+        assert verifier[0].data["checked"] == {"tests": "pass", "verified_uid": "taskA"}
+        assert reward[0].data["verifier_span_id"] == verifier[0].span_id
+        assert fold(spans).reward == 1.0  # the trace still folds back to the scored row
+
+
+def test_untraced_rollout_metadata_is_unchanged(tmp_path: Path) -> None:
+    """Without trace_dir the verifier-keys marker is never added."""
+    host = _host(
+        tmp_path, client_factory=lambda i: SubmitClient(), uids=["taskA"],
+        env_backend=TaskBackend({"tests": "pass"}), reward=MetadataReward(),
+    )  # fmt: skip
+    host.rollout(0)
+    assert host._state.get("last_gathered")
+    assert all("verifier_keys" not in t.metadata for t in host._state["last_gathered"])

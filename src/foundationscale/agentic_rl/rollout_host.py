@@ -484,6 +484,11 @@ class RolloutHost:
                         # e.g. hidden tests run against the agent's edits; an EnvInfraError
                         # here lands in the infra branch below, never as a scored zero.
                         checked = await instance.verify()
+                        if self.trace_dir is not None:
+                            # ARL-21: name the verifier's keys so _write_traces can join a
+                            # verifier span to the reward (only when tracing: otherwise the
+                            # metadata stays exactly what it was).
+                            checked = {**checked, "verifier_keys": ",".join(sorted(checked))}
                         outcome = replace(outcome, metadata={**outcome.metadata, **checked})
                     verdict = await self.reward.score(task, outcome)
                     reward_value = verdict.value
@@ -647,6 +652,8 @@ class RolloutHost:
         directory.mkdir(parents=True, exist_ok=True)
         writer = TraceWriter(directory / f"step_{step:06d}.jsonl")
         for trajectory in trajectories:
+            meta = trajectory.metadata
+            keys = [k for k in meta.get("verifier_keys", "").split(",") if k]
             # invocation 0: a session id is unique within a step, and the live writer
             # (_live_trace_kwargs) derives the same trace id, so the two files join.
             writer.write_episode(
@@ -655,6 +662,8 @@ class RolloutHost:
                     run_id=directory.name,
                     rollout_step=step,
                     invocation=0,
+                    verifier_metadata={k: meta[k] for k in keys if k in meta} if keys else None,
+                    reward_note=meta.get("reward_note"),
                 )
             )
 
