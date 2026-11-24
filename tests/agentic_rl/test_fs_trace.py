@@ -2,6 +2,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -477,3 +478,21 @@ def test_rollout_host_writes_one_foldable_trace_per_trajectory(tmp_path: Path) -
     folded = sorted((fold(spans) for spans in traces.values()), key=lambda t: t.session_id)
     assert [t.session_id for t in folded] == ["taskA#0", "taskA#1"]
     assert all(t.reward is not None for t in folded)
+
+
+@pytest.mark.parametrize("bad", ["", 7])
+def test_rollout_host_refuses_an_empty_or_non_string_trace_dir(tmp_path: Path, bad: Any) -> None:
+    from foundationscale.agentic_rl.rollout_host import RolloutHostRefusal
+
+    try:
+        import test_engine_recovery as fakes  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - package-style collection
+        from tests.agentic_rl import test_engine_recovery as fakes  # type: ignore[no-redef]
+
+    with pytest.raises(RolloutHostRefusal, match="trace_dir"):
+        fakes._host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda i: fakes.SubmitClient("x"),
+            trace_dir=bad,
+        )
