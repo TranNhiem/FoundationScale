@@ -221,6 +221,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/agentic_rl/envs/diff_guard.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/eval_stats.py": 95,  # measured 95.8%
     "src/foundationscale/agentic_rl/curriculum.py": 95,  # measured 95.5%
+    "src/foundationscale/agentic_rl/fs_trace.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/rewards/judge.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/sandbox/broker.py": 100,  # measured 100.0%
     "src/foundationscale/agentic_rl/capability_manifest.py": 100,  # measured 100.0%
