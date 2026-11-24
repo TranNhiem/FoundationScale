@@ -90,6 +90,19 @@ per-turn penalties on tool-call parse errors and repetition, added to the
 advantage after the baseline (never to the reward); see
 [RL_ALGORITHMS.md](RL_ALGORITHMS.md).
 
+**Episode traces.** `rollout.trace_dir` (default `null`, off) writes every
+step's final trajectories as `fs.trace/v1` span traces to
+`<trace_dir>/step_<NNNNNN>.jsonl` (`agentic_rl/fs_trace.py`): a session span,
+one span per prompt/response turn (exact token ids, logprobs, flags), one per
+tool call (raw arguments and parse verdict), and a reward span joined to the
+session it scores. Span ids are deterministic hashes of the run (the trace
+directory's name), step, session and structural position. `fold(spans)`
+rebuilds exactly the original `Trajectory`, and `fork_prefix(spans,
+turn_index=k)` names a new branch with the token-id prefix before response
+turn `k` -- the contract later snapshot/branching work builds on; nothing is
+executed from a fork yet. Traces are written once per finished episode, so
+they record what happened, not a hung operation in progress.
+
 **Frontier curriculum.** `rollout.curriculum="frontier"` (default `"off"`)
 draws each step's tasks with weight `max(floor, 4p(1-p))`, where `p` is a
 task's measured pass rate (Beta(1,1) posterior over every rollout, rewards

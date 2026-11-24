@@ -25,6 +25,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from foundationscale.agentic_rl.contracts import Termination, Trajectory, flatten
@@ -38,6 +39,7 @@ from foundationscale.agentic_rl.envs.base import (
     TaskAwareEnvBackend,
     VerifiableEnvironment,
 )
+from foundationscale.agentic_rl.fs_trace import TraceWriter, trace_from_trajectory
 from foundationscale.agentic_rl.harness.base import (
     EpisodeBudget,
     EpisodeOutcome,
@@ -278,6 +280,9 @@ class RolloutHost:
     # each hung ~2 days between writing the checkpoint shards and the push (no reload
     # ever reached the engine), holding 4 GPUs, with nothing able to notice or recover.
     publish_deadline_s: float | None = None
+    # ARL-21: when set, every step's final trajectories are written as fs.trace/v1 span traces
+    # to <trace_dir>/step_<NNNNNN>.jsonl (agentic_rl.fs_trace); None (default) writes nothing.
+    trace_dir: str | None = None
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -354,6 +359,13 @@ class RolloutHost:
                 f"must be one of 'off', 'refill'"
             )
         _real_int_at_least(self.max_refill_rounds, 1, where=where, name="max_refill_rounds")
+        if self.trace_dir is not None and (
+            not isinstance(self.trace_dir, str) or not self.trace_dir
+        ):
+            raise RolloutHostRefusal(
+                f"{where}: field 'trace_dir' is {_described(self.trace_dir)}: it must be None or "
+                f"a non-empty str"
+            )
         if self.publish_deadline_s is not None and (
             type(self.publish_deadline_s) is bool
             or not isinstance(self.publish_deadline_s, (int, float))
@@ -582,6 +594,26 @@ class RolloutHost:
                 f"in one batch; use recovery_rerun='all' or fix the re-push"
             )
         return merged
+
+    def _write_traces(self, step: int, trajectories: Sequence[Trajectory]) -> None:
+        """ARL-21: one fs.trace/v1 trace per final trajectory of ``step``, appended to
+        ``<trace_dir>/step_<NNNNNN>.jsonl``. The run identity in every trace id is the trace
+        directory's name, so traces of different runs never share ids; ``invocation`` is the
+        session's position in the batch. A write failure propagates -- a declared trace that
+        silently went missing would read as a complete record."""
+        assert self.trace_dir is not None
+        directory = Path(self.trace_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        writer = TraceWriter(directory / f"step_{step:06d}.jsonl")
+        for position, trajectory in enumerate(trajectories):
+            writer.write_episode(
+                trace_from_trajectory(
+                    trajectory,
+                    run_id=directory.name,
+                    rollout_step=step,
+                    invocation=position,
+                )
+            )
 
     def _group_key(self, trajectory: Trajectory) -> str:
         return (
@@ -817,6 +849,8 @@ class RolloutHost:
             if self._server_versions() is not None
             else ()
         )
+        if self.trace_dir is not None:
+            self._write_traces(step, trajectories)
         batch = flatten(trajectories, group_by_harness=self.group_by_harness)
         print(rollout_summary(step, round0), file=sys.stderr, flush=True)
         if self.guard is not None:

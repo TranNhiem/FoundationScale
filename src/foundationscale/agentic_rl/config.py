@@ -390,6 +390,8 @@ class RolloutConfig:
     curriculum_floor: float = 0.05
     # Optional registry file: loaded if present, saved after every step (resume / reuse).
     curriculum_state_path: str | None = None
+    # ARL-21: directory for fs.trace/v1 span traces of every step's trajectories; None = off.
+    trace_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1080,6 +1082,7 @@ def _build_rollout(
             "curriculum_min_obs",
             "curriculum_floor",
             "curriculum_state_path",
+            "trace_dir",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1272,6 +1275,18 @@ def _build_rollout(
             f"rollout.curriculum_state_path: is set, but rollout.curriculum={curriculum!r} "
             f"never reads it"
         )
+    trace_dir = _resolve_scalar(
+        dotted_key="rollout.trace_dir",
+        field_name="trace_dir",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str | None,
+        default=None,
+        required=False,
+        provenance=provenance,
+    )
+    if trace_dir is not None and not trace_dir:
+        raise AgenticConfigRefusal("rollout.trace_dir: must be null or a non-empty path")
     return RolloutConfig(
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
@@ -1289,6 +1304,7 @@ def _build_rollout(
         curriculum_min_obs=curriculum_min_obs,
         curriculum_floor=curriculum_floor,
         curriculum_state_path=curriculum_state_path,
+        trace_dir=trace_dir,
     )
 
 

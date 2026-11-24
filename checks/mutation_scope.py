@@ -356,6 +356,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "fully line-covered by tests/agentic_rl/test_diff_guard.py, but no mutation row yet "
         "proves a dropped guarded name or a followed symlink would be caught."
     ),
+    "src/foundationscale/agentic_rl/fs_trace.py": (
+        "fs.trace/v1 span traces (deterministic ids, exact fold back to Trajectory, fork "
+        "prefixes, append-only JSONL reader/writer): covered by tests/agentic_rl/test_fs_trace.py, "
+        "but no mutation row yet proves a flipped fold or fork rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/curriculum.py": (
         "frontier curriculum (Beta pass-rate registry, 4p(1-p) weighted draws, saturation "
         "floor): line-covered by tests/agentic_rl/test_curriculum.py, but no mutation row yet "
