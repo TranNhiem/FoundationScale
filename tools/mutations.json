@@ -744,8 +744,8 @@
     {
       "name": "agentic_contracts.loss-mask-inverts-the-supervision-flag",
       "what": "The per-token supervision predicate is negated before it is written into loss_mask, so every generated ASSISTANT/TOOL_CALL token comes out 0 and every injected tool result, observation and user token comes out 1. Nothing raises: the tuple is still one entry per response token and every alignment check in flatten passes, while the loss silently trains the policy on harness-rendered text it never sampled and credits not a single token it did. supervised_token_count compounds it by reporting exactly the number of injected tokens, so any supervision-rate gate reads the inverse of reality. Caught by: test_must_multi_turn_trajectory_flattens_and_supervises_only_sampled_turns",
-      "anchor": "            supervised = turn.generated and turn.kind in _SUPERVISED_KINDS\n",
-      "replacement": "            supervised = not (turn.generated and turn.kind in _SUPERVISED_KINDS)\n"
+      "anchor": "            supervised = turn.generated and turn.credited and turn.kind in _SUPERVISED_KINDS\n",
+      "replacement": "            supervised = not (turn.generated and turn.credited and turn.kind in _SUPERVISED_KINDS)\n"
     },
     {
       "name": "agentic_contracts.repetition-mask-ors-flag-with-provenance",
