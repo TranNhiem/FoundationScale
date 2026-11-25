@@ -12,7 +12,8 @@
     "sharding": "none",
     "save_dir": "@OUT@/checkpoints",
     "seed": 5,
-    "gradient_checkpointing": true
+    "gradient_checkpointing": true,
+    "logprob_chunk_tokens": 4096
   },
   "engine": {
     "kind": "vllm",
