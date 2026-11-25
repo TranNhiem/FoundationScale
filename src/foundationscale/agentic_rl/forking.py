@@ -13,9 +13,10 @@ token prefix itself (compared as token ids -- never decoded and re-encoded). A m
 calls. The restored environment's signature is checked against the snapshot by
 ``restore()`` itself; here the boundary's recorded signature must also equal the snapshot's.
 
-WHAT IS NOT CLAIMED: credit assignment. The forked outcome is a complete episode (kept turns
-plus new ones) scored by the normal verifier; its metadata names the fork so the trainer can
-mask the kept prefix, but masking is ARL-19 work.
+Credit: the forked outcome is a complete episode (kept turns plus new ones) scored by the
+normal verifier, but the kept generated turns carry ``credited=False`` (ARL-19), so
+``Trajectory.loss_mask()`` -- and therefore the trainer -- trains only on the tokens this
+attempt sampled after the fork. The kept turns keep their provenance and logprobs.
 """
 
 from __future__ import annotations
@@ -124,8 +125,21 @@ async def resume_fork(
     outcome = await harness.run_episode(
         task, client=client, env=env, budget=budget, resume=boundary.checkpoint
     )
+    kept = len(boundary.checkpoint.turns)
+    prefix = outcome.trajectory_turns[:kept]
+    if prefix != boundary.checkpoint.turns:
+        raise ForkRefusal(
+            "fork: the resumed outcome does not start with the checkpoint's turns: the kept "
+            "prefix cannot be identified, so credit could not be withheld from it"
+        )
+    # ARL-19: the kept prefix was sampled by the PARENT episode; it stays generated (real
+    # provenance and logprobs) but gets no policy-gradient credit in this attempt.
+    uncredited = tuple(
+        dataclasses.replace(turn, credited=False) if turn.generated else turn for turn in prefix
+    )
     return dataclasses.replace(
         outcome,
+        trajectory_turns=uncredited + outcome.trajectory_turns[kept:],
         metadata={
             **outcome.metadata,
             "fork_parent_trace_id": point.parent_trace_id,

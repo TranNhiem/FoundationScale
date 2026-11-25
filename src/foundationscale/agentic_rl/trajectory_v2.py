@@ -1396,6 +1396,13 @@ def from_v1(
 
     if not isinstance(traj, v1.Trajectory):
         _refuse(f"from_v1.traj: expected contracts.Trajectory, got {type(traj).__name__}")
+    uncredited = [turn.index for turn in traj.turns if not turn.credited]
+    if uncredited:
+        _refuse(
+            f"from_v1: v1 trajectory {traj.session_id!r} has uncredited turns {uncredited} (a "
+            f"forked episode's kept prefix, ARL-19): v2 has no credit notion, so lifting it "
+            f"would either train the parent's tokens or erase their provenance"
+        )
 
     prompt_ids = tuple(t for turn in traj.prompt_turns for t in turn.token_ids)
     response_ids = tuple(t for turn in traj.turns for t in turn.token_ids)

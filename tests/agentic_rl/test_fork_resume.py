@@ -14,14 +14,20 @@ from typing import Any, cast
 
 import pytest
 
-from foundationscale.agentic_rl.contracts import Termination
+from foundationscale.agentic_rl.contracts import Termination, Trajectory, TrajectoryRefusal
 from foundationscale.agentic_rl.forking import (
     ForkBoundary,
     ForkRefusal,
     check_fork,
     resume_fork,
 )
-from foundationscale.agentic_rl.fs_trace import ForkPoint
+from foundationscale.agentic_rl.fs_trace import (
+    ForkPoint,
+    SpanKind,
+    fold,
+    fork_prefix,
+    trace_from_trajectory,
+)
 from foundationscale.agentic_rl.harness.base import (
     EpisodeBudget,
     EpisodeCheckpoint,
@@ -525,3 +531,121 @@ def test_resume_fork_refuses_task_uid_mismatch() -> None:
     assert store.requested_ids == []
     assert env.restore_calls == []
     assert harness.run_calls == 0
+
+
+# --- ARL-19: the kept fork prefix gets no policy-gradient credit -----------------------
+
+
+def _forked_outcome() -> tuple[EpisodeOutcome, EpisodeCheckpoint]:
+    parent = _parent_episode()
+    point, boundary = _fork_parts(parent.checkpoint)
+    events: list[str] = []
+    outcome = asyncio.run(
+        resume_fork(
+            point,
+            boundary,
+            harness=cast(Any, _RecordingHarness(parent.outcome, events)),
+            task=_task(),
+            client=ScriptedClient([]),
+            env=cast(Any, _FakeRestoreEnvironment(events)),
+            budget=_budget(),
+            store=cast(Any, _FakeSnapshotStore(boundary.env_signature)),
+        )
+    )
+    return outcome, parent.checkpoint
+
+
+def _as_trajectory(outcome: EpisodeOutcome) -> Trajectory:
+    return Trajectory(
+        uid="t",
+        session_id="t#fork",
+        harness="native_tool_loop",
+        prompt_turns=outcome.prompt_turns,
+        turns=outcome.trajectory_turns,
+        reward=1.0,
+        abstention_reason=None,
+        termination=outcome.termination,
+        policy_version_min=0,
+        policy_version_max=0,
+    )
+
+
+def test_resume_fork_withholds_credit_from_the_kept_prefix_only() -> None:
+    outcome, checkpoint = _forked_outcome()
+    kept = len(checkpoint.turns)
+    assert kept > 0
+    prefix, rest = outcome.trajectory_turns[:kept], outcome.trajectory_turns[kept:]
+    assert all(not t.credited for t in prefix if t.generated)
+    assert all(t.credited for t in prefix if not t.generated)
+    assert all(t.credited for t in rest)
+    # provenance is untouched: same tokens, still generated, same logprobs
+    assert [(t.token_ids, t.generated, t.logprobs) for t in prefix] == [
+        (t.token_ids, t.generated, t.logprobs) for t in checkpoint.turns
+    ]
+    traj = _as_trajectory(outcome)
+    mask = traj.loss_mask()
+    prefix_len = sum(len(t.token_ids) for t in prefix)
+    assert set(mask[:prefix_len]) == {0}
+    assert 1 in mask[prefix_len:]
+    assert traj.rollout_logprobs()[:prefix_len] == tuple(
+        lp for t in prefix for lp in (t.logprobs or (None,) * len(t.token_ids))
+    )
+
+
+def test_resume_fork_refuses_an_outcome_that_does_not_start_with_the_prefix() -> None:
+    parent = _parent_episode()
+    point, boundary = _fork_parts(parent.checkpoint)
+    events: list[str] = []
+    wrong = dataclasses.replace(
+        parent.outcome, trajectory_turns=parent.outcome.trajectory_turns[1:]
+    )
+    with pytest.raises(ForkRefusal, match="kept prefix cannot be identified"):
+        asyncio.run(
+            resume_fork(
+                point,
+                boundary,
+                harness=cast(Any, _RecordingHarness(wrong, events)),
+                task=_task(),
+                client=ScriptedClient([]),
+                env=cast(Any, _FakeRestoreEnvironment(events)),
+                budget=_budget(),
+                store=cast(Any, _FakeSnapshotStore(boundary.env_signature)),
+            )
+        )
+
+
+def test_turn_credited_is_a_strict_bool_and_only_withheld_from_generated_turns() -> None:
+    outcome, _ = _forked_outcome()
+    generated = next(t for t in outcome.trajectory_turns if t.generated)
+    injected = next(t for t in outcome.trajectory_turns if not t.generated)
+    with pytest.raises(TrajectoryRefusal, match="credited"):
+        dataclasses.replace(generated, credited=cast(Any, 1))
+    with pytest.raises(TrajectoryRefusal, match="non-generated turn"):
+        dataclasses.replace(injected, credited=False)
+
+
+def test_trace_round_trip_keeps_credit_and_leaves_credited_traces_unchanged() -> None:
+    outcome, checkpoint = _forked_outcome()
+    traj = _as_trajectory(outcome)
+    spans = trace_from_trajectory(traj, run_id="r", rollout_step=0)
+    assert fold(spans) == traj
+    turn_data = [s.data for s in spans if s.kind is SpanKind.TURN]
+    assert any(d.get("credited") is False for d in turn_data)
+    assert all("credited" not in d for d in turn_data if d["phase"] == "prompt")
+    fork_prefix(spans, turn_index=traj.turns[-1].index)  # tolerates the optional key
+
+    full = _as_trajectory(_parent_episode().outcome)
+    plain = trace_from_trajectory(full, run_id="r", rollout_step=0)
+    assert all("credited" not in s.data for s in plain if s.kind is SpanKind.TURN)
+    assert fold(plain) == full
+
+
+def test_trajectory_v2_refuses_to_lift_an_uncredited_fork() -> None:
+    from foundationscale.agentic_rl import trajectory_v2
+
+    outcome, _ = _forked_outcome()
+    unused = cast(Any, None)  # the refusal fires before any metadata is read
+    with pytest.raises(trajectory_v2.TrajectoryV2Refusal, match="uncredited turns"):
+        trajectory_v2.from_v1(
+            _as_trajectory(outcome), model=unused, harness=unused, env=unused, gateway=unused
+        )

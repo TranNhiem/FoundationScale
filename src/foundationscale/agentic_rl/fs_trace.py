@@ -331,6 +331,9 @@ def trace_from_trajectory(
                     "generated": turn.generated,
                     "logprobs": (None if turn.logprobs is None else list(turn.logprobs)),
                     "repetition_hit": turn.repetition_hit,
+                    # ARL-19: written only when False, so every uncredited-free trace (all of
+                    # them before forks existed) keeps byte-identical spans and span ids.
+                    **({} if turn.credited else {"credited": False}),
                 },
             )
             spans.append(turn_span)
@@ -470,9 +473,15 @@ def _validated_spans(
     return ordered
 
 
-def _exact_data(span: Span, expected: tuple[str, ...], *, operation: str) -> None:
+def _exact_data(
+    span: Span,
+    expected: tuple[str, ...],
+    *,
+    operation: str,
+    optional: tuple[str, ...] = (),
+) -> None:
     wanted = set(expected)
-    actual = set(span.data)
+    actual = set(span.data) - set(optional)
     if actual != wanted:
         raise TraceRefusal(
             f"{operation}: span {span.span_id!r} kind {span.kind.value!r} field "
@@ -549,6 +558,7 @@ def fold(spans: Iterable[Span]) -> Trajectory:
                     "repetition_hit",
                 ),
                 operation="fold()",
+                optional=("credited",),
             )
             phase = span.data["phase"]
             if phase not in ("prompt", "response"):
@@ -687,6 +697,7 @@ def fold(spans: Iterable[Span]) -> Trajectory:
                 logprobs=logprobs,
                 tool_calls=tuple(calls_by_turn[span_id]),
                 repetition_hit=span.data["repetition_hit"],
+                credited=span.data.get("credited", True),
             )
         except (TypeError, ValueError) as exc:
             raise TraceRefusal(
@@ -762,6 +773,7 @@ def fork_prefix(spans: Iterable[Span], *, turn_index: int) -> ForkPoint:
                 "repetition_hit",
             ),
             operation="fork_prefix()",
+            optional=("credited",),
         )
         phase = span.data["phase"]
         if phase not in ("prompt", "response"):

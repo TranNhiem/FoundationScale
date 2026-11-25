@@ -329,6 +329,10 @@ class Turn:
     logprobs: tuple[float, ...] | None
     tool_calls: tuple[ToolCall, ...] = ()
     repetition_hit: bool = False
+    # ARL-19: False on a generated turn that must get NO policy-gradient credit -- the kept
+    # prefix of a forked episode, sampled by the parent episode, not by this attempt. It stays
+    # generated (its provenance and logprobs are real); loss_mask() alone drops it.
+    credited: bool = True
 
     def __post_init__(self) -> None:
         where = _unattached(f"turn index={self.index!r}")
@@ -382,6 +386,16 @@ class Turn:
             raise TrajectoryRefusal(
                 f"{where}: field 'repetition_hit' is {_described(self.repetition_hit)}: True or "
                 f"False only -- repetition_mask() is derived from this flag"
+            )
+        if type(self.credited) is not bool:
+            raise TrajectoryRefusal(
+                f"{where}: field 'credited' is {_described(self.credited)}: True or False -- "
+                f"a truthy non-bool would silently decide which tokens get credit"
+            )
+        if not self.credited and not self.generated:
+            raise TrajectoryRefusal(
+                f"{where}: field 'credited' is False on a non-generated turn: credit is only "
+                f"withheld from sampled tokens -- injected text never had any"
             )
 
 
@@ -630,7 +644,7 @@ class Trajectory:
             return (0,) * sum(len(turn.token_ids) for turn in self.turns)
         mask: list[int] = []
         for turn in self.turns:
-            supervised = turn.generated and turn.kind in _SUPERVISED_KINDS
+            supervised = turn.generated and turn.credited and turn.kind in _SUPERVISED_KINDS
             mask.extend([int(supervised)] * len(turn.token_ids))
         return tuple(mask)
 
