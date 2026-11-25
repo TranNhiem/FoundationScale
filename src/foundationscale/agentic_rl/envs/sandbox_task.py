@@ -409,6 +409,19 @@ class TaskSandboxEnvironment:
                 f"(command {_described(command)}): a closed environment's container has been "
                 f"deleted, so its commands would run nowhere"
             )
+        if not isinstance(command, str) or not command.strip():
+            # A model-issued empty tool call is a model mistake, not an infra fault: answer it as a
+            # failed command the model can see, instead of letting the sandbox's refusal of an empty
+            # command crash the whole training run (measured 2026-11-25: a Qwen3.5-4B rollout issued
+            # bash with command='' and the unhandled SandboxRefusal ended the run RED).
+            return ExecResult(
+                stdout="",
+                stderr="error: empty command -- nothing was run; send a non-empty shell command",
+                exit_code=2,
+                timed_out=False,
+                truncated_bytes=0,
+                seconds=0.0,
+            )
         started = time.monotonic()
         result = await asyncio.to_thread(
             self._exec_sync, command, timeout_s=timeout_s or self._spec.exec_timeout_s

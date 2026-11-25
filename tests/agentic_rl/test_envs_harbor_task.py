@@ -224,3 +224,11 @@ def test_fresh_mode_infra_failure_still_deletes_the_verifier(tmp_path):
     with pytest.raises(EnvInfraError):
         _verify(_fresh_env(tmp_path, SandboxError("boom")))
     assert FreshRootfs.stopped == [str(tmp_path / "verifier")]
+
+
+@pytest.mark.parametrize("command", ["", "   ", "\n"])
+def test_empty_model_command_is_a_failed_command_not_a_crash(tmp_path, command):
+    env = _env(tmp_path, lambda root: Result())
+    asyncio.run(env.start())
+    out = asyncio.run(env.execute(command))
+    assert out.exit_code == 2 and "empty command" in out.stderr and not out.timed_out
