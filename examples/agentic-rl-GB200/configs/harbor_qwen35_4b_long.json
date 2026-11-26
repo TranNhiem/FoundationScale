@@ -86,7 +86,7 @@
     "seed": 5,
     "max_infra_rate": 0.5,
     "engine_recovery_retries": 3,
-    "curriculum": true,
+    "curriculum": false,
     "async_prefetch": true
   },
   "reward": {
@@ -100,5 +100,5 @@
     "min_steps": 10,
     "action": "warn"
   },
-  "_doc": "B2.3 L1: Skill2Env-recipe-faithful long run (lr 1e-6 constant, grad clip 1.0, top_p 1.0, 64 traj/update, 300 updates) + chunked logprobs, curriculum filtering, async prefetch; engine and trainer on separate GPUs."
+  "_doc": "B2.3 L1: Skill2Env-recipe-faithful long run (lr 1e-6 constant, grad clip 1.0, top_p 1.0, 64 traj/update, 300 updates) + chunked logprobs, async prefetch; engine and trainer on separate GPUs. Curriculum OFF (2026-11-26): it drove early-stop overfitting (m2 dev -0.029, CI excludes 0); flat groups are already zeroed by the trainer (= the reference's dynamic filtering)."
 }
