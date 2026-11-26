@@ -547,3 +547,48 @@ def test_directory_check_backs_off_long_enough_for_a_shared_fs_stall(
     assert servable_mod._is_dir_settled(tmp_path / "absent") is False
     assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]  # doubling, capped, no sleep after last
     assert sum(slept) >= 60.0
+
+
+# ---------------------------------------------------------------------------
+# base config snapshot: later publishes do not touch the base directory
+# ---------------------------------------------------------------------------
+
+
+def test_a_text_model_publish_survives_the_base_dir_vanishing_after_the_first(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base"
+    cache = tmp_path / "cache"
+    _build_base(base)
+    for step in (1, 2):
+        published = tmp_path / f"step_{step}"
+        _build_published(published)
+        _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
+        if step == 2:
+            base.rename(tmp_path / "base-stalled")  # a shared-filesystem stall: ENOENT
+        report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
+        assert report.status == "already_servable"
+    assert len(list(cache.glob("base-config-*.json"))) == 1
+
+
+def test_the_first_publish_still_needs_the_base_dir(tmp_path: Path) -> None:
+    published = tmp_path / "published"
+    _build_published(published)
+    with pytest.raises(ServableRefusal, match="base_model_dir .* is not a directory"):
+        complete_for_serving(
+            str(published), str(tmp_path / "absent"), cache_dir=str(tmp_path / "cache")
+        )
+
+
+def test_completing_a_multimodal_checkpoint_still_needs_the_base_dir(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    cache = tmp_path / "cache"
+    _build_base(base)
+    first = tmp_path / "step_1"
+    _build_published(first)
+    assert complete_for_serving(str(first), str(base), cache_dir=str(cache)).status == "completed"
+    base.rename(tmp_path / "base-stalled")
+    second = tmp_path / "step_2"
+    _build_published(second)
+    with pytest.raises(ServableRefusal, match="base_model_dir .* is not a directory"):
+        complete_for_serving(str(second), str(base), cache_dir=str(cache))

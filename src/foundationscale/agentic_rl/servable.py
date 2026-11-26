@@ -315,6 +315,37 @@ def _dir_settled_reason(path: Path) -> str | None:
     return reason
 
 
+def _require_settled_dir(path: Path, *, label: str, value: str, where: str) -> None:
+    reason = _dir_settled_reason(path)
+    if reason is not None:
+        raise ServableRefusal(
+            f"{where}: {label} {value!r} is not a directory ({reason} after "
+            f"{_FS_RETRY_ATTEMPTS} checks with backoff)"
+        )
+
+
+def _base_config(
+    base: Path, cache_root: Path, *, base_model_dir: str, where: str
+) -> dict[str, object]:
+    """The base model's config.json, read from the base directory ONCE and then from a snapshot
+    in ``cache_root``. The base model does not change during a run, so later publishes need not
+    touch its directory: a text-only policy (published architectures == base architectures)
+    then never reads it again, and a shared-filesystem stall on that path -- which killed two
+    GB200 runs after a full backoff while the directory existed -- can no longer stop a run.
+    The snapshot is keyed by the base path and written atomically (temp + rename)."""
+    digest = hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
+    snapshot = cache_root / f"base-config-{digest}.json"
+    if snapshot.is_file():
+        return _read_json_object(snapshot, where=f"{where}: base config snapshot")
+    _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
+    config = _read_json_object(base / "config.json", where=f"{where}: base_model_dir")
+    cache_root.mkdir(parents=True, exist_ok=True)
+    tmp = snapshot.with_name(f"{snapshot.name}.tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+    tmp.replace(snapshot)
+    return config
+
+
 def complete_for_serving(
     publish_dir: str, base_model_dir: str, *, cache_dir: str
 ) -> ServableReport:
@@ -329,19 +360,10 @@ def complete_for_serving(
     where = "complete_for_serving"
     publish = Path(publish_dir)
     base = Path(base_model_dir)
-    for label, value, path in (
-        ("publish_dir", publish_dir, publish),
-        ("base_model_dir", base_model_dir, base),
-    ):
-        reason = _dir_settled_reason(path)
-        if reason is not None:
-            raise ServableRefusal(
-                f"{where}: {label} {value!r} is not a directory ({reason} after "
-                f"{_FS_RETRY_ATTEMPTS} checks with backoff)"
-            )
+    _require_settled_dir(publish, label="publish_dir", value=publish_dir, where=where)
 
     published_config = _read_json_object(publish / "config.json", where=f"{where}: publish_dir")
-    base_config = _read_json_object(base / "config.json", where=f"{where}: base_model_dir")
+    base_config = _base_config(base, Path(cache_dir), base_model_dir=base_model_dir, where=where)
 
     base_architectures = base_config.get("architectures")
     if not isinstance(base_architectures, list) or not base_architectures:
@@ -355,6 +377,9 @@ def complete_for_serving(
             status="already_servable", extras_keys=0, extras_bytes=0, copied_files=()
         )
 
+    # Completing a multimodal checkpoint reads base weights and files: the directory itself
+    # is needed from here on, so this path keeps the probe-with-backoff.
+    _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
     base_map = _weight_map(base, where=f"{where}: base_model_dir")
     published_map = _weight_map(publish, where=f"{where}: publish_dir")
 
