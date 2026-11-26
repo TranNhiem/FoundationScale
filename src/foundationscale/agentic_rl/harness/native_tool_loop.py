@@ -58,6 +58,20 @@ def _described(value: object) -> str:
     return f"{type(value).__name__} {value!r}"
 
 
+_INFRA_LOGGED: set[str] = set()
+
+
+def _log_infra_once(reason: str, exc: BaseException) -> None:
+    """Print the FIRST message seen for each infra abstention kind to stderr: the trajectory keeps only the kind,
+    which left repeated 'infra:transport' failures undiagnosable (B2.3, 2026-11-26)."""
+    if reason in _INFRA_LOGGED:
+        return
+    _INFRA_LOGGED.add(reason)
+    import sys
+
+    print(f"[agentic-rl:infra-example] {reason}: {type(exc).__name__}: {str(exc)[:600]}", file=sys.stderr, flush=True)
+
+
 def _render(
     tokenizer: ChatTokenizer,
     messages: Sequence[Mapping[str, Any]],
@@ -387,6 +401,7 @@ class NativeToolLoop(HarnessAdapter):
             if infra_error is not None:
                 termination = Termination.INFRA
                 abstention_reason = f"infra:{infra_error.kind}"
+                _log_infra_once(abstention_reason, infra_error)
                 break
 
             observation_text = _truncate_observation(

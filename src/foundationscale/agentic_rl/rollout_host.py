@@ -387,6 +387,9 @@ class RolloutHost:
                 )
             except _INFRA_EXCEPTIONS as exc:
                 reason = f"infra:{type(exc).__name__}"
+                from foundationscale.agentic_rl.harness.native_tool_loop import _log_infra_once
+
+                _log_infra_once(reason, exc)
                 if outcome is not None:
                     # run_episode() returned a real EpisodeOutcome before reward
                     # scoring raised: reuse its REAL prompt_turns/turns rather
