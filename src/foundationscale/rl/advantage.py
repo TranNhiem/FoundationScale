@@ -45,7 +45,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 __all__ = (
     "AdvantageConfigRefusal",
@@ -61,6 +61,19 @@ __all__ = (
     "SessionGroupAdvantage",
     "TemporalAdvantageFn",
 )
+
+
+# ARL-17: a compacted episode is emitted as several segment Trajectories (agentic_rl.contracts)
+# whose session ids are f"{episode_session_id}{SEGMENT_SEPARATOR}{k}"; episode_id_of() recovers
+# the episode, so the advantage counts each episode once and broadcasts its reward to every
+# segment. Defined here, not in agentic_rl, so the RL plane never imports the agentic plane.
+SEGMENT_SEPARATOR = "::seg"
+
+
+def episode_id_of(session_id: str) -> str:
+    """The episode a (possibly segment) session id belongs to: itself when unsegmented."""
+    head, sep, tail = session_id.rpartition(SEGMENT_SEPARATOR)
+    return head if sep and head and tail.isdigit() else session_id
 
 
 class AdvantageRefusal(ValueError):
@@ -646,6 +659,54 @@ class CentredAdvantage:
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.method_name)
 
 
+def _episode_units(
+    groups: list[tuple[int, ...]],
+    episode_ids: Sequence[str],
+    rewards: Sequence[float | None],
+) -> tuple[list[tuple[int, ...]], dict[int, tuple[int, ...]]]:
+    """ARL-17: collapse each prompt group's rows to one representative row per EPISODE.
+
+    A compacted episode is emitted as several segment rows that share one episode
+    reward; counting each as a group member would let an episode that compacted more
+    weigh more in the baseline. Returns the groups re-expressed over representative
+    rows (first row of each episode) and ``representative -> all rows of its episode``.
+    Refuses an episode spread over two prompt groups or carrying differing rewards --
+    either means the rows are not one episode's segments.
+    """
+    if len(episode_ids) != len(rewards):
+        raise AdvantageRefusal(
+            f"episode_ids has {len(episode_ids)} entries but there are {len(rewards)} rows: "
+            f"every row needs its episode id"
+        )
+    owner: dict[str, int] = {}
+    unit_groups: list[tuple[int, ...]] = []
+    members: dict[int, tuple[int, ...]] = {}
+    for group_index, indices in enumerate(groups):
+        episodes: dict[str, list[int]] = {}
+        for row in indices:
+            episode = episode_ids[row]
+            if not isinstance(episode, str) or not episode:
+                raise AdvantageRefusal(
+                    f"episode id at row {row} is {episode!r}: a non-empty str is required"
+                )
+            if owner.setdefault(episode, group_index) != group_index:
+                raise AdvantageRefusal(
+                    f"episode {episode!r} has rows in two prompt groups: one episode's "
+                    f"segments answer one prompt"
+                )
+            episodes.setdefault(episode, []).append(row)
+        for episode, rows in episodes.items():
+            if len({rewards[row] for row in rows}) != 1:
+                raise AdvantageRefusal(
+                    f"episode {episode!r} carries differing rewards "
+                    f"{[rewards[row] for row in rows]!r} over its {len(rows)} segment row(s): "
+                    f"the episode reward is broadcast to every segment, never mixed"
+                )
+            members[rows[0]] = tuple(rows)
+        unit_groups.append(tuple(rows[0] for rows in episodes.values()))
+    return unit_groups, members
+
+
 def _checked_session_rows(
     prompt_ids: Sequence[str],
     rewards: Sequence[float | None],
@@ -744,6 +805,10 @@ class SessionGroupAdvantage:
     implementation's session handling.
     """
 
+    # ARL-17: compute() accepts ``episode_ids`` (the trainer passes them only to an
+    # estimator that declares this).
+    accepts_episode_ids: ClassVar[bool] = True
+
     name: str = "session_group"
     min_group_size: int = 2
     normalise_by_std: bool = False
@@ -788,10 +853,18 @@ class SessionGroupAdvantage:
         prompt_ids: Sequence[str],
         rewards: Sequence[float | None],
         mask: Sequence[Sequence[int]],
+        episode_ids: Sequence[str] | None = None,
     ) -> AdvantageResult:
+        """``episode_ids`` (ARL-17, optional): when given, a prompt group's baseline is
+        formed over EPISODES -- each counted once, ``min_group_size`` included -- and an
+        episode's advantage is broadcast to all of its segment rows. When omitted every
+        row is its own episode, which is exactly the per-session computation."""
         ids, cleaned_rewards, masks = _checked_session_rows(prompt_ids, rewards, mask)
         per_sample: list[float | None] = [None] * len(ids)
         groups = _group_indices(ids)
+        members: dict[int, tuple[int, ...]] = {}
+        if episode_ids is not None:
+            groups, members = _episode_units(groups, episode_ids, cleaned_rewards)
         if self.partial_group_policy == "refuse":
             # Layered AFTER the offered-size drop: a group too small for a
             # baseline leaves the result whatever its rewards say.
@@ -846,6 +919,9 @@ class SessionGroupAdvantage:
             for row, reward in zip(valid_rows, group, strict=True):
                 centred = reward - mean
                 per_sample[row] = centred / std if self.normalise_by_std else centred
+        for representative, rows in members.items():
+            for row in rows:
+                per_sample[row] = per_sample[representative]
         return _emit_used_rows(per_sample, cleaned_rewards, masks, self.name)
 
 

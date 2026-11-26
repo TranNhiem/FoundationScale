@@ -296,7 +296,7 @@ Related VLA items elsewhere: [ARL-3](#arl-3--vla-agentic-rl) VLA agentic RL.
 - **Next:** use forks for snapshot restore (ARL-18) and branching rollouts. Verifier runs are now joined to the rewards they produce.
 
 #### ARL-17 · Context compaction that stays trainable
-**Status:** Planned
+**Status:** In progress -- slice 1 done (episode-level credit: segment rows of a compacted episode carry session ids `<episode>::seg<k>`; `SessionGroupAdvantage.compute(episode_ids=...)` forms each prompt group's baseline over EPISODES -- each counted once, `min_group_size` included -- and broadcasts an episode's advantage to all of its segments; the trainer passes episode ids only to an estimator that declares `accepts_episode_ids` and only when a batch holds segments, so unsegmented runs are unchanged; design and survey in the cluster-side `artifacts/research/arl17-context-compaction.md`). Next: the harness emitting segments at a compaction boundary.
 - **Goal:** long episodes compact their context (summaries, tool-output trimming) without breaking the token-trace and loss-mask invariants.
 - **Start from:** [token_trace.py](src/foundationscale/agentic_rl/token_trace.py) and the episode budget in the harness.
 - **Done when:** a 50+ turn SWE episode trains at a matched budget with compaction on.

@@ -376,3 +376,51 @@ def test_resolve_objective_refuses_estimator_free_with_rollout_source() -> None:
     trainer = RLTrainer(_config("reinforce_baseline", rollout_source=object()))
     with pytest.raises(TrainerRefusal, match="estimator-free"):
         trainer._resolve_objective()
+
+
+# --- (e) ARL-17: segments of a compacted episode reach the estimator as one episode ------
+
+
+def test_one_step_rows_passes_episode_ids_for_segmented_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foundationscale.rl.advantage import SessionGroupAdvantage
+
+    seen: list[Any] = []
+    original = SessionGroupAdvantage.compute
+
+    def spy(self: SessionGroupAdvantage, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("episode_ids"))
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SessionGroupAdvantage, "compute", spy)
+    trainer = RLTrainer(_config("agentic_grpo"))
+    objective = trainer._resolve_objective()
+    assert isinstance(objective.advantage_fn, SessionGroupAdvantage)
+    loss_fn = TensorPolicyLoss(objective=objective)
+
+    def run(sessions: tuple[str, ...]) -> None:
+        batch = _batch(
+            prompt_ids=("g0", "g0", "g0"),
+            prompt_token_ids=((1, 2), (1, 2), (1, 2)),
+            response_ids=((3, 4), (5, 6), (7, 8)),
+            loss_mask=((1, 1), (1, 1), (1, 1)),
+            reward=(1.0, 1.0, 0.0),
+            session_id=sessions,
+        )
+        model = _FakeModel()
+        trainer._one_step_rows(
+            0,
+            batch,
+            model=model,
+            optimizer=torch.optim.SGD(model.parameters(), lr=0.1),
+            ref_model=None,
+            objective=objective,
+            loss_fn=loss_fn,
+            device="cpu",
+            pad_token_id=_PAD,
+        )
+
+    run(("g0#0::seg0", "g0#0::seg1", "g0#1"))
+    run(("g0#0", "g0#1", "g0#2"))
+    assert seen == [("g0#0", "g0#0", "g0#1"), None]

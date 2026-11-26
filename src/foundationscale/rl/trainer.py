@@ -69,7 +69,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
 
     import torch
 
-from foundationscale.rl.advantage import AdvantageRefusal, RewardStats
+from foundationscale.rl.advantage import (
+    SEGMENT_SEPARATOR,
+    AdvantageRefusal,
+    RewardStats,
+    episode_id_of,
+)
 from foundationscale.rl.algorithm import StepReport, StepReportRefusal
 from foundationscale.rl.corpus import Sample, load_sharegpt
 from foundationscale.rl.group_policy_objectives import prompt_mean_row_weights
@@ -2513,6 +2518,7 @@ class RLTrainer:
         null_rank: bool,
         rows: list[tuple[int, float]] | None = None,
         shaping_plane: torch.Tensor | None = None,
+        episode_ids: list[str] | None = None,
     ) -> StepReport | None:
         """Price the kept planes: logprobs, advantage, loss, backward, report.
 
@@ -2742,10 +2748,19 @@ class RLTrainer:
         adv_refusal: str | None = None
         try:
             if not null_rank:
+                # ARL-17: episode ids (segments of a compacted episode) go only to an
+                # estimator that declares it accepts them; any other keeps its own call.
+                episode_kwargs = (
+                    {"episode_ids": tuple(episode_ids)}
+                    if episode_ids is not None
+                    and getattr(objective.advantage_fn, "accepts_episode_ids", False)
+                    else {}
+                )
                 advantage = objective.advantage_fn.compute(
                     prompt_ids=tuple(group_ids),
                     rewards=tuple(float(value) for value in rewards.tolist()),
                     mask=tuple(tuple(int(e) for e in row) for row in response_mask.tolist()),
+                    **episode_kwargs,
                 )
         except AdvantageRefusal as exc:
             adv_refusal = str(exc)
@@ -3222,6 +3237,7 @@ class RLTrainer:
         shaping_plane = self._shaping_plane_from_batch(
             batch, objective, kept_row_indices=_kept_row_indices, response_mask=response_mask
         )
+        episode_ids = self._episode_ids_from_batch(batch, kept_row_indices=_kept_row_indices)
         n_rows = int(kept_sequences.shape[0])
         null_rank = False
         every_rank_empty = agree_all(n_rows == 0, ctx)
@@ -3272,7 +3288,22 @@ class RLTrainer:
             null_rank=null_rank,
             rows=None,
             shaping_plane=None if null_rank else shaping_plane,
+            episode_ids=None if null_rank else episode_ids,
         )
+
+    @staticmethod
+    def _episode_ids_from_batch(
+        batch: ExperienceBatch, *, kept_row_indices: list[int]
+    ) -> list[str] | None:
+        """ARL-17: the episode of each kept row (from its ``session_id``), or ``None`` when
+        no row is a segment of a compacted episode -- the per-session computation then
+        runs unchanged, through the estimator's original call."""
+        if "session_id" not in batch.columns:
+            return None
+        sessions = [str(batch.column("session_id")[row]) for row in kept_row_indices]
+        if not any(SEGMENT_SEPARATOR in session for session in sessions):
+            return None
+        return [episode_id_of(session) for session in sessions]
 
     def _shaping_plane_from_batch(
         self,

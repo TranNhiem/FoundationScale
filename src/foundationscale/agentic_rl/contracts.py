@@ -45,9 +45,12 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Any, TypeGuard
 
+from foundationscale.rl.advantage import SEGMENT_SEPARATOR, episode_id_of
 from foundationscale.rl.interfaces import ExperienceBatch
 
 __all__ = (
+    "SEGMENT_SEPARATOR",
+    "episode_id_of",
     "DECLARED_COLUMNS",
     "SegmentKind",
     "Termination",
