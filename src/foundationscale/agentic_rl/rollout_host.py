@@ -243,6 +243,12 @@ class RolloutHost:
     # every attempt was an ENGINE infra failure (0 = recovery OFF; see the class
     # docstring). Needs `fleet`.
     engine_recovery_retries: int = 0
+    # Opt-in one-step-off-policy prefetch (rollout.async_prefetch): ``rollout(k)`` starts step k+1's rollout on a
+    # background thread with the CURRENT fleet weights, so generation overlaps the trainer's step k; ``publish(k)``
+    # waits for that prefetch before syncing weights, so no reload lands mid-generation and every batch is at most
+    # one policy step stale. ``prefetch_limit`` (the trainer's max_steps) stops a wasted rollout past the last step.
+    async_prefetch: bool = False
+    prefetch_limit: int | None = None
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -589,10 +595,36 @@ class RolloutHost:
         """Synchronous entry point the trainer calls: runs ``rollout_async`` to
         completion in its own event loop.
         """
-        return asyncio.run(self.rollout_async(step))
+        if not self.async_prefetch:
+            return asyncio.run(self.rollout_async(step))
+        pending = self._state.pop("prefetch", None)
+        if pending is not None and pending[0] == step:
+            batch = pending[1].result()  # re-raises the prefetched rollout's exception here, in the trainer
+        else:
+            if pending is not None:
+                pending[1].result()  # never leave a stale prefetch running
+            batch = asyncio.run(self.rollout_async(step))
+        nxt = step + 1
+        if self.prefetch_limit is None or nxt < self.prefetch_limit:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._state.setdefault("prefetch_pool", ThreadPoolExecutor(max_workers=1))
+            self._state["prefetch"] = (nxt, pool.submit(lambda: asyncio.run(self.rollout_async(nxt))))
+        return batch
+
+    def _await_prefetch(self) -> None:
+        """Block until an in-flight prefetched rollout finishes (its result stays queued for ``rollout``)."""
+        pending = self._state.get("prefetch")
+        if pending is not None:
+            from concurrent.futures import wait
+
+            wait([pending[1]])
 
     def publish(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
         """Push the policy trained through ``step`` to the generation fleet.
+
+        With ``async_prefetch`` the in-flight next-step rollout is awaited first, so the reload never lands mid-
+        generation (that batch was generated with the previous weights: exactly one step stale).
 
         No-op when ``weight_sync`` is ``None``. The save itself is built HERE,
         around the REAL ``model``/``tokenizer``/``ctx`` this call receives --
@@ -628,6 +660,8 @@ class RolloutHost:
         ``_recover_engines`` re-pushes after a fleet restart, so a recovered
         engine serves the current policy (see the class docstring).
         """
+        if self.async_prefetch:
+            self._await_prefetch()
         if type(step) is not int or step < 0:
             raise RolloutHostRefusal(
                 f"RolloutHost.publish: parameter 'step' is {_described(step)}: it must be "

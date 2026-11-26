@@ -374,6 +374,8 @@ class RolloutConfig:
     engine_recovery_retries: int = 0
     # Online learnability curriculum (tasks.CurriculumTaskSource); false keeps the seeded uniform draw.
     curriculum: bool = False
+    # One-step-off-policy async rollout (RolloutHost.async_prefetch): generation of step k+1 overlaps training of k.
+    async_prefetch: bool = False
 
 
 @dataclass(frozen=True)
@@ -1033,6 +1035,7 @@ def _build_rollout(
             "max_infra_rate",
             "engine_recovery_retries",
             "curriculum",
+            "async_prefetch",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1126,7 +1129,18 @@ def _build_rollout(
         required=False,
         provenance=provenance,
     )
+    async_prefetch = _resolve_scalar(
+        dotted_key="rollout.async_prefetch",
+        field_name="async_prefetch",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
     return RolloutConfig(
+        async_prefetch=async_prefetch,
         curriculum=curriculum,
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
