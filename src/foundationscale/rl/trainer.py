@@ -406,12 +406,20 @@ class MasterWeightOptimizer:
     exists to eliminate.
     """
 
-    def __init__(self, params: Iterable[torch.nn.Parameter], **adamw_kwargs: Any) -> None:
+    def __init__(self, params: Iterable[torch.nn.Parameter], master_device: str = "cpu", **adamw_kwargs: Any) -> None:
         import torch  # function-local: see module docstring
+
+        # "cpu" (default, historical): masters + AdamW state in host RAM (~12 B/param: ~48 GB for a 4B model).
+        # "device": keep them next to each param on its GPU -- same fp32 numerics, no host RAM; needed where
+        # host NUMA memory is the binding constraint (GB200 trays OOM-killed host-fp32 trainers, 2026-11-26).
+        if master_device not in ("cpu", "device"):
+            raise ValueError(f"master_device={master_device!r}: expected 'cpu' or 'device'")
+        self.master_device = master_device
 
         self.device_params = [p for p in params if p.requires_grad]
         self.masters = [
-            p.detach().to(device="cpu", dtype=torch.float32, copy=True) for p in self.device_params
+            p.detach().to(device="cpu" if master_device == "cpu" else p.device, dtype=torch.float32, copy=True)
+            for p in self.device_params
         ]
         for master in self.masters:
             master.requires_grad_(True)
@@ -433,7 +441,7 @@ class MasterWeightOptimizer:
             if p.grad is None:
                 m.grad = None
             else:
-                m.grad = p.grad.detach().to(device="cpu", dtype=torch.float32, copy=True)
+                m.grad = p.grad.detach().to(device=m.device, dtype=torch.float32, copy=True)
         # (2) true fp32 step: lr=1e-6 updates are representable here and
         # therefore ACCUMULATE instead of being discarded at the bf16 ulp.
         result = (
@@ -1215,6 +1223,8 @@ class RLTrainConfig:
     # bytes) looking healthy. True/False force the choice; forcing it is an
     # operator decision and is recorded either way.
     master_weights: bool | None = None
+    # Where MasterWeightOptimizer keeps fp32 masters + AdamW state: "cpu" (default) or "device" (the param's GPU).
+    master_device: str = "cpu"
     max_steps: int = 10
     # Measured 2026-10-09 (gemma-4-12B-it, ScienceQA, terminal-pattern reward
     # "Answer: X"): this default truncates the model's own reasoning before it
@@ -2094,7 +2104,7 @@ class RLTrainer:
         optimizer: Any
         if use_masters:
             optimizer = MasterWeightOptimizer(
-                _trainable_parameters(model), lr=self.config.learning_rate
+                _trainable_parameters(model), master_device=self.config.master_device, lr=self.config.learning_rate
             )
         else:
             optimizer = torch.optim.AdamW(  # noqa: B014
@@ -2102,7 +2112,7 @@ class RLTrainer:
             )
         print(
             "[trainer] optimizer="
-            + ("MasterWeightOptimizer(host-fp32)" if use_masters else "AdamW(direct)")
+            + (f"MasterWeightOptimizer({'host' if self.config.master_device == 'cpu' else 'device'}-fp32)" if use_masters else "AdamW(direct)")
             + f" param_dtype={param_dtype} lr={self.config.learning_rate}"
             + f" reason={master_reason}",
             file=sys.stderr,
