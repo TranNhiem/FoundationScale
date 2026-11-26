@@ -311,6 +311,9 @@ class EngineConfig:
     # VLLMClient.reload_weights refuses at the first publish(), after a GPU is
     # already resident -- refusing at config time instead costs nothing.
     reload_mode: Literal["collective_rpc"] | None = None
+    # Comma-separated GPU ids for engine REPLICAS (e.g. "0,1,2"): one server per GPU, port = base port + i,
+    # CUDA_VISIBLE_DEVICES set per replica; sessions round-robin across them. "" keeps the single engine.
+    replica_gpus: str = ""
     # The engine subprocess's COMPLETE environment -- an explicit allow-list,
     # never merged with this process's own os.environ (same "nothing is ever
     # inherited" rule EngineServerSpec.env and EnvSpec.env both already keep).
@@ -618,6 +621,7 @@ def _build_engine(
             "max_policy_lag",
             "reload_mode",
             "env",
+            "replica_gpus",
         }
     )
     _refuse_unknown_keys(section, allowed, section="engine")
@@ -811,6 +815,20 @@ def _build_engine(
             "engine.reload_mode='collective_rpc' once it is proven on the cluster, or "
             "use engine.weight_sync_mode='restart' instead)"
         )
+    replica_gpus = _resolve_scalar(
+        dotted_key="engine.replica_gpus",
+        field_name="replica_gpus",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="",
+        required=False,
+        provenance=provenance,
+    )
+    if replica_gpus and not all(g.strip().isdigit() for g in replica_gpus.split(",")):
+        raise AgenticConfigRefusal(
+            f"engine.replica_gpus: is {replica_gpus!r}, expected comma-separated GPU indices like '0,1,2'"
+        )
     return EngineConfig(
         kind=kind,
         command=command,
@@ -823,6 +841,7 @@ def _build_engine(
         max_policy_lag=max_policy_lag,
         log_dir=log_dir,
         allow_stale_policy=allow_stale_policy,
+        replica_gpus=replica_gpus,
         reload_mode=reload_mode,
         env=dict(env_mapping),
     )

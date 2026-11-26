@@ -235,6 +235,26 @@ def _engine_server_spec(config: AgenticRLConfig) -> EngineServerSpec:
     )
 
 
+def _engine_servers(config: AgenticRLConfig) -> tuple[EngineServer, ...]:
+    """One EngineServer, or one per ``engine.replica_gpus`` entry (own port and CUDA_VISIBLE_DEVICES each)."""
+    import dataclasses
+
+    base = _engine_server_spec(config)
+    gpus = [g.strip() for g in config.engine.replica_gpus.split(",") if g.strip()]
+    if not gpus:
+        return (EngineServer(base),)
+    servers = []
+    for i, gpu in enumerate(gpus):
+        port = base.port + i
+        command = list(base.command)
+        for k in range(len(command) - 1):
+            if command[k] == "--port":
+                command[k + 1] = str(port)
+        env = {**dict(base.env or {}), "CUDA_VISIBLE_DEVICES": gpu}
+        servers.append(EngineServer(dataclasses.replace(base, command=type(base.command)(command), port=port, env=env)))
+    return tuple(servers)
+
+
 def _music_reward(config: AgenticRLConfig) -> MusicReward:
     assert config.reward.abc2midi_bin is not None  # build_config requires it for kind="music"
     return MusicReward(abc2midi_bin=config.reward.abc2midi_bin, timeout_s=config.reward.timeout_s)
@@ -268,7 +288,7 @@ def _build_non_gpu_objects(config: AgenticRLConfig) -> dict[str, Any]:
     budget = _episode_budget(config)
     env_spec = _env_spec(config)
     engine_spec = _engine_server_spec(config)
-    fleet = EngineFleet(servers=(EngineServer(engine_spec),))
+    fleet = EngineFleet(servers=_engine_servers(config))
     reward = _reward_scorer(config)
     tasks = _task_source(config)
     return {
@@ -325,7 +345,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         sampling=_sampling_params(config),
         advertise_tools=config.harness.tools == "default",
     )
-    fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
+    fleet = EngineFleet(servers=_engine_servers(config))
     scorer = _reward_scorer(config)
     reward: MusicRewardFn | MathRewardFn | SweReward
     if isinstance(scorer, SweReward):
