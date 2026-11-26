@@ -12,6 +12,7 @@ into a validated ``contracts.Trajectory``.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from math import isfinite
@@ -19,6 +20,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from foundationscale.agentic_rl.contracts import (
+    SEGMENT_SEPARATOR,
     SegmentKind,
     Termination,
     Trajectory,
@@ -26,6 +28,8 @@ from foundationscale.agentic_rl.contracts import (
 )
 
 __all__ = [
+    "SegmentOutcome",
+    "segment_trajectories",
     "ChatTokenizer",
     "EpisodeBudget",
     "EpisodeCheckpoint",
@@ -524,6 +528,32 @@ class EpisodeCheckpoint:
 
 
 @dataclass(frozen=True)
+class SegmentOutcome:
+    """ARL-17: one CLOSED segment of a compacted episode -- the prompt it was rendered from
+    and the turns generated/observed in it, exactly as the model saw them."""
+
+    prompt_turns: tuple[Turn, ...]
+    trajectory_turns: tuple[Turn, ...]
+
+    def __post_init__(self) -> None:
+        where = "SegmentOutcome"
+        prompt_turns = _turn_list(self.prompt_turns, where=where, name="prompt_turns")
+        trajectory_turns = _turn_list(self.trajectory_turns, where=where, name="trajectory_turns")
+        if not prompt_turns or any(turn.generated for turn in prompt_turns):
+            raise HarnessRefusal(
+                f"{where}: field 'prompt_turns' must be non-empty and never generated -- a "
+                f"segment starts from a rendered prompt"
+            )
+        if not any(turn.generated for turn in trajectory_turns):
+            raise HarnessRefusal(
+                f"{where}: field 'trajectory_turns' holds no generated turn: a closed segment "
+                f"exists only because the policy generated in it"
+            )
+        object.__setattr__(self, "prompt_turns", prompt_turns)
+        object.__setattr__(self, "trajectory_turns", trajectory_turns)
+
+
+@dataclass(frozen=True)
 class EpisodeOutcome:
     """What one ``HarnessAdapter.run_episode()`` call reports about ONE attempt,
     BEFORE any reward is known.
@@ -541,9 +571,16 @@ class EpisodeOutcome:
     submitted_answer: str | None
     abstention_reason: str | None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    # ARL-17: the CLOSED earlier segments of a compacted episode, in order; the outcome's own
+    # prompt_turns/trajectory_turns are the final segment. Empty = never compacted.
+    segments: tuple[SegmentOutcome, ...] = ()
 
     def __post_init__(self) -> None:
         where = "EpisodeOutcome"
+        if not isinstance(self.segments, tuple) or not all(
+            isinstance(segment, SegmentOutcome) for segment in self.segments
+        ):
+            raise HarnessRefusal(f"{where}: field 'segments' must be a tuple of SegmentOutcome")
         trajectory_turns = _turn_list(self.trajectory_turns, where=where, name="trajectory_turns")
         prompt_turns = _turn_list(self.prompt_turns, where=where, name="prompt_turns")
         for position, turn in enumerate(prompt_turns):
@@ -660,3 +697,38 @@ def to_trajectory(
         policy_version_max=versions[1] if versions is not None else None,
         metadata=metadata,
     )
+
+
+def segment_trajectories(
+    outcome: EpisodeOutcome,
+    final: Trajectory,
+) -> tuple[Trajectory, ...]:
+    """ARL-17: every segment of a (possibly compacted) episode as its own Trajectory.
+
+    ``final`` is the Trajectory already built from ``outcome`` (the final segment) with the
+    caller's reward verdict. Closed segments copy that verdict -- one episode, one reward --
+    and every row gets the session id ``f"{final.session_id}{SEGMENT_SEPARATOR}{k}"`` so the
+    advantage groups them by episode. A never-compacted outcome returns ``(final,)``.
+    """
+    if not outcome.segments:
+        return (final,)
+    count = len(outcome.segments) + 1
+    rows: list[Trajectory] = []
+    for k, segment in enumerate(outcome.segments):
+        rows.append(
+            dataclasses.replace(
+                final,
+                session_id=f"{final.session_id}{SEGMENT_SEPARATOR}{k}",
+                prompt_turns=segment.prompt_turns,
+                turns=segment.trajectory_turns,
+                metadata={**final.metadata, "segment": str(k), "segments": str(count)},
+            )
+        )
+    rows.append(
+        dataclasses.replace(
+            final,
+            session_id=f"{final.session_id}{SEGMENT_SEPARATOR}{count - 1}",
+            metadata={**final.metadata, "segment": str(count - 1), "segments": str(count)},
+        )
+    )
+    return tuple(rows)

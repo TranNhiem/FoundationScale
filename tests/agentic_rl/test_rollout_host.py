@@ -1103,3 +1103,69 @@ def test_rollout_summary_counts_tool_call_error_and_repetition_turns() -> None:
     assert payload["tool_call_error_turns"] == 1
     assert payload["repetition_turns"] == 1
     assert payload["generated_turns"] == 3
+
+
+# ---------------------------------------------------------------------------
+# ARL-17: a compacted episode reaches the batch as one row per segment
+# ---------------------------------------------------------------------------
+
+
+class _CompactedHarness:
+    """Returns an outcome with two closed segments (what a compacting loop produces)."""
+
+    name = "compacted"
+
+    async def run_episode(
+        self, task: Any, *, client: Any, env: Any, budget: Any, **kwargs: Any
+    ) -> Any:
+        from foundationscale.agentic_rl.contracts import SegmentKind, Turn
+        from foundationscale.agentic_rl.harness.base import EpisodeOutcome, SegmentOutcome
+
+        def seg(first: int) -> tuple[tuple[Turn, ...], tuple[Turn, ...]]:
+            prompt = (
+                Turn(
+                    index=0,
+                    kind=SegmentKind.USER,
+                    token_ids=(first,),
+                    generated=False,
+                    logprobs=None,
+                ),
+            )
+            turns = (
+                Turn(
+                    index=1,
+                    kind=SegmentKind.ASSISTANT,
+                    token_ids=(first + 1, first + 2),
+                    generated=True,
+                    logprobs=None,
+                ),
+            )
+            return prompt, turns
+
+        closed = tuple(SegmentOutcome(*seg(10 * k + 1)) for k in range(2))
+        prompt, turns = seg(31)
+        return EpisodeOutcome(
+            trajectory_turns=turns,
+            prompt_turns=prompt,
+            termination=Termination.STOP,
+            submitted_answer="hello",
+            abstention_reason=None,
+            segments=closed,
+        )
+
+
+def test_a_compacted_episode_is_one_row_per_segment_with_one_reward(tmp_path: Path) -> None:
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        harness=_CompactedHarness(),
+        client_factory=lambda index: SubmitClient("unused"),
+    )
+    batch = host.rollout(0)
+    sessions = batch.columns["session_id"]
+    assert sorted(sessions) == sorted(
+        f"taskA#{replica}::seg{k}" for replica in range(2) for k in range(3)
+    )
+    assert set(batch.columns["reward"]) == {float(len("hello"))}
+    assert batch.columns["response_ids"][0] == (2, 3)

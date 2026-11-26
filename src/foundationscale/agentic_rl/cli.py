@@ -56,7 +56,7 @@ from foundationscale.agentic_rl.curriculum import FrontierTaskSource
 from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, EngineServerSpec
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
-from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
+from foundationscale.agentic_rl.harness.native_tool_loop import CompactionPolicy, NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn
 from foundationscale.agentic_rl.rewards.judge import (
     JudgeRewardFn,
@@ -376,6 +376,16 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         tokenizer=chat_tokenizer,
         sampling=_sampling_params(config),
         advertise_tools=config.harness.tools == "default",
+        compaction=(
+            None
+            if config.harness.compaction == "off"
+            else CompactionPolicy(
+                mode=config.harness.compaction,
+                trigger_tokens=config.harness.compaction_trigger_tokens,
+                keep_turns=config.harness.compaction_keep_turns,
+                max_segments=config.harness.compaction_max_segments,
+            )
+        ),
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     scorer = _reward_scorer(config)

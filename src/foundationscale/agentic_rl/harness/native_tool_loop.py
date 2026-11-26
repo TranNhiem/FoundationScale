@@ -38,6 +38,7 @@ from foundationscale.agentic_rl.harness.base import (
     GenerationClient,
     HarnessAdapter,
     SamplingParams,
+    SegmentOutcome,
 )
 from foundationscale.agentic_rl.token_trace import (
     ResponseBudgetExhausted,
@@ -155,6 +156,68 @@ def _truncate_observation(text: str, max_chars: int) -> str:
     return f"{head}[... {elided} chars elided ...]{tail}"
 
 
+COMPACTION_MODES = ("external", "policy")
+SUMMARIZE_INSTRUCTION = (
+    "[context limit] Summarize everything needed to finish the task: the goal, what you have "
+    "done and found, files changed, and the next step. Reply with the summary only, no tool calls."
+)
+SUMMARY_PREFIX = "Summary of your earlier work on this task:\n"
+
+
+@dataclass(frozen=True)
+class CompactionPolicy:
+    """ARL-17: when the context reaches ``trigger_tokens`` at a response boundary, close the
+    segment and continue from [system, task + summary, last ``keep_turns`` messages] rendered
+    as a FRESH prompt. ``mode="external"``: the summary is generated off the record (never a
+    turn, never trained) and enters only as injected text. ``mode="policy"``: the summarize
+    instruction rides on the last observation and the policy's reply is recorded as a
+    generated turn of the closing segment, trained like any other (CompactionRL).
+    ``max_segments`` counts the final segment too."""
+
+    mode: str
+    trigger_tokens: int
+    keep_turns: int = 2
+    max_segments: int = 4
+    summary_max_tokens: int = 1024
+
+    def __post_init__(self) -> None:
+        if self.mode not in COMPACTION_MODES:
+            raise NativeToolLoopRefusal(
+                f"CompactionPolicy: field 'mode' is {_described(self.mode)}: the legal set is "
+                f"{COMPACTION_MODES}"
+            )
+        for name, low in (
+            ("trigger_tokens", 1),
+            ("keep_turns", 0),
+            ("max_segments", 2),
+            ("summary_max_tokens", 1),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < low:
+                raise NativeToolLoopRefusal(
+                    f"CompactionPolicy: field {name!r} is {_described(value)}: an int >= {low}"
+                )
+
+
+def _compacted_messages(
+    history: Sequence[Mapping[str, Any]], summary: str, keep_turns: int
+) -> list[dict[str, Any]]:
+    """The next segment's chat: the system message (if any), the first user message with the
+    summary appended (one user turn, so no template sees two in a row), then the last
+    ``keep_turns`` messages, trimmed to start at an assistant turn."""
+    system = [dict(m) for m in history[:1] if m.get("role") == "system"]
+    rest = list(history[len(system) :])
+    first = next((i for i, m in enumerate(rest) if m.get("role") == "user"), None)
+    if first is None:
+        raise NativeToolLoopRefusal("compaction: the episode has no user message to restate")
+    task_message = dict(rest[first])
+    task_message["content"] = f"{task_message.get('content', '')}\n\n{SUMMARY_PREFIX}{summary}"
+    tail = [dict(m) for m in rest[first + 1 :]][-keep_turns:] if keep_turns else []
+    while tail and tail[0].get("role") != "assistant":
+        tail = tail[1:]
+    return [*system, task_message, *tail]
+
+
 def _resume_into(
     resume: EpisodeCheckpoint,
     task: EpisodeTask,
@@ -204,6 +267,8 @@ class NativeToolLoop(HarnessAdapter):
     # Measured: Gemma-4-E4B-it shown the schema wrote its music via bash `echo ... > f.abc`
     # tool calls, which the reward (plain-text ABC) cannot score.
     advertise_tools: bool = True
+    # ARL-17 context compaction (off by default); see CompactionPolicy.
+    compaction: CompactionPolicy | None = None
 
     def __post_init__(self) -> None:
         """Refuse an empty tool registry or empty identity/role strings.
@@ -347,6 +412,15 @@ class NativeToolLoop(HarnessAdapter):
         termination: Termination | None = None
         submitted_answer: str | None = None
         abstention_reason: str | None = None
+        policy = self.compaction
+        if policy is not None and resume is not None:
+            raise NativeToolLoopRefusal(
+                "run_episode: resume with compaction is not supported -- a checkpoint does not "
+                "carry the closed segments, so a fork would silently drop them"
+            )
+        closed: list[SegmentOutcome] = []
+        summarizing = False  # policy mode: the next generation is the summary turn
+        observation_before_instruction = ""
 
         for _step in range(first_step, budget.step_limit):
             if time.monotonic() - episode_start > env.episode_timeout_s:
@@ -358,6 +432,28 @@ class NativeToolLoop(HarnessAdapter):
             except ResponseBudgetExhausted:
                 termination = Termination.LENGTH
                 break
+
+            if (
+                policy is not None
+                and policy.mode == "external"
+                and turns
+                and len(closed) < policy.max_segments - 1
+                and _step < budget.step_limit - 1
+                and len(trace.token_ids) >= policy.trigger_tokens
+            ):
+                try:
+                    summary = await self._external_summary(client, messages, tools_schema)
+                except EngineInfraError as exc:
+                    termination = Termination.INFRA
+                    abstention_reason = f"infra:engine_{exc.kind}"
+                    break
+                closed.append(
+                    SegmentOutcome(prompt_turns=prompt_turns, trajectory_turns=tuple(turns))
+                )
+                messages[:] = _compacted_messages(messages, summary, policy.keep_turns)
+                trace = TokenTrace(response_length=budget.max_response_tokens)
+                turns = []
+                prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
 
             if checkpoint_hook is not None and not (resume is not None and _step == first_step):
                 await checkpoint_hook(
@@ -428,6 +524,22 @@ class NativeToolLoop(HarnessAdapter):
                 break
 
             # finish_reason == "stop" from here on
+            if summarizing:
+                # Policy-mode compaction: this reply IS the summary -- recorded and trained in
+                # the closing segment; any tool call in it is not executed.
+                summarizing = False
+                assert policy is not None  # summarizing is only ever set under a policy
+                closed.append(
+                    SegmentOutcome(prompt_turns=prompt_turns, trajectory_turns=tuple(turns))
+                )
+                history = messages[:-1]
+                history[-1] = {**history[-1], "content": observation_before_instruction}
+                messages[:] = _compacted_messages(history, visible_text, policy.keep_turns)
+                trace = TokenTrace(response_length=budget.max_response_tokens)
+                turns = []
+                prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
+                continue
+
             valid_submit = next(
                 (
                     pc
@@ -484,6 +596,16 @@ class NativeToolLoop(HarnessAdapter):
             observation_text = _truncate_observation(
                 "\n".join(observation_parts), budget.max_observation_chars
             )
+            if (
+                policy is not None
+                and policy.mode == "policy"
+                and len(closed) < policy.max_segments - 1
+                and _step < budget.step_limit - 2
+                and len(trace.token_ids) >= policy.trigger_tokens
+            ):
+                summarizing = True
+                observation_before_instruction = observation_text
+                observation_text = f"{observation_text}\n\n{SUMMARIZE_INSTRUCTION}"
             messages.append({"role": self.observation_role, "content": observation_text})
             delta_msgs, cursor = select_delta_messages(messages, cursor)
             before_ids = _render(
@@ -523,6 +645,11 @@ class NativeToolLoop(HarnessAdapter):
         assert termination is not None  # every break/the for-else above sets it
 
         # 4. Build the return value.
+        if closed and not any(turn.generated for turn in turns):
+            # The episode ended right after a compaction: nothing was generated in the new
+            # segment, so the last closed segment is the final one after all.
+            reopened = closed.pop()
+            prompt_turns, turns = reopened.prompt_turns, list(reopened.trajectory_turns)
         return EpisodeOutcome(
             trajectory_turns=tuple(turns),
             prompt_turns=prompt_turns,
@@ -530,4 +657,26 @@ class NativeToolLoop(HarnessAdapter):
             submitted_answer=submitted_answer,
             abstention_reason=abstention_reason,
             metadata={},
+            segments=tuple(closed),
         )
+
+    async def _external_summary(
+        self,
+        client: GenerationClient,
+        messages: Sequence[Mapping[str, Any]],
+        tools_schema: tuple[Mapping[str, Any], ...],
+    ) -> str:
+        """ARL-17 external mode: one off-the-record generation over the current chat plus the
+        summarize instruction. Nothing here enters the trace or a turn."""
+        assert self.compaction is not None
+        context = _render(
+            self.tokenizer,
+            [*messages, {"role": "user", "content": SUMMARIZE_INSTRUCTION}],
+            tools_schema,
+            add_generation_prompt=True,
+        )
+        sampling = dataclasses.replace(
+            self.sampling, max_new_tokens=self.compaction.summary_max_tokens
+        )
+        generation = await client.generate(tuple(context), sampling)
+        return self.parser.parse(generation.text)[1]

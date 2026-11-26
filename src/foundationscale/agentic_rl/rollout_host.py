@@ -53,6 +53,7 @@ from foundationscale.agentic_rl.harness.base import (
     EpisodeTask,
     GenerationClient,
     HarnessAdapter,
+    segment_trajectories,
     to_trajectory,
 )
 from foundationscale.agentic_rl.rewards.base import RewardFn
@@ -505,7 +506,7 @@ class RolloutHost:
                         abstention = None
                         if verdict.reason is not None:
                             extra_metadata = {"reward_note": verdict.reason}
-                return to_trajectory(
+                final = to_trajectory(
                     outcome,
                     uid=task.uid,
                     session_id=session_id,
@@ -515,6 +516,15 @@ class RolloutHost:
                     versions=(version, version),
                     extra_metadata=extra_metadata,
                 )
+                # ARL-17: closed segments of a compacted episode wait here, keyed by session,
+                # and are expanded only at flatten time -- every per-session count (gates,
+                # recovery, refill, curriculum) keeps seeing one row per session.
+                segments = self._state.setdefault("segments", {})
+                if outcome.segments:
+                    segments[session_id] = segment_trajectories(outcome, final)
+                else:
+                    segments.pop(session_id, None)
+                return final
             except _INFRA_EXCEPTIONS as exc:
                 reason = f"infra:{type(exc).__name__}"
                 if outcome is not None:
@@ -588,6 +598,17 @@ class RolloutHost:
                     )
                 session_index += 1
         return list(await asyncio.gather(*episodes))
+
+    def _expand_segments(self, trajectories: list[Trajectory]) -> list[Trajectory]:
+        """ARL-17: replace each compacted session's row by all of its segment rows (the
+        recorded rows end with that same final segment, renamed ``::seg<n>``); sessions
+        that never compacted pass through unchanged. The side table is consumed."""
+        segments: dict[str, tuple[Trajectory, ...]] = self._state.pop("segments", {})
+        rows: list[Trajectory] = []
+        for trajectory in trajectories:
+            expanded = segments.get(trajectory.session_id)
+            rows.extend(expanded if expanded is not None else (trajectory,))
+        return rows
 
     def _merge_recovered(
         self, step: int, previous: list[Trajectory], rerun: list[Trajectory], indices: list[int]
@@ -903,7 +924,7 @@ class RolloutHost:
         )
         if self.trace_dir is not None:
             self._write_traces(step, trajectories)
-        batch = flatten(trajectories, group_by_harness=self.group_by_harness)
+        batch = flatten(self._expand_segments(trajectories), group_by_harness=self.group_by_harness)
         print(rollout_summary(step, round0), file=sys.stderr, flush=True)
         if self.guard is not None:
             verdict = self.guard.update(rollout_stats(step, round0))

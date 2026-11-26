@@ -335,6 +335,11 @@ class HarnessConfig:
     parser: Literal["qwen_xml", "hermes_json"]
     name: str = "native_tool_loop"
     tools: Literal["default", "none"] = "default"
+    # ARL-17 context compaction: "off" (default) | "external" | "policy".
+    compaction: str = "off"
+    compaction_trigger_tokens: int = 24000
+    compaction_keep_turns: int = 2
+    compaction_max_segments: int = 4
 
 
 @dataclass(frozen=True)
@@ -982,7 +987,21 @@ def _build_harness(
 ) -> HarnessConfig:
     section = _strip_doc(raw, dotted_prefix="harness")
     local_overrides = _section_overrides(overrides, section="harness")
-    _refuse_unknown_keys(section, frozenset({"name", "parser", "tools"}), section="harness")
+    _refuse_unknown_keys(
+        section,
+        frozenset(
+            {
+                "name",
+                "parser",
+                "tools",
+                "compaction",
+                "compaction_trigger_tokens",
+                "compaction_keep_turns",
+                "compaction_max_segments",
+            }
+        ),
+        section="harness",
+    )
     name = _resolve_scalar(
         dotted_key="harness.name",
         field_name="name",
@@ -1027,7 +1046,49 @@ def _build_harness(
             f"registry in the prompt) or 'none' (render prompts without the tool schema)"
         )
     tools_mode: Literal["default", "none"] = tools
-    return HarnessConfig(name=name, parser=parser, tools=tools_mode)
+    compaction = _resolve_scalar(
+        dotted_key="harness.compaction",
+        field_name="compaction",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="off",
+        required=False,
+        provenance=provenance,
+    )
+    if compaction not in ("off", "external", "policy"):
+        raise AgenticConfigRefusal(
+            f"harness.compaction: is {_described(compaction)}, expected one of "
+            f"('off', 'external', 'policy')"
+        )
+    limits: dict[str, int] = {}
+    for key, default, low in (
+        ("compaction_trigger_tokens", 24000, 1),
+        ("compaction_keep_turns", 2, 0),
+        ("compaction_max_segments", 4, 2),
+    ):
+        value = _resolve_scalar(
+            dotted_key=f"harness.{key}",
+            field_name=key,
+            section_raw=section,
+            overrides=local_overrides,
+            py_type=int,
+            default=default,
+            required=False,
+            provenance=provenance,
+        )
+        if value < low:
+            raise AgenticConfigRefusal(f"harness.{key}: is {value}, expected an int >= {low}")
+        limits[key] = value
+    return HarnessConfig(
+        name=name,
+        parser=parser,
+        tools=tools_mode,
+        compaction=compaction,
+        compaction_trigger_tokens=limits["compaction_trigger_tokens"],
+        compaction_keep_turns=limits["compaction_keep_turns"],
+        compaction_max_segments=limits["compaction_max_segments"],
+    )
 
 
 def _build_budget(

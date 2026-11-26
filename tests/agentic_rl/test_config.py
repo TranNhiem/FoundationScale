@@ -641,3 +641,25 @@ def test_rollout_engine_recovery_retries_defaults_off_and_parses_an_override() -
     assert build_config(raw, {}).rollout.engine_recovery_retries == 1
     config = build_config(_raw_config(), {"rollout.engine_recovery_retries": "3"})
     assert config.rollout.engine_recovery_retries == 3
+
+
+def test_harness_compaction_keys() -> None:
+    def harness(**extra: Any) -> dict[str, Any]:
+        raw = _raw_config()
+        raw["harness"] = {**raw["harness"], **extra}
+        return raw
+
+    plain = build_config(harness(), {}).harness
+    assert (plain.compaction, plain.compaction_trigger_tokens) == ("off", 24000)
+    on = build_config(
+        harness(compaction="policy", compaction_trigger_tokens=900, compaction_keep_turns=0), {}
+    ).harness
+    assert (on.compaction, on.compaction_trigger_tokens, on.compaction_keep_turns) == (
+        "policy",
+        900,
+        0,
+    )
+    with pytest.raises(AgenticConfigRefusal, match="harness.compaction"):
+        build_config(harness(compaction="always"), {})
+    with pytest.raises(AgenticConfigRefusal, match="compaction_max_segments"):
+        build_config(harness(compaction_max_segments=1), {})
