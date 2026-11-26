@@ -14,7 +14,8 @@
     "seed": 5,
     "gradient_checkpointing": true,
     "logprob_chunk_tokens": 4096,
-    "max_grad_norm": 1.0
+    "max_grad_norm": 1.0,
+    "master_device": "device"
   },
   "engine": {
     "kind": "vllm",

@@ -13,7 +13,8 @@
     "save_dir": "@OUT@/checkpoints",
     "seed": 5,
     "gradient_checkpointing": true,
-    "logprob_chunk_tokens": 4096
+    "logprob_chunk_tokens": 4096,
+    "master_device": "device"
   },
   "engine": {
     "kind": "vllm",
