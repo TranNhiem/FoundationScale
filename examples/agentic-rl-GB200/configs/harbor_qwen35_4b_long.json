@@ -1,0 +1,104 @@
+{
+  "policy": {
+    "model_path": "@MODEL@",
+    "algorithm": "agentic_grpo",
+    "keep_last": 2,
+    "archive_every": 10
+  },
+  "trainer": {
+    "max_steps": 100,
+    "learning_rate": 1e-06,
+    "logprob_micro_batch": 1,
+    "sharding": "none",
+    "save_dir": "@OUT@/checkpoints",
+    "seed": 5,
+    "gradient_checkpointing": true,
+    "logprob_chunk_tokens": 4096,
+    "max_grad_norm": 1.0
+  },
+  "engine": {
+    "kind": "vllm",
+    "command": [
+      "vllm",
+      "serve",
+      "@MODEL@",
+      "--served-model-name",
+      "policy",
+      "--port",
+      "@PORT@",
+      "--gpu-memory-utilization",
+      "0.85",
+      "--max-model-len",
+      "131072",
+      "--max-num-seqs",
+      "64"
+    ],
+    "port": "@PORT_INT@",
+    "served_model_name": "policy",
+    "startup_timeout_s": 1800.0,
+    "weight_sync_mode": "reload_endpoint",
+    "reload_mode": "collective_rpc",
+    "host": "127.0.0.1",
+    "log_dir": "@OUT@/engine_logs",
+    "env": {
+      "PATH": "/usr/local/bin:/usr/bin:/bin",
+      "HOME": "@HOME@",
+      "CUDA_VISIBLE_DEVICES": "@ENGINE_GPU@",
+      "VLLM_SERVER_DEV_MODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "VLLM_USE_FLASHINFER_SAMPLER": "0"
+    },
+    "request_timeout_s": 900.0
+  },
+  "env": {
+    "backend": "harbor_task",
+    "exec_timeout_s": 120.0,
+    "episode_timeout_s": 3600.0,
+    "max_output_bytes": 65536,
+    "env": {},
+    "allow_unsandboxed": false
+  },
+  "harness": {
+    "name": "native_tool_loop",
+    "parser": "qwen_xml",
+    "tools": "default"
+  },
+  "budget": {
+    "step_limit": 60,
+    "max_response_tokens": 64000,
+    "max_observation_chars": 2048
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "max_new_tokens": 8000
+  },
+  "rollout": {
+    "tasks_path": "@TASKS@",
+    "tasks_per_step": 8,
+    "group_size": 8,
+    "max_concurrency": 48,
+    "group_by_harness": false,
+    "seed": 5,
+    "max_infra_rate": 0.5,
+    "engine_recovery_retries": 3,
+    "curriculum": true,
+    "async_prefetch": true
+  },
+  "reward": {
+    "kind": "swe",
+    "partial_credit": true
+  },
+  "publish_root": "@OUT@/publish",
+  "stability": {
+    "best_k": 3,
+    "drop_from_peak": 0.5,
+    "min_steps": 10,
+    "action": "warn"
+  },
+  "_doc": "B2.3 L1: Skill2Env-recipe-faithful long run (lr 1e-6 constant, grad clip 1.0, top_p 1.0, 64 traj/update, 300 updates) + chunked logprobs, curriculum filtering, async prefetch; engine and trainer on separate GPUs."
+}
