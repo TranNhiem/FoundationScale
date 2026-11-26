@@ -161,6 +161,23 @@ def _token_logprobs(
     )
 
 
+def _clip_device_grads(optimizer: Any, max_norm: float) -> float:
+    """Clip the global L2 norm of the gradients ``optimizer`` will step to ``max_norm``; returns the pre-clip norm.
+
+    ``MasterWeightOptimizer`` exposes its device params (the bf16 grads it copies to fp32 masters in ``step``);
+    a plain torch optimizer exposes ``param_groups``.
+    """
+    import torch  # function-local: see module docstring
+
+    params = getattr(optimizer, "device_params", None)
+    if params is None:
+        params = [p for group in optimizer.param_groups for p in group["params"]]
+    grads = [p for p in params if p.grad is not None]
+    if not grads:
+        return 0.0
+    return float(torch.nn.utils.clip_grad_norm_(grads, max_norm))
+
+
 def _chunked_token_logprobs(
     model: Any, input_ids: Any, attention_mask: Any, target_ids: Any, *, chunk: int,
     temperature: float, top_p: float, top_k: int,
@@ -1238,6 +1255,10 @@ class RLTrainConfig:
     # Text-only and unsharded: multimodal rows fall back to the full path; a non-Linear head, logit
     # soft-capping or sharding != "none" is refused.
     logprob_chunk_tokens: int = 0
+    # Opt-in global gradient-norm clipping before each optimizer step (0 = off, the historical behaviour). The
+    # Skill2Env agentic-RL recipe clips at 1.0; without it, single bad batches can blow up the policy (our lr >= 1e-5
+    # runs collapsed). Unsharded only: sharded runs need the wrapper's own clip_grad_norm_.
+    max_grad_norm: float = 0.0
     # The distribution the SCORED tokens were sampled from. When an external rollout
     # source (the agentic engine fleet) samples with temperature / top-p / top-k,
     # scoring raw logits trains on a different policy than the one that acted. The
@@ -1385,6 +1406,13 @@ class RLTrainer:
         if type(config.logprob_chunk_tokens) is not int or config.logprob_chunk_tokens < 0:
             raise TrainerRefusal(
                 f"logprob_chunk_tokens={config.logprob_chunk_tokens!r}: an int >= 0 is required (0 = full logits)"
+            )
+        if isinstance(config.max_grad_norm, bool) or not isinstance(config.max_grad_norm, (int, float)) or config.max_grad_norm < 0:
+            raise TrainerRefusal(f"max_grad_norm={config.max_grad_norm!r}: a number >= 0 is required (0 = off)")
+        if config.max_grad_norm and getattr(config, "sharding", "none") != "none":
+            raise TrainerRefusal(
+                f"max_grad_norm={config.max_grad_norm} needs sharding='none': a sharded model must clip through its "
+                f"wrapper's clip_grad_norm_"
             )
         if config.logprob_chunk_tokens and getattr(config, "sharding", "none") != "none":
             raise TrainerRefusal(
@@ -3035,6 +3063,8 @@ class RLTrainer:
             # do not deadlock the reduce-scatter.
             lane = forward_logprob_slice(0, min(1, n_rows))
             (lane.sum() * 0.0).backward()
+        if self.config.max_grad_norm:
+            _clip_device_grads(optimizer, float(self.config.max_grad_norm))
         optimizer.step()
 
         # Averaged scalars are reduced MEAN, counts SUM, so every rank holds
