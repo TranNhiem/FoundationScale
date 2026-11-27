@@ -16,25 +16,26 @@ import json
 import statistics
 from pathlib import Path
 
-from foundationscale.agentic_rl.cli import _HFChatTokenizer
+from foundationscale.agentic_rl.cli import _HFChatTokenizer, _make_parser
 from foundationscale.agentic_rl.engines.vllm import VLLMClient
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.eval_stats import EvalStatsRefusal, pass_at_k
 from foundationscale.agentic_rl.harness.base import EpisodeBudget, EpisodeTask, SamplingParams
-from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
-from foundationscale.agentic_rl.rewards.base import MathRewardFn
-from foundationscale.agentic_rl.rewards.math import MathAnswerReward
-from foundationscale.agentic_rl.tools import (
-    HermesJsonToolCallParser,
-    QwenXmlToolCallParser,
-    default_tools,
+from foundationscale.agentic_rl.harness.gemma4_protocol import (
+    from_hf_tokenizer as gemma4_inline_from_hf,
 )
+from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
+from foundationscale.agentic_rl.rewards.base import MathRewardFn, ScienceRewardFn
+from foundationscale.agentic_rl.rewards.math import MathAnswerReward
+from foundationscale.agentic_rl.rewards.science import ScienceAnswerReward
+from foundationscale.agentic_rl.tools import default_tools
 
 
 async def evaluate(a: argparse.Namespace) -> dict:
     from transformers import AutoTokenizer
 
-    tok = _HFChatTokenizer(AutoTokenizer.from_pretrained(a.model))
+    hf_tok = AutoTokenizer.from_pretrained(a.model)
+    tok = _HFChatTokenizer(hf_tok)
     client = VLLMClient(base_url=a.base_url, timeout_s=1800.0, served_model_name="policy")
     sampling = SamplingParams(
         temperature=1.0, top_p=0.95, top_k=0, min_p=0.0, presence_penalty=0.0,
@@ -42,11 +43,17 @@ async def evaluate(a: argparse.Namespace) -> dict:
     )  # fmt: skip
     loop = NativeToolLoop(
         tools=default_tools(),
-        parser=QwenXmlToolCallParser() if a.parser == "qwen_xml" else HermesJsonToolCallParser(),
+        parser=_make_parser(a.parser),
         sampling=sampling,
         tokenizer=tok,
+        # Gemma-4 answers tool calls inline in the model's turn (harness.gemma4_protocol).
+        inline_observations=gemma4_inline_from_hf(hf_tok) if a.parser == "gemma4" else None,
     )
-    reward = MathRewardFn(scorer=MathAnswerReward(), decode=tok.decode)
+    reward: MathRewardFn | ScienceRewardFn = (
+        ScienceRewardFn(scorer=ScienceAnswerReward(), decode=tok.decode)
+        if a.reward == "science"
+        else MathRewardFn(scorer=MathAnswerReward(), decode=tok.decode)
+    )
     backend = get_env_backend("local")
     spec = EnvSpec(backend="local", env={}, allow_unsandboxed=True, episode_timeout_s=3600.0)
     budget = EpisodeBudget(
@@ -103,7 +110,8 @@ def main() -> None:
     p.add_argument("--samples", type=int, default=4)
     p.add_argument("--max-tokens", type=int, default=12000)
     p.add_argument("--concurrency", type=int, default=64)
-    p.add_argument("--parser", choices=["qwen_xml", "hermes_json"], default="qwen_xml")
+    p.add_argument("--parser", choices=["qwen_xml", "hermes_json", "gemma4"], default="qwen_xml")
+    p.add_argument("--reward", choices=["math", "science"], default="math")
     p.add_argument(
         "--per-task-out",
         default=None,
