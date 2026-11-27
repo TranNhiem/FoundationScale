@@ -55,7 +55,11 @@ from foundationscale.agentic_rl.config import (
 from foundationscale.agentic_rl.curriculum import FrontierTaskSource
 from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, EngineServerSpec
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
+from foundationscale.agentic_rl.gemma4_tools import Gemma4ToolCallParser
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
+from foundationscale.agentic_rl.harness.gemma4_protocol import (
+    from_hf_tokenizer as gemma4_inline_from_hf,
+)
 from foundationscale.agentic_rl.harness.native_tool_loop import CompactionPolicy, NativeToolLoop
 from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn, ScienceRewardFn
 from foundationscale.agentic_rl.rewards.judge import (
@@ -195,6 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _make_parser(parser_name: str) -> ToolCallParser:
     if parser_name == "qwen_xml":
         return QwenXmlToolCallParser()
+    if parser_name == "gemma4":
+        return Gemma4ToolCallParser()
     return HermesJsonToolCallParser()
 
 
@@ -373,12 +379,16 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
 
     tokenizer = AutoTokenizer.from_pretrained(config.policy.model_path)
     chat_tokenizer: ChatTokenizer = _HFChatTokenizer(tokenizer=tokenizer)
+    # Gemma-4 answers tool calls inline in the model's own turn; refuses a tokenizer that
+    # lacks the protocol's marker tokens rather than dropping every tool result.
+    inline = gemma4_inline_from_hf(tokenizer) if config.harness.parser == "gemma4" else None
     harness = NativeToolLoop(
         tools=default_tools(),
         parser=_make_parser(config.harness.parser),
         tokenizer=chat_tokenizer,
         sampling=_sampling_params(config),
         advertise_tools=config.harness.tools == "default",
+        inline_observations=inline,
         compaction=(
             None
             if config.harness.compaction == "off"

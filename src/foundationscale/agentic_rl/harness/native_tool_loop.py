@@ -40,6 +40,7 @@ from foundationscale.agentic_rl.harness.base import (
     SamplingParams,
     SegmentOutcome,
 )
+from foundationscale.agentic_rl.harness.gemma4_protocol import Gemma4InlineObservations
 from foundationscale.agentic_rl.token_trace import (
     ResponseBudgetExhausted,
     TokenTrace,
@@ -292,6 +293,10 @@ class NativeToolLoop(HarnessAdapter):
     advertise_tools: bool = True
     # ARL-17 context compaction (off by default); see CompactionPolicy.
     compaction: CompactionPolicy | None = None
+    # Gemma-4 (MM-0): tool results continue the model's own turn instead of arriving as a
+    # rendered chat message -- see harness.gemma4_protocol. None (default) keeps the
+    # template-diff observations every other model uses.
+    inline_observations: Gemma4InlineObservations | None = None
 
     def __post_init__(self) -> None:
         """Refuse an empty tool registry or empty identity/role strings.
@@ -309,6 +314,20 @@ class NativeToolLoop(HarnessAdapter):
                 f"NativeToolLoop: field 'name' is {_described(self.name)}: the harness "
                 f"name must be a non-empty str -- an unnamed harness cannot be "
                 f"identified in recorded trajectories"
+            )
+        if self.inline_observations is not None and not isinstance(
+            self.inline_observations, Gemma4InlineObservations
+        ):
+            raise NativeToolLoopRefusal(
+                f"NativeToolLoop: field 'inline_observations' is "
+                f"{_described(self.inline_observations)}: expected None or a "
+                f"Gemma4InlineObservations"
+            )
+        if self.inline_observations is not None and self.compaction is not None:
+            raise NativeToolLoopRefusal(
+                "NativeToolLoop: fields 'inline_observations' and 'compaction' are both set: "
+                "compaction rebuilds the context from chat messages, which cannot carry "
+                "Gemma-4 inline tool results"
             )
         if not isinstance(self.observation_role, str) or not self.observation_role:
             raise NativeToolLoopRefusal(
@@ -441,6 +460,14 @@ class NativeToolLoop(HarnessAdapter):
                 "run_episode: checkpoints (resume / checkpoint_hook) with compaction are not "
                 "supported -- a checkpoint does not carry the closed segments, so resuming one "
                 "would silently drop them from training"
+            )
+        if self.inline_observations is not None and (
+            resume is not None or checkpoint_hook is not None
+        ):
+            raise NativeToolLoopRefusal(
+                "run_episode: checkpoints (resume / checkpoint_hook) with inline_observations "
+                "are not supported -- a checkpoint's messages do not carry Gemma-4 inline tool "
+                "results, so a resumed context would differ from the one the model saw"
             )
         closed: list[SegmentOutcome] = []
         spent = 0  # response tokens of closed segments + external summary tokens (episode cap)
@@ -620,8 +647,10 @@ class NativeToolLoop(HarnessAdapter):
             # One or more real (non-submit) tool calls: execute each in order, build ONE
             # combined observation message for the whole turn.
             observation_parts: list[str] = []
+            observation_names: list[str] = []  # one per part: the inline protocol names each
             infra_error: EnvInfraError | None = None
             for call_index, (pc, tc) in enumerate(zip(parsed_calls, tool_calls, strict=True)):
+                observation_names.append(pc.name or "unknown")
                 if tc.parse_error is not None:
                     observation_parts.append(f"[{pc.name or '<unknown>'}] error: {tc.parse_error}")
                     continue
@@ -648,6 +677,41 @@ class NativeToolLoop(HarnessAdapter):
                 termination = Termination.INFRA
                 abstention_reason = f"infra:{infra_error.kind}"
                 break
+
+            if self.inline_observations is not None:
+                # Gemma-4: results continue the model's turn; no chat message, no header.
+                per_call = max(1, budget.max_observation_chars // len(observation_parts))
+                stopped_on_open = bool(generation.token_ids) and (
+                    generation.token_ids[-1] == self.inline_observations.open_id
+                )
+                full_obs_ids = self.inline_observations.encode(
+                    [
+                        (name, _truncate_observation(part, per_call))
+                        for name, part in zip(observation_names, observation_parts, strict=True)
+                    ],
+                    opened=stopped_on_open,
+                )
+                try:
+                    trace.check_budget(len(full_obs_ids))
+                except ResponseBudgetExhausted:
+                    termination = Termination.LENGTH
+                    break
+                trace.append_observation(full_obs_ids)
+                turns.append(
+                    Turn(
+                        index=turn_index,
+                        kind=SegmentKind.TOOL_RESULT,
+                        token_ids=tuple(full_obs_ids),
+                        generated=False,
+                        logprobs=None,
+                    )
+                )
+                turn_index += 1
+                messages.append(
+                    {"role": self.observation_role, "content": "\n".join(observation_parts)}
+                )
+                cursor = len(messages)
+                continue
 
             observation_text = _truncate_observation(
                 "\n".join(observation_parts), budget.max_observation_chars

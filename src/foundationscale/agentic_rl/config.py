@@ -332,7 +332,8 @@ class EnvConfig:
 
 @dataclass(frozen=True)
 class HarnessConfig:
-    parser: Literal["qwen_xml", "hermes_json"]
+    # "gemma4" also switches tool results to Gemma-4's inline layout (harness.gemma4_protocol).
+    parser: Literal["qwen_xml", "hermes_json", "gemma4"]
     name: str = "native_tool_loop"
     tools: Literal["default", "none"] = "default"
     # ARL-17 context compaction: "off" (default) | "external" | "policy".
@@ -1028,11 +1029,12 @@ def _build_harness(
         provenance["harness.parser"] = "config"
     else:
         raise AgenticConfigRefusal("harness.parser: missing required key")
-    if parser_raw not in ("qwen_xml", "hermes_json"):
+    if parser_raw not in ("qwen_xml", "hermes_json", "gemma4"):
         raise AgenticConfigRefusal(
-            f"harness.parser: is {_described(parser_raw)}, expected 'qwen_xml' or 'hermes_json'"
+            f"harness.parser: is {_described(parser_raw)}, expected 'qwen_xml', 'hermes_json' "
+            f"or 'gemma4'"
         )
-    parser: Literal["qwen_xml", "hermes_json"] = parser_raw
+    parser: Literal["qwen_xml", "hermes_json", "gemma4"] = parser_raw
     tools = _resolve_scalar(
         dotted_key="harness.tools",
         field_name="tools",
