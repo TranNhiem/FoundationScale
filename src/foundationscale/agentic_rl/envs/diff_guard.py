@@ -62,10 +62,16 @@ def _digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def _raise(error: OSError) -> None:
+    """os.walk would otherwise skip an unreadable directory silently -- and a guarded file
+    hidden inside it would read as "not there", never as a change."""
+    raise error
+
+
 def _walk(root: Path, base: Path, *, site: bool, out: dict[str, str]) -> None:
     if not base.is_dir() or base.is_symlink():
         return
-    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False, onerror=_raise):
         dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
         for name in filenames:
             if name in GUARDED_NAMES or (site and name.endswith(GUARDED_SITE_SUFFIXES)):

@@ -602,6 +602,12 @@ class RolloutHost:
                 session_index += 1
         return list(await asyncio.gather(*episodes))
 
+    def _trace_run_id(self) -> str:
+        """The run identity hashed into every trace id: the RESOLVED trace directory, so two runs
+        whose trace dirs share a basename (e.g. both ``.../traces``) never share trace ids. Live
+        and episode traces use this one function, so their ids still join."""
+        return str(Path(str(self.trace_dir)).resolve())
+
     def _expand_segments(self, trajectories: list[Trajectory]) -> list[Trajectory]:
         """ARL-17: replace each compacted session's row by all of its segment rows (the
         recorded rows end with that same final segment, renamed ``::seg<n>``); sessions
@@ -656,7 +662,7 @@ class RolloutHost:
         writer = LiveTraceWriter(
             directory / f"{safe}.jsonl",
             trace_id=trace_id_for_session(
-                run_id=Path(self.trace_dir).name,
+                run_id=self._trace_run_id(),
                 rollout_step=step,
                 session_id=session_id,
                 invocation=0,  # unique session ids per step; matches _write_traces
@@ -683,7 +689,7 @@ class RolloutHost:
             writer.write_episode(
                 trace_from_trajectory(
                     trajectory,
-                    run_id=directory.name,
+                    run_id=self._trace_run_id(),
                     rollout_step=step,
                     invocation=0,
                     verifier_metadata={k: meta[k] for k in keys if k in meta} if keys else None,

@@ -67,6 +67,12 @@ class SweReward:
             return RewardVerdict(None, "bad_task_test_lists")
         if not fail_to_pass:
             return RewardVerdict(None, "no_fail_to_pass")
+        if self.tamper == "zero" and outcome.metadata.get("swe_guard") == "measured":
+            # Checked BEFORE "did the tests run": tampering that also breaks the test run (an
+            # edited conftest.py that errors out) must score 0.0, never escape as an abstention.
+            tampered_first = _test_ids(outcome.metadata.get("swe_tampered", ""))
+            if tampered_first:
+                return RewardVerdict(0.0, "test_harness_tampering")
         if outcome.metadata.get("swe_status") != "ok":
             return RewardVerdict(None, "swe_tests_did_not_run")
         try:
@@ -79,11 +85,9 @@ class SweReward:
         if self.tamper == "zero":
             if outcome.metadata.get("swe_guard") != "measured":
                 return RewardVerdict(None, "tamper_guard_unmeasured")
-            tampered = _test_ids(outcome.metadata.get("swe_tampered", ""))
-            if tampered is None:
+            if _test_ids(outcome.metadata.get("swe_tampered", "")) is None:
                 return RewardVerdict(None, "tamper_guard_unmeasured")
-            if tampered:
-                return RewardVerdict(0.0, "test_harness_tampering")
+            # A measured, non-empty tampering list already scored 0.0 above.
 
         def passed(test_id: str) -> bool:
             return results.get(test_id) == "passed"

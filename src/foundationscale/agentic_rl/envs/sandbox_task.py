@@ -789,8 +789,16 @@ class TaskSandboxEnvironment:
         """
         after = self._guard_fingerprint()
         guard: dict[str, str]
-        if self._guard_before is None or after is None:
+        if self._guard_before is None:
             guard = {"swe_guard": "unmeasured"}
+        elif after is None:
+            # Readable at start, unreadable after the agent ran: the agent changed permissions
+            # under the guarded tree. That is tampering, not an unmeasured guard -- an abstention
+            # here would let an agent escape the penalty by hiding its edits.
+            guard = {
+                "swe_guard": "measured",
+                "swe_tampered": json.dumps(["<guarded tree unreadable after the episode>"]),
+            }
         else:
             guard = {
                 "swe_guard": "measured",

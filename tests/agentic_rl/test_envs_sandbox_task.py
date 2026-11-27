@@ -859,3 +859,30 @@ def test_verify_reports_the_guard_unmeasured_when_the_rootfs_is_unreadable() -> 
     outcome = asyncio.run(env.verify())
     assert outcome["swe_guard"] == "unmeasured"
     assert "swe_tampered" not in outcome  # never an empty list nobody measured
+
+
+class _TreeTurnsUnreadableSandbox(FakeSandbox):
+    """Readable rootfs at start; unreadable once the agent ran (permissions changed)."""
+
+    def __init__(self, root: Path, results: Sequence[FakeResult]) -> None:
+        super().__init__(results)
+        self.root = root
+        self.readable = True
+
+    def host_path(self, container_path: str) -> Path:
+        if not self.readable:
+            raise PermissionError(f"cannot read {container_path}")
+        return self.root / container_path.lstrip("/")
+
+
+def test_a_guarded_tree_made_unreadable_by_the_agent_is_tampering(tmp_path: Path) -> None:
+    root = tmp_path / "rootfs"
+    (root / "repo").mkdir(parents=True)
+    (root / "repo" / "conftest.py").write_text("x = 1\n")
+    sandbox = _TreeTurnsUnreadableSandbox(root, [FakeResult(timed_out=True)])
+    env, _, _ = _env(sandbox=sandbox)
+    asyncio.run(env.start())
+    sandbox.readable = False  # the agent chmod-ed the tree during the episode
+    outcome = asyncio.run(env.verify())
+    assert outcome["swe_guard"] == "measured"
+    assert json.loads(outcome["swe_tampered"]) == ["<guarded tree unreadable after the episode>"]

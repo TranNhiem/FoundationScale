@@ -78,3 +78,17 @@ def test_broken_tasks_abstain() -> None:
         metadata={"fail_to_pass": "not json", "pass_to_pass": "[]"},
     )  # fmt: skip
     assert _score(bad, _outcome(_report(ALL_PASS))) == (None, "bad_task_test_lists")
+
+
+@pytest.mark.parametrize("status", ["error", "timeout"])
+def test_tampering_that_breaks_the_test_run_still_scores_zero(status: str) -> None:
+    # An edited conftest.py that makes the run error out must score 0.0 (tampering), never
+    # abstain as "tests did not run" -- that would let the agent escape the penalty.
+    meta = {
+        "swe_status": status,
+        "swe_tests": "",
+        "swe_guard": "measured",
+        "swe_tampered": json.dumps(["/repo/conftest.py"]),
+    }
+    verdict = asyncio.run(SweReward(tamper="zero").score(_task(), _outcome(meta)))
+    assert (verdict.value, verdict.reason) == (0.0, "test_harness_tampering")

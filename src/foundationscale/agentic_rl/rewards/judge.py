@@ -41,6 +41,7 @@ ABSTENTION, never a zero), ``JudgeCalibrationRefusal`` for the calibration gate.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import math
 import os
@@ -412,6 +413,10 @@ class OpenAIJudgeClient:
                 body = response.read()
         except urllib.error.HTTPError:
             raise JudgeInfraError("http") from None
+        except http.client.HTTPException:
+            # e.g. IncompleteRead on a truncated response: not an OSError, so it would crash
+            # scoring instead of abstaining as a judge infra failure.
+            raise JudgeInfraError("http") from None
         except TimeoutError:
             raise JudgeInfraError("timeout") from None
         except urllib.error.URLError as failure:
@@ -552,9 +557,9 @@ class JudgeRewardFn(RewardFn):
         sections = [_task_content(task)]
         if self.reference_key is not None:
             reference = task.metadata.get(self.reference_key) if task.metadata else None
-            sections.append(
-                f"Reference answer (may be absent):\n{str(reference) if reference else '(absent)'}"
-            )
+            # "0" is a real answer: only None / "" mean absent (truthiness dropped a gold 0).
+            shown = "(absent)" if reference is None or str(reference) == "" else str(reference)
+            sections.append(f"Reference answer (may be absent):\n{shown}")
         sections.append(f"<<<ANSWER-{nonce}>>>\n{answer}\n<<<END-{nonce}>>>")
         criteria = "\n".join(
             f"- {criterion.name} (weight {criterion.weight:g}): {criterion.description}"

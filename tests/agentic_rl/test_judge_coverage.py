@@ -11,6 +11,7 @@ read at call time, ``_completion_text``'s body parsing and the calibration entry
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import socket
 import threading
@@ -299,6 +300,7 @@ def test_an_endpoint_slower_than_the_timeout_makes_the_reward_abstain(
         (urllib.error.URLError(TimeoutError("the socket gave up")), "timeout"),
         (urllib.error.URLError(OSError("connection refused")), "connection"),
         (OSError("the socket died under us"), "connection"),
+        (http.client.IncompleteRead(b"{"), "http"),  # a truncated body is not an OSError
     ],
 )
 def test_every_transport_failure_maps_to_an_infra_kind(

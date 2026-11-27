@@ -1187,3 +1187,17 @@ def test_segments_left_by_an_aborted_step_never_reach_a_later_batch(tmp_path: Pa
     host._state["segments"] = {"taskA#0": segment_trajectories(stale, final)}  # an aborted step
     batch = host.rollout(0)
     assert set(batch.columns["session_id"]) == {"taskA#0", "taskA#1"}
+
+
+def test_trace_run_ids_differ_for_trace_dirs_sharing_a_basename(tmp_path: Path) -> None:
+    def host(run: str) -> RolloutHost:
+        trace_dir = tmp_path / run / "traces"
+        trace_dir.mkdir(parents=True)
+        return _host(
+            tmp_path / run,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient("x"),
+            trace_dir=str(trace_dir),
+        )
+
+    assert host("run_a")._trace_run_id() != host("run_b")._trace_run_id()

@@ -179,3 +179,13 @@ def test_revisit_quota_falls_through_when_few_tasks_are_revisitable(tmp_path: Pa
     assert batch[0] == "t3" and len(set(batch)) == 4
     with pytest.raises(TaskSourceRefusal, match="revisit_fraction"):
         _source(tmp_path, 10, revisit_fraction=1.5)
+
+
+def test_review_fixes_empty_state_path_bool_sums_and_unmeasured_mean(tmp_path: Path) -> None:
+    with pytest.raises(TaskSourceRefusal, match="state_path"):
+        _source(tmp_path, 2, state_path="")
+    bad = tmp_path / "bool.json"
+    bad.write_text(json.dumps({"counts": {"u": 1}, "sums": {"u": True}}))
+    with pytest.raises(TaskSourceRefusal, match="not a registry"):
+        DifficultyRegistry.load(str(bad))
+    assert _source(tmp_path, 2).stats()["mean_pass_rate"] is None  # nothing measured yet

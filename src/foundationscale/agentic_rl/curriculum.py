@@ -88,7 +88,8 @@ class DifficultyRegistry:
             or set(counts) != set(sums)
             or not all(type(v) is int and v >= 0 for v in counts.values())
             or not all(
-                isinstance(v, (int, float)) and 0.0 <= v <= counts[k] for k, v in sums.items()
+                type(v) is not bool and isinstance(v, (int, float)) and 0.0 <= v <= counts[k]
+                for k, v in sums.items()
             )
         ):
             raise TaskSourceRefusal(
@@ -148,6 +149,10 @@ class FrontierTaskSource:
                 f"{where}: field 'revisit_fraction' is {self.revisit_fraction!r}: it must lie in "
                 f"[0, 1]"
             )
+        if self.state_path is not None and not str(self.state_path).strip():
+            raise TaskSourceRefusal(
+                f"{where}: field 'state_path' is {self.state_path!r}: a file path, or None"
+            )
         if self.state_path is not None and Path(self.state_path).exists():
             self.registry = DifficultyRegistry.load(self.state_path)
 
@@ -197,7 +202,7 @@ class FrontierTaskSource:
         if self.state_path is not None:
             self.registry.save(self.state_path)
 
-    def stats(self) -> dict[str, float | int]:
+    def stats(self) -> dict[str, float | int | None]:
         """Registry summary for the ``[agentic-rl:curriculum]`` line."""
         seen = [uid for uid in self.registry.counts]
         rates = [self.registry.pass_rate(uid) for uid in seen]
@@ -206,7 +211,7 @@ class FrontierTaskSource:
             "tasks_seen": len(seen),
             "frontier": sum(1 for p in rates if 0.2 <= p <= 0.8),
             "saturated": sum(1 for uid in seen if self.registry.saturated(uid, self.min_obs)),
-            "mean_pass_rate": round(sum(rates) / len(rates), 4) if rates else 0.5,
+            "mean_pass_rate": round(sum(rates) / len(rates), 4) if rates else None,
             "revisitable": sum(
                 1
                 for uid in seen

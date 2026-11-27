@@ -114,3 +114,16 @@ def test_a_malformed_tamper_report_abstains_under_zero() -> None:
     bad = _outcome(swe_guard="measured", swe_tampered="{not a list")
     verdict = asyncio.run(SweReward(tamper="zero").score(_TASK, bad))
     assert (verdict.value, verdict.reason) == (None, "tamper_guard_unmeasured")
+
+
+def test_an_unreadable_directory_is_an_error_not_an_absent_file(tmp_path: Path) -> None:
+    root = _rootfs(tmp_path)
+    hidden = root / "repo" / "pkg" / "sub"
+    hidden.mkdir()
+    (hidden / "conftest.py").write_text("import os\n")
+    hidden.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            fingerprint(root, "/repo")
+    finally:
+        hidden.chmod(0o755)
