@@ -260,7 +260,12 @@ def _resume_into(
             )
         else:
             trace.append_observation(list(turn.token_ids))
-    turns.extend(resume.turns)
+    # ARL-19: a resumed episode's kept turns were sampled by an EARLIER attempt, so they never
+    # earn credit in this one -- enforced here, whoever calls run_episode(resume=...).
+    turns.extend(
+        dataclasses.replace(turn, credited=False) if turn.generated else turn
+        for turn in resume.turns
+    )
     return resume.prompt_turns, len(resume.prompt_turns) + len(resume.turns), resume.cursor
 
 
@@ -439,6 +444,9 @@ class NativeToolLoop(HarnessAdapter):
             )
         closed: list[SegmentOutcome] = []
         spent = 0  # response tokens of closed segments + external summary tokens (episode cap)
+        # Set when a compaction failed to shrink the context: compacting again would only loop,
+        # so compaction stops for the rest of the episode.
+        compaction_spent = False
         summarizing = False  # policy mode: the next generation is the summary turn
         observation_before_instruction = ""
 
@@ -464,6 +472,7 @@ class NativeToolLoop(HarnessAdapter):
             if (
                 policy is not None
                 and policy.mode == "external"
+                and not compaction_spent
                 and turns
                 and len(closed) < policy.max_segments - 1
                 and _step < budget.step_limit - 1
@@ -482,9 +491,13 @@ class NativeToolLoop(HarnessAdapter):
                     SegmentOutcome(prompt_turns=prompt_turns, trajectory_turns=tuple(turns))
                 )
                 messages[:] = _compacted_messages(messages, summary, policy.keep_turns)
+                before_compaction = len(trace.token_ids)
                 trace = TokenTrace(response_length=budget.max_response_tokens)
                 turns = []
                 prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
+                # A compaction that did not SHRINK the context (summary + kept turns at least as
+                # long as what they replace) cannot help; stop compacting rather than loop.
+                compaction_spent = len(trace.token_ids) >= before_compaction
                 if policy.episode_tokens is not None:
                     episode_left = policy.episode_tokens - spent
                     if episode_left < 1:
@@ -574,9 +587,13 @@ class NativeToolLoop(HarnessAdapter):
                 history = messages[:-1]
                 history[-1] = {**history[-1], "content": observation_before_instruction}
                 messages[:] = _compacted_messages(history, visible_text, policy.keep_turns)
+                before_compaction = len(trace.token_ids)
                 trace = TokenTrace(response_length=budget.max_response_tokens)
                 turns = []
                 prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
+                # A compaction that did not SHRINK the context (summary + kept turns at least as
+                # long as what they replace) cannot help; stop compacting rather than loop.
+                compaction_spent = len(trace.token_ids) >= before_compaction
                 continue
 
             valid_submit = next(
@@ -638,6 +655,7 @@ class NativeToolLoop(HarnessAdapter):
             if (
                 policy is not None
                 and policy.mode == "policy"
+                and not compaction_spent
                 and len(closed) < policy.max_segments - 1
                 and _step < budget.step_limit - 2
                 and len(trace.token_ids) >= policy.trigger_tokens

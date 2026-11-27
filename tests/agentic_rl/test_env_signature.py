@@ -247,3 +247,15 @@ def test_tree_manifest_propagates_a_walk_error(
     monkeypatch.setattr(env_signature.os, "walk", failing_walk)
     with pytest.raises(PermissionError, match="denied"):
         tree_manifest(tmp_path, content=False)
+
+
+def test_compute_signature_includes_the_execution_env() -> None:
+    kwargs = signature_kwargs()
+    plain = compute_signature(**kwargs)
+    assert compute_signature(**kwargs, env={}) == plain
+    assert compute_signature(**kwargs, env={"MODE": "a"}) != compute_signature(
+        **kwargs, env={"MODE": "b"}
+    )
+    assert compute_signature(**kwargs, env={"A": "1", "B": "2"}) == compute_signature(
+        **kwargs, env={"B": "2", "A": "1"}
+    )

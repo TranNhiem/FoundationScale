@@ -127,7 +127,9 @@ async def resume_fork(
     )
     kept = len(boundary.checkpoint.turns)
     prefix = outcome.trajectory_turns[:kept]
-    if prefix != boundary.checkpoint.turns:
+    if tuple(dataclasses.replace(t, credited=True) for t in prefix) != tuple(
+        dataclasses.replace(t, credited=True) for t in boundary.checkpoint.turns
+    ):
         raise ForkRefusal(
             "fork: the resumed outcome does not start with the checkpoint's turns: the kept "
             "prefix cannot be identified, so credit could not be withheld from it"

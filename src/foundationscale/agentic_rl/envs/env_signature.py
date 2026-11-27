@@ -16,11 +16,11 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
-ENV_SIGNATURE_SCHEMA: str = "fs.env_signature/v1"
+ENV_SIGNATURE_SCHEMA: str = "fs.env_signature/v2"  # v2: the execution env is hashed
 SIGNATURE_MODES: tuple[str, ...] = ("off", "manifest", "content")
 DEFAULT_EXCLUDES: tuple[str, ...] = ("proc", "sys", "dev", "run", "tmp")
 
@@ -148,6 +148,7 @@ def compute_signature(
     hidden_paths: Sequence[str],
     setup_commands: Sequence[str],
     hidden_manifest: str | None,
+    env: Mapping[str, str] | None = None,
 ) -> str:
     """Hash the canonical task and environment inputs into a compact signature."""
     legal_modes = ("manifest", "content")
@@ -164,6 +165,9 @@ def compute_signature(
         "hidden_paths": sorted(hidden_paths),
         "setup_commands": list(setup_commands),
         "hidden": hidden_manifest,
+        # The environment every setup/agent/test command runs under (EnvSpec.env): two
+        # starts under different env vars are different states even with identical files.
+        "env": sorted((env or {}).items()),
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()

@@ -193,7 +193,12 @@ def test_resume_is_equivalent_and_does_not_replay_tools() -> None:
         )
     )
 
-    assert resumed.trajectory_turns == parent.outcome.trajectory_turns
+    # Same tokens, kinds and logprobs; the kept prefix is uncredited by run_episode itself.
+    kept = len(parent.checkpoint.turns)
+    credited = tuple(dataclasses.replace(t, credited=True) for t in resumed.trajectory_turns)
+    assert credited == parent.outcome.trajectory_turns
+    assert all(not t.credited for t in resumed.trajectory_turns[:kept] if t.generated)
+    assert all(t.credited for t in resumed.trajectory_turns[kept:])
     assert resumed.prompt_turns == parent.outcome.prompt_turns
     assert resumed.termination == parent.outcome.termination
     assert resumed.submitted_answer == parent.outcome.submitted_answer

@@ -81,10 +81,12 @@ class RecordingClient:
 
 
 def _compaction(mode: str, *, max_segments: int = 4) -> CompactionPolicy:
+    # keep_turns=0: a compacted toy prompt (task + summary) is shorter than the context it
+    # replaces, so every compaction shrinks and none trips the no-shrink stop.
     return CompactionPolicy(
         mode=mode,
         trigger_tokens=1,
-        keep_turns=2,
+        keep_turns=0,
         max_segments=max_segments,
         summary_max_tokens=16,
     )
@@ -242,7 +244,7 @@ def test_step_budget_is_shared_across_segments() -> None:
         ]
     )
     budget = _budget(step_limit=4)
-    env = FakeEnvironment(execute_fn=lambda command: _exec_result("ok\n"))
+    env = FakeEnvironment(execute_fn=lambda command: _exec_result("ok " * 60))
 
     outcome = _run(
         _loop(compaction=_compaction("external")),
@@ -449,7 +451,7 @@ def test_segment_trajectories_expands_rows_and_preserves_reward() -> None:
         _loop(compaction=_compaction("external", max_segments=3)),
         _task(session_id=session_id),
         client,
-        FakeEnvironment(execute_fn=lambda command: _exec_result("ok\n")),
+        FakeEnvironment(execute_fn=lambda command: _exec_result("ok " * 60)),
         _budget(),
     )
     assert len(outcome.segments) == 2
@@ -555,3 +557,21 @@ def test_a_summary_that_spends_the_rest_of_the_episode_budget_ends_it() -> None:
     )
     assert outcome.termination is Termination.LENGTH
     assert len(client.generations) == 2  # the policy never generated after the summary
+
+
+def test_a_compaction_that_does_not_shrink_the_context_stops_compacting() -> None:
+    # keep_turns large + a long summary: the "compacted" prompt is no shorter than before, so
+    # the loop compacts once and then stops instead of re-triggering every step.
+    policy = CompactionPolicy(mode="external", trigger_tokens=1, keep_turns=20, max_segments=8)
+    script: list[Generation] = []
+    for i in range(6):
+        script += [_generation(_bash_call_text(f"echo {i}")), _generation("summary " * 30)]
+    client = RecordingClient(script)
+    outcome = _run(
+        _loop(compaction=policy),
+        _task(),
+        client,
+        FakeEnvironment(execute_fn=lambda command: _exec_result("ok\n")),
+        _budget(step_limit=5),
+    )
+    assert len(outcome.segments) == 1

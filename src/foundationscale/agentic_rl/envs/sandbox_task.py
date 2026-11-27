@@ -749,6 +749,7 @@ class TaskSandboxEnvironment:
             test_cmd=self._config.test_cmd,
             hidden_paths=self._config.hidden_paths,
             setup_commands=self._spec.setup_commands,
+            env=dict(self._spec.env),
             hidden_manifest=hidden_manifest,
         )
 
