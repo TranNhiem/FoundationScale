@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foundationscale.agentic_rl.harness.base import EpisodeTask, HarnessRefusal
+from foundationscale.rl.advantage import SEGMENT_SEPARATOR
 
 __all__ = (
     "TaskSource",
@@ -52,6 +53,13 @@ def _parse_row(path: str, line_number: int, raw_line: str) -> EpisodeTask | None
     if "uid" not in row:
         raise TaskSourceRefusal(f"{where}: is missing key 'uid'")
     uid = row["uid"]
+    if isinstance(uid, str) and (SEGMENT_SEPARATOR in uid or "#" in uid):
+        # ARL-17: a session id is f"{uid}#{k}" and a segment row adds f"{SEGMENT_SEPARATOR}{n}";
+        # a uid already holding either marker would be read as another episode's segment.
+        raise TaskSourceRefusal(
+            f"{where}: uid {uid!r} contains '#' or {SEGMENT_SEPARATOR!r}, which session and "
+            f"segment ids reserve"
+        )
     if "messages" not in row:
         raise TaskSourceRefusal(f"{where}: is missing key 'messages'")
     metadata = row.get("metadata", {})

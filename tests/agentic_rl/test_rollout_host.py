@@ -1169,3 +1169,21 @@ def test_a_compacted_episode_is_one_row_per_segment_with_one_reward(tmp_path: Pa
     )
     assert set(batch.columns["reward"]) == {float(len("hello"))}
     assert batch.columns["response_ids"][0] == (2, 3)
+
+
+def test_segments_left_by_an_aborted_step_never_reach_a_later_batch(tmp_path: Path) -> None:
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=lambda index: SubmitClient("hello world"),
+    )
+    stale = asyncio.run(_CompactedHarness().run_episode(None, client=None, env=None, budget=None))
+    from foundationscale.agentic_rl.harness.base import segment_trajectories, to_trajectory
+
+    final = to_trajectory(
+        stale, uid="taskA", session_id="taskA#0", harness="x", reward=1.0, abstention_reason=None
+    )
+    host._state["segments"] = {"taskA#0": segment_trajectories(stale, final)}  # an aborted step
+    batch = host.rollout(0)
+    assert set(batch.columns["session_id"]) == {"taskA#0", "taskA#1"}

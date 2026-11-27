@@ -286,7 +286,7 @@ def test_resume_with_compaction_is_refused() -> None:
     assert checkpoints
 
     compacted = _loop(compaction=_compaction("external"))
-    with pytest.raises(NativeToolLoopRefusal, match="resume with compaction"):
+    with pytest.raises(NativeToolLoopRefusal, match="checkpoints .resume"):
         asyncio.run(
             compacted.run_episode(
                 _task(),
@@ -483,3 +483,19 @@ def test_segment_trajectories_expands_rows_and_preserves_reward() -> None:
 
     never_compacted = dataclasses.replace(outcome, segments=())
     assert segment_trajectories(never_compacted, final) == (final,)
+
+
+def test_checkpoint_hook_with_compaction_is_refused() -> None:
+    async def capture(checkpoint: EpisodeCheckpoint) -> None:
+        del checkpoint
+
+    with pytest.raises(NativeToolLoopRefusal, match="checkpoint"):
+        asyncio.run(
+            _loop(compaction=_compaction("external")).run_episode(
+                _task(),
+                client=ScriptedClient([_generation(_submit_call_text("done"))]),
+                env=FakeEnvironment(execute_fn=lambda command: _exec_result("hi\n")),
+                budget=_budget(),
+                checkpoint_hook=capture,
+            )
+        )

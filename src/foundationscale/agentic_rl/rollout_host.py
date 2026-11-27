@@ -527,6 +527,9 @@ class RolloutHost:
                 return final
             except _INFRA_EXCEPTIONS as exc:
                 reason = f"infra:{type(exc).__name__}"
+                # ARL-17: an abstained attempt has no segments; never let an earlier attempt's
+                # stored segments stand in for it at flatten time.
+                self._state.get("segments", {}).pop(session_id, None)
                 if outcome is not None:
                     # run_episode() returned a real EpisodeOutcome before reward
                     # scoring raised: reuse its REAL prompt_turns/turns rather
@@ -861,6 +864,7 @@ class RolloutHost:
             tasks, reserve = pool[: self.tasks_per_step], pool[self.tasks_per_step :]
         else:
             tasks, reserve = self.tasks.batch(step, self.tasks_per_step), ()
+        self._state["segments"] = {}  # ARL-17: segments never carry over from an aborted step
         trajectories = await self._gather_step(step, tasks)
         attempt = 0
         while attempt < self.engine_recovery_retries and _needs_engine_recovery(

@@ -219,3 +219,12 @@ def test_batch_rejects_bad_n(tmp_path: Path, n: object) -> None:
     source = _source(tmp_path)
     with pytest.raises(TaskSourceRefusal):
         source.batch(0, n)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("uid", ["task#1", "task::seg0", "a::seg12"])
+def test_a_uid_holding_a_session_or_segment_marker_is_refused(tmp_path: Path, uid: str) -> None:
+    # ARL-17: session ids are f"{uid}#{k}" and segment rows add "::seg<n>"; a uid that already
+    # holds either would be read as another episode's segment by the advantage grouping.
+    path = _write(tmp_path / "tasks.jsonl", [_row(uid)])
+    with pytest.raises(TaskSourceRefusal, match="reserve"):
+        TaskSource(path=str(path))

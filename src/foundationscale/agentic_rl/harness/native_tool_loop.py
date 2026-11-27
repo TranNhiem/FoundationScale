@@ -413,10 +413,11 @@ class NativeToolLoop(HarnessAdapter):
         submitted_answer: str | None = None
         abstention_reason: str | None = None
         policy = self.compaction
-        if policy is not None and resume is not None:
+        if policy is not None and (resume is not None or checkpoint_hook is not None):
             raise NativeToolLoopRefusal(
-                "run_episode: resume with compaction is not supported -- a checkpoint does not "
-                "carry the closed segments, so a fork would silently drop them"
+                "run_episode: checkpoints (resume / checkpoint_hook) with compaction are not "
+                "supported -- a checkpoint does not carry the closed segments, so resuming one "
+                "would silently drop them from training"
             )
         closed: list[SegmentOutcome] = []
         summarizing = False  # policy mode: the next generation is the summary turn
