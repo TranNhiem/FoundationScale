@@ -1413,20 +1413,22 @@ class AgenticGRPOLoss:
     group_size: int = 2
     clip_low: float = 0.8
     clip_high: float = 1.2
-    kl_weight: float = 0.0
     weight: float = 1.0
     prompt_id_column: str = "prompt_ids"
     reward_column: str = "rewards"
     mask_column: str = "loss_mask"
     old_logprob_column: str = "old_logprobs"
-    reference_logprob_column: str = "reference_logprobs"
     component_name: str = "agentic_grpo_policy_loss"
-    kl_component_name: str = "agentic_grpo_kl_penalty"
     advantage_fn: SessionGroupAdvantage = field(default_factory=SessionGroupAdvantage)
     # ``token_mean`` is the ABLATION arm, not an alternative default: it keeps
     # every other choice of this objective and swaps only the denominator, so
     # an A/B against ``prompt_mean`` measures the reduction and nothing else.
     reduction_mode: Literal["prompt_mean", "token_mean"] = "prompt_mean"
+    # B2.3 C1 opt-in k3 term, appended LAST so positional construction keeps its
+    # meaning; the two names below are read only when kl_weight != 0.0.
+    kl_weight: float = 0.0
+    reference_logprob_column: str = "reference_logprobs"
+    kl_component_name: str = "agentic_grpo_kl_penalty"
 
     def __post_init__(self) -> None:
         _validate_common(
@@ -1457,7 +1459,16 @@ class AgenticGRPOLoss:
             ("kl_component_name", self.kl_component_name),
         ):
             _checked_name(field_name, name_value)
-        if self.component_name == self.kl_component_name:
+        if self.kl_weight == 0.0 and (
+            self.reference_logprob_column != "reference_logprobs"
+            or self.kl_component_name != "agentic_grpo_kl_penalty"
+        ):
+            raise LossConfigRefusal(
+                f"reference_logprob_column={self.reference_logprob_column!r} / "
+                f"kl_component_name={self.kl_component_name!r} customised while "
+                f"kl_weight=0.0: the KL term is off, so nothing would read them"
+            )
+        if self.kl_weight != 0.0 and self.component_name == self.kl_component_name:
             raise LossConfigRefusal(
                 f"component_name and kl_component_name are both "
                 f"{self.component_name!r}: 2 components would share 1 "

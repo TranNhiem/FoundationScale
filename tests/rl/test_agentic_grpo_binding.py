@@ -215,3 +215,19 @@ def test_megatron_lane_still_maps_the_three_supported_units() -> None:
     assert loss_unit(stub("token_mean")) == "token"
     assert loss_unit(stub("sequence_mean")) == "sequence"
     assert loss_unit(stub("constant")) == "dr_grpo"
+
+
+def test_kl_fields_are_appended_so_positional_construction_keeps_its_meaning() -> None:
+    names = [f.name for f in dataclasses.fields(AgenticGRPOLoss)]
+    assert names[-3:] == ["kl_weight", "reference_logprob_column", "kl_component_name"]
+
+
+def test_kl_names_customised_with_the_term_off_are_refused() -> None:
+    with pytest.raises(LossConfigRefusal, match="nothing would read them"):
+        dataclasses.replace(_objective(), reference_logprob_column="ref_lp")
+
+
+def test_component_name_collision_only_matters_when_kl_is_on() -> None:
+    dataclasses.replace(_objective(), component_name="agentic_grpo_kl_penalty")  # KL off: fine
+    with pytest.raises(LossConfigRefusal, match="share 1"):
+        dataclasses.replace(_objective(), component_name="agentic_grpo_kl_penalty", kl_weight=0.04)
