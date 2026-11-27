@@ -36,6 +36,7 @@ def admission_payload(skill: str, old_text: str, new_text: str, evidence: dict) 
 
     It carries the skill name, the sha256 of the incumbent and the candidate texts and the
     evidence exactly as supplied, so the operator can re-derive identical bytes and hash.
+    The whole evidence dict (beacon, paired, eval_case_ids included) is hashed, which binds the gate inputs.
     """
     return {
         "schema": "fskills.self_improve.admission/1",
@@ -107,22 +108,34 @@ def added_text(old_text: str, new_text: str) -> str:
                      if line.startswith("+ "))
 
 
-def unsafe_spans(old_text: str, new_text: str) -> list[str]:
-    """Write-time safety screen (SafeEvolve 2608.12851): the deterministic vetting checks run on the ADDED lines only.
-
-    Each finding names the check and the offending added span; an empty list means no check fired.
-    """
+def _safety_screen(old_text: str, new_text: str) -> tuple[list[str], list[str]]:
     from foundationskills.vetting import scan
 
     added = added_text(old_text, new_text)
     if not added.strip():
-        return []
+        return [], []
     files = {"SKILL.md(added)": added.encode("utf-8")}
     results = (scan.check_network({}, files), scan.check_credentials(files), scan.check_dynamic_exec(files),
                scan.check_html_comments(files), scan.check_invisible_unicode(files))
-    return [f"unsafe span added ({r.id}): added line {h.line}: {h.excerpt}"
-            for r in results if r.status in ("RED", "REFUSED") for h in (r.hits or ())] + \
-           [f"unsafe span added ({r.id}): {r.note}" for r in results if r.status in ("RED", "REFUSED") and not r.hits]
+    spans = [f"unsafe span added ({r.id}): added line {h.line}: {h.excerpt}"
+             for r in results if r.status in ("RED", "REFUSED") for h in (r.hits or ())] + \
+            [f"unsafe span added ({r.id}): {r.note}" for r in results if r.status in ("RED", "REFUSED") and not r.hits]
+    unmeasured = [r.id for r in results if r.status == "UNMEASURED"]
+    return spans, unmeasured
+
+
+def unsafe_spans(old_text: str, new_text: str) -> list[str]:
+    """Write-time safety screen (SafeEvolve 2608.12851): the deterministic vetting checks run on the ADDED lines only.
+
+    Each finding names the check and the offending added span. UNMEASURED checks are reported
+    separately by unmeasured_safety_checks so an empty finding list is not treated as a PASS.
+    """
+    return _safety_screen(old_text, new_text)[0]
+
+
+def unmeasured_safety_checks(old_text: str, new_text: str) -> list[str]:
+    """Return the ids of vetting checks that could not measure the added text."""
+    return _safety_screen(old_text, new_text)[1]
 
 
 _PRIVATE_PATH = __import__("re").compile(r"(/home/[^\s/]+|/Users/[^\s/]+|[A-Za-z]:\\Users\\)")
@@ -157,9 +170,19 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
         reasons.append(CONFIRM_REASON)
     if reasons:
         return {"verdict": "REFUSED", "reasons": reasons}
-    unsafe = unsafe_spans(old_text, new_text) + overfit_spans(old_text, new_text, evidence.get("eval_case_ids") or ())
+
+    safety_spans, unmeasured_checks = _safety_screen(old_text, new_text)
+    unsafe = safety_spans + overfit_spans(old_text, new_text, evidence.get("eval_case_ids") or ())
     if unsafe:  # an unsafe or eval-memorising increment is never admitted, whatever its measured gain
         return {"verdict": "RED", "reasons": unsafe}
+    if unmeasured_checks:
+        return {
+            "verdict": "UNMEASURED",
+            "reasons": [
+                f"safety screen incomplete: {check_id} unmeasured"
+                for check_id in unmeasured_checks
+            ],
+        }
 
     target = evidence.get("target")
     incumbent = _table(evidence, "incumbent")

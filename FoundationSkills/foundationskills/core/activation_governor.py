@@ -1,4 +1,7 @@
-"""C10 governed triggers: events may only produce operator-gated launch proposals."""
+"""C10 governed triggers: events may only produce operator-gated launch proposals.
+
+Single-process use only (no cross-process lock); run one Governor per ledger.
+"""
 from __future__ import annotations
 
 import datetime as _dt
@@ -101,9 +104,13 @@ class Governor:
         if not self.ledger_dir:
             return
         try:
-            rows = ledger.read(Path(self.ledger_dir) / ledger.FILENAME)
-        except OSError:
+            rows = list(ledger.read(Path(self.ledger_dir) / ledger.FILENAME))
+        except FileNotFoundError:
             return
+        except Exception as exc:
+            raise GovernorRefusal(
+                "ledger unreadable: refusing to start with empty caps/dedup"
+            ) from exc
         for row in rows:
             if row.get("kind") != "trigger" or row.get("verdict") != "propose":
                 continue
@@ -168,6 +175,11 @@ class Governor:
             return finish("daily_cap", "per-trigger daily_cap reached")
         if self._global[day] >= self.global_daily_cap:
             return finish("global_cap", "global_daily_cap reached")
+        if self.ledger_dir is None:
+            return finish(
+                "ledger_unwritable",
+                "no ledger_dir: proposals are withheld because they could not be traced",
+            )
         self._seen.setdefault(trigger_id, set()).add(key)
         self._lifetime[trigger_id] += 1
         self._daily[(trigger_id, day)] += 1

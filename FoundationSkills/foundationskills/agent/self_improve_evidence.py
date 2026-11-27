@@ -2,8 +2,9 @@
 
 Metrics come from behaviour-eval reports (incumbent: the package's SKILL.md; candidate: the same cases run with
 ``--skill-md-override``) and from routing-eval reports (per-package trigger recall in the gated arm). The evidence is
-``measured`` only when every report is measured and the candidate reports really measured the candidate text.
-Aligned case pairs and the candidate's activation-beacon count feed the admission paired-significance and beacon gates.
+``measured`` only when every report is measured, the candidate reports really measured the candidate text, and case
+pairing has no unpaired or ungraded cases. Aligned case pairs and the candidate's activation-beacon count feed the
+admission paired-significance and beacon gates.
 """
 
 from __future__ import annotations
@@ -32,28 +33,67 @@ def eval_calls(*reports: Mapping[str, Any]) -> int:
     return sum(len(r.get("calls") or []) for r in reports)
 
 
-def _case_pass_value(call: Mapping[str, Any]) -> float:
-    graded = int(call.get("items_graded") or 0)
-    met = int(call.get("items_met") or 0)
-    return 1.0 if graded > 0 and met == graded else 0.0
+def _case_pass_value(call: Mapping[str, Any]) -> float | None:
+    """Return a graded case outcome, or None when the call is not a valid case result."""
+    try:
+        graded = int(call.get("items_graded"))
+        met = int(call.get("items_met"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if graded <= 0 or met < 0 or met > graded:
+        return None
+    return 1.0 if met == graded else 0.0
+
+
+def _keyed_case_values(report: Mapping[str, Any], package: str, arm: str,
+                       side: str) -> dict[tuple[str, int], float | None]:
+    calls: dict[tuple[str, int], float | None] = {}
+    for call in report.get("calls") or []:
+        if (call.get("arm") == arm and call.get("package") == package
+                and call.get("measured") in (True, "True")):
+            key = (str(call.get("case_id")), int(call.get("rep")))
+            if key in calls:
+                raise ValueError(f"duplicate (case_id, rep) key {key!r} in {side} report")
+            calls[key] = _case_pass_value(call)
+    return calls
 
 
 def paired_cases(incumbent_report: Mapping[str, Any], candidate_report: Mapping[str, Any], package: str,
                  arm: str = "with_skill") -> list[list[float]]:
-    """Return aligned incumbent/candidate case outcomes, ordered by ``(case_id, rep)``."""
-    def keyed_calls(report: Mapping[str, Any]) -> dict[tuple[str, int], Mapping[str, Any]]:
-        calls = {}
-        for call in report.get("calls") or []:
-            if (call.get("arm") == arm and call.get("package") == package
-                    and call.get("measured") in (True, "True")):
-                key = (str(call.get("case_id")), int(call.get("rep")))
-                calls[key] = call
-        return calls
-
-    incumbent_calls = keyed_calls(incumbent_report)
-    candidate_calls = keyed_calls(candidate_report)
+    """Return aligned, graded incumbent/candidate case outcomes, ordered by ``(case_id, rep)``."""
+    incumbent_calls = _keyed_case_values(incumbent_report, package, arm, "incumbent")
+    candidate_calls = _keyed_case_values(candidate_report, package, arm, "candidate")
     keys = sorted(incumbent_calls.keys() & candidate_calls.keys())
-    return [[_case_pass_value(incumbent_calls[key]), _case_pass_value(candidate_calls[key])] for key in keys]
+    pairs = []
+    for key in keys:
+        incumbent_value = incumbent_calls[key]
+        candidate_value = candidate_calls[key]
+        if incumbent_value is None or candidate_value is None:
+            continue
+        pairs.append([incumbent_value, candidate_value])
+    return pairs
+
+
+def pairing_coverage(incumbent_report: Mapping[str, Any], candidate_report: Mapping[str, Any], package: str,
+                     arm: str = "with_skill") -> dict[str, int]:
+    """Count case-key coverage and shared keys excluded because either side is ungraded."""
+    incumbent_calls = _keyed_case_values(incumbent_report, package, arm, "incumbent")
+    candidate_calls = _keyed_case_values(candidate_report, package, arm, "candidate")
+    incumbent_keys = set(incumbent_calls)
+    candidate_keys = set(candidate_calls)
+    shared_keys = incumbent_keys & candidate_keys
+    ungraded = sum(
+        1 for key in shared_keys
+        if incumbent_calls[key] is None or candidate_calls[key] is None
+    )
+    return {
+        "incumbent_keys": len(incumbent_keys),
+        "candidate_keys": len(candidate_keys),
+        "paired": len(shared_keys) - ungraded,
+        "incumbent_only": len(incumbent_keys - candidate_keys),
+        "candidate_only": len(candidate_keys - incumbent_keys),
+        "ungraded": ungraded,
+    }
 
 
 def beacon_fired(report: Mapping[str, Any], condition: str, package: str, arm: str = "with_skill") -> int:
@@ -110,12 +150,34 @@ def build_evidence(package: str, incumbent: Mapping[str, Mapping[str, Any]], can
     inc, cand = metrics(incumbent), metrics(candidate)
     calls = eval_calls(*candidate.values())
     gain = cand[target] - inc[target] if target in cand and target in inc else None
+
+    paired: dict[str, Any] = {"target": target, "pairs": [], "coverage": None}
+    unmeasured_reason = None
+    incumbent_behaviour = incumbent.get("routing_behaviour") or {}
+    candidate_behaviour = candidate.get("routing_behaviour") or {}
+    try:
+        coverage = pairing_coverage(incumbent_behaviour, candidate_behaviour, package)
+        pairs = paired_cases(incumbent_behaviour, candidate_behaviour, package)
+    except (ValueError, TypeError) as exc:
+        measured = False
+        unmeasured_reason = str(exc)
+    else:
+        paired["pairs"] = pairs
+        paired["coverage"] = coverage
+        if coverage["incumbent_only"] + coverage["candidate_only"] + coverage["ungraded"] > 0:
+            measured = False
+            unmeasured_reason = (
+                "case pairing incomplete: "
+                f"incumbent_only={coverage['incumbent_only']}, "
+                f"candidate_only={coverage['candidate_only']}, ungraded={coverage['ungraded']}"
+            )
+
     evidence = {"measured": bool(measured), "target": target, "incumbent": inc, "candidate": cand,
                 "candidate_eval_calls": calls,
                 "gain_per_100_calls": round(100 * gain / calls, 4) if gain is not None and calls else None,
-                "paired": {"target": target,
-                           "pairs": paired_cases(incumbent.get("routing_behaviour") or {},
-                                                 candidate.get("routing_behaviour") or {}, package)}}
+                "paired": paired}
+    if unmeasured_reason is not None:
+        evidence["unmeasured_reason"] = unmeasured_reason
     # the case ids the evidence was measured on: the admit gate's Generalization lint refuses text naming them
     evidence["eval_case_ids"] = sorted({str(c["case_id"]) for side in (incumbent, candidate)
                                         for c in ((side.get("routing_behaviour") or {}).get("calls") or [])
