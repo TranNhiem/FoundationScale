@@ -121,11 +121,16 @@ class ServableRefusal(ValueError):
 class ServableReport:
     """What :func:`complete_for_serving` did to ``publish_dir``.
 
-    ``status="already_servable"`` means NOTHING was changed -- the published
-    config's ``architectures`` already equalled the base's -- and
-    ``extras_keys``/``extras_bytes``/``copied_files`` are all the honest
-    empty/zero of "no work was needed", never a stale measurement of a PRIOR
-    call. ``status="completed"`` means the directory was just made loadable;
+    ``status="already_servable"`` means the weights and config were left as
+    they are -- the published config's ``architectures`` already equalled the
+    base's -- and ``extras_keys``/``extras_bytes`` are the honest zero of "no
+    weight work was needed". ``copied_files`` then names only the processor /
+    chat-template files (``_OPTIONAL_COPY_FILENAMES``) the published dir LACKED
+    and that were filled in from the base: Gemma-4 saves its full base
+    architecture but no ``processor_config.json``, and a cold ``vllm serve``
+    of such a checkpoint fails ("Can't load feature extractor"). Empty when
+    nothing was missing -- never a stale measurement of a PRIOR call.
+    ``status="completed"`` means the directory was just made loadable;
     ``extras_keys`` is the count of base tensors the published checkpoint was
     missing, ``extras_bytes`` is the on-disk size of the single extras file
     holding them, and ``copied_files`` names exactly which base files were
@@ -331,6 +336,58 @@ def _require_settled_dir(path: Path, *, label: str, value: str, where: str) -> N
 _BASE_CONFIG_MEMO: dict[str, dict[str, object]] = {}
 
 
+# In-process memo of the base model's small serving files (processor configs, chat template),
+# read once so later publishes do not touch the base directory (same shared-filesystem reason as
+# _BASE_CONFIG_MEMO).
+_BASE_SERVING_FILES_MEMO: dict[str, dict[str, bytes]] = {}
+
+
+def _base_serving_files(base: Path, *, base_model_dir: str, where: str) -> dict[str, bytes]:
+    """The base model's ``_OPTIONAL_COPY_FILENAMES`` present in its directory, as bytes."""
+    memo = _BASE_SERVING_FILES_MEMO.get(str(base))
+    if memo is not None:
+        return memo
+    _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
+    files = {
+        name: (base / name).read_bytes()
+        for name in _OPTIONAL_COPY_FILENAMES
+        if (base / name).is_file()
+    }
+    _BASE_SERVING_FILES_MEMO[str(base)] = files
+    return files
+
+
+# In-process memo of the base checkpoint's tensor map (names, shapes, dtypes from slice metadata):
+# the same-architecture check below then reads the base directory once per process, not once per
+# publish (same shared-filesystem reason as _BASE_CONFIG_MEMO).
+_BASE_WEIGHT_MAP_MEMO: dict[str, dict[str, _TensorInfo]] = {}
+
+
+def _base_weight_map(base: Path, *, base_model_dir: str, where: str) -> dict[str, _TensorInfo]:
+    memo = _BASE_WEIGHT_MAP_MEMO.get(str(base))
+    if memo is None:
+        _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
+        memo = _weight_map(base, where=f"{where}: base_model_dir")
+        _BASE_WEIGHT_MAP_MEMO[str(base)] = memo
+    return memo
+
+
+def _fill_missing_serving_files(
+    base: Path, publish: Path, *, base_model_dir: str, where: str
+) -> tuple[str, ...]:
+    """Copy (atomically) every base serving file ``publish`` lacks; never overwrite one."""
+    copied: list[str] = []
+    for name, data in _base_serving_files(base, base_model_dir=base_model_dir, where=where).items():
+        target = publish / name
+        if target.is_file():
+            continue
+        tmp = target.with_name(f"{name}.tmp.{os.getpid()}")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+        copied.append(name)
+    return tuple(copied)
+
+
 def _base_config(
     base: Path, cache_root: Path, *, base_model_dir: str, where: str
 ) -> dict[str, object]:
@@ -389,14 +446,24 @@ def complete_for_serving(
         )
     published_architectures = published_config.get("architectures")
     if published_architectures == base_architectures:
-        return ServableReport(
-            status="already_servable", extras_keys=0, extras_bytes=0, copied_files=()
-        )
+        # Same architecture is not yet "complete": Gemma-4 E4B's KV-sharing layers carry no
+        # k_norm in the HF model, so the trainer never saves them, while vLLM requires every
+        # base tensor ("Following weights were not initialized from checkpoint"). Only a
+        # checkpoint holding every base tensor is already servable; otherwise it is completed
+        # below like a text-only one (missing tensors come from the base, untouched by training).
+        base_names = set(_base_weight_map(base, base_model_dir=base_model_dir, where=where))
+        if base_names <= set(_weight_map(publish, where=f"{where}: publish_dir")):
+            filled = _fill_missing_serving_files(
+                base, publish, base_model_dir=base_model_dir, where=where
+            )
+            return ServableReport(
+                status="already_servable", extras_keys=0, extras_bytes=0, copied_files=filled
+            )
 
     # Completing a multimodal checkpoint reads base weights and files: the directory itself
     # is needed from here on, so this path keeps the probe-with-backoff.
     _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
-    base_map = _weight_map(base, where=f"{where}: base_model_dir")
+    base_map = _base_weight_map(base, base_model_dir=base_model_dir, where=where)
     published_map = _weight_map(publish, where=f"{where}: publish_dir")
 
     unknown = sorted(set(published_map) - set(base_map))

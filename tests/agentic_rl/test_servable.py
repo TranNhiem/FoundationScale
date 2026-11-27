@@ -121,6 +121,20 @@ def _build_published(
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_base_memos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test is a fresh process as far as the base-model memos are concerned."""
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    monkeypatch.setattr(servable_mod, "_BASE_WEIGHT_MAP_MEMO", {})
+    monkeypatch.setattr(servable_mod, "_BASE_SERVING_FILES_MEMO", {})
+
+
+def _all_base_tensors() -> dict[str, torch.Tensor]:
+    """The base's non-language tensors: a published checkpoint holding these is complete."""
+    return {_VISION_PATCH: torch.full((2, 2), 30.0), _VISION_BLOCK: torch.full((2, 2), 40.0)}
+
+
 def _get_tensor(path: Path, key: str) -> torch.Tensor:
     with safe_open(str(path), framework="pt") as handle:
         return handle.get_tensor(key)
@@ -135,14 +149,18 @@ def test_already_servable_when_architectures_match(tmp_path: Path) -> None:
     base = tmp_path / "base"
     published = tmp_path / "published"
     _build_base(base)
-    _build_published(published)
+    _build_published(published, extra_keys=_all_base_tensors())
     _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
     before = (published / "config.json").read_text(encoding="utf-8")
 
     report = complete_for_serving(str(published), str(base), cache_dir=str(tmp_path / "cache"))
 
+    # Weights and config untouched; only the serving file the published dir lacked is filled.
     assert report == ServableReport(
-        status="already_servable", extras_keys=0, extras_bytes=0, copied_files=()
+        status="already_servable",
+        extras_keys=0,
+        extras_bytes=0,
+        copied_files=("preprocessor_config.json",),
     )
     assert (published / "config.json").read_text(encoding="utf-8") == before
     assert not (published / "model-serving-extras.safetensors").exists()
@@ -563,7 +581,7 @@ def test_a_text_model_publish_survives_the_base_dir_vanishing_after_the_first(
     _build_base(base)
     for step in (1, 2):
         published = tmp_path / f"step_{step}"
-        _build_published(published)
+        _build_published(published, extra_keys=_all_base_tensors())
         _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
         if step == 2:
             import foundationscale.agentic_rl.servable as servable_mod
@@ -604,7 +622,7 @@ def test_a_torn_base_config_snapshot_is_rebuilt_from_the_base_dir(tmp_path: Path
     _build_base(base)
     for step in (1, 2):
         published = tmp_path / f"step_{step}"
-        _build_published(published)
+        _build_published(published, extra_keys=_all_base_tensors())
         _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
         if step == 2:
             import foundationscale.agentic_rl.servable as servable_mod
@@ -628,10 +646,64 @@ def test_a_later_publish_survives_the_cache_and_base_both_vanishing(
     _build_base(base)
     for step in (1, 2):
         published = tmp_path / f"step_{step}"
-        _build_published(published)
+        _build_published(published, extra_keys=_all_base_tensors())
         _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
         if step == 2:
             base.rename(tmp_path / "base-stalled")
             cache.rename(tmp_path / "cache-stalled")
         report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
         assert report.status == "already_servable"
+
+
+def test_already_servable_fills_missing_processor_files_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gemma-4 publishes its base architecture but no processor_config.json; a cold vLLM
+    start then fails. The missing serving files are filled from the base (read once, never
+    overwriting a published copy)."""
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    monkeypatch.setattr(servable_mod, "_BASE_SERVING_FILES_MEMO", {})
+    base = tmp_path / "base"
+    published = tmp_path / "published"
+    _build_base(base)
+    _write_json(base / "processor_config.json", {"processor_class": "Gemma4Processor"})
+    (base / "chat_template.jinja").write_text("BASE TEMPLATE", encoding="utf-8")
+    _build_published(published, extra_keys=_all_base_tensors())
+    _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
+    (published / "chat_template.jinja").write_text("PUBLISHED", encoding="utf-8")
+
+    report = complete_for_serving(str(published), str(base), cache_dir=str(tmp_path / "cache"))
+
+    assert report.status == "already_servable" and report.extras_keys == 0
+    assert "processor_config.json" in report.copied_files
+    assert "chat_template.jinja" not in report.copied_files
+    assert json.loads((published / "processor_config.json").read_text())["processor_class"]
+    assert (published / "chat_template.jinja").read_text() == "PUBLISHED"  # never overwritten
+    # A second publish reads nothing from the base directory: the memo serves it.
+    (base / "processor_config.json").unlink()
+    second = tmp_path / "published2"
+    _build_published(second, extra_keys=_all_base_tensors())
+    _write_json(second / "config.json", {"architectures": _BASE_ARCHITECTURES})
+    again = complete_for_serving(str(second), str(base), cache_dir=str(tmp_path / "cache"))
+    assert "processor_config.json" in again.copied_files
+
+
+def test_same_architecture_missing_base_tensors_is_completed_from_the_base(
+    tmp_path: Path,
+) -> None:
+    """Gemma-4 E4B: the published config names the base architecture, but the checkpoint
+    lacks base tensors the HF model never holds (KV-sharing layers' k_norm). vLLM refuses a
+    cold start on it, so the missing tensors are served from the base."""
+    base = tmp_path / "base"
+    published = tmp_path / "published"
+    _build_base(base)
+    _build_published(published)
+    _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
+
+    report = complete_for_serving(str(published), str(base), cache_dir=str(tmp_path / "cache"))
+
+    assert report.status == "completed" and report.extras_keys == 2
+    index = json.loads((published / "model.safetensors.index.json").read_text())
+    assert set(index["weight_map"]) == {_LANG_EMBED, _LANG_HEAD, _VISION_PATCH, _VISION_BLOCK}
+    assert index["weight_map"][_LANG_EMBED] == "model.safetensors"  # trained values kept
