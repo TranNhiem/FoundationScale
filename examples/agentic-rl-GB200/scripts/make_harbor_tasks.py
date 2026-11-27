@@ -59,7 +59,11 @@ def build_context(task_dir: Path, work: Path) -> Path:
     shutil.copytree(task_dir / "environment", work, symlinks=True)
     shutil.copytree(task_dir / "tests", work / HIDDEN_DIR, symlinks=True)
     df = (task_dir / "environment" / "Dockerfile").read_text(encoding="utf-8")
-    (work / "Dockerfile").write_text(df.rstrip("\n") + f"\nCOPY {HIDDEN_DIR}/ /tests/\n", encoding="utf-8")
+    # The hidden tests sit in the build context, so an original broad `COPY . <dest>` also installs an UNSEALED copy
+    # (measured 2026-11-27: 114/811 gated Skill2Env images had /workspace/_fs_hidden_tests/{oracle,verify,test.sh}
+    # readable by the agent). After installing them at /tests, delete every other copy from the final rootfs.
+    scrub = f"RUN find / -xdev -path /tests -prune -o -type d -name {HIDDEN_DIR} -prune -exec rm -rf {{}} +"
+    (work / "Dockerfile").write_text(df.rstrip("\n") + f"\nCOPY {HIDDEN_DIR}/ /tests/\n{scrub}\n", encoding="utf-8")
     return work
 
 

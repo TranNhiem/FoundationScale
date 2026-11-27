@@ -232,3 +232,27 @@ def test_empty_model_command_is_a_failed_command_not_a_crash(tmp_path, command):
     asyncio.run(env.start())
     out = asyncio.run(env.execute(command))
     assert out.exit_code == 2 and "empty command" in out.stderr and not out.timed_out
+
+
+def test_build_context_scrubs_stray_hidden_test_copies(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "mht", Path(__file__).resolve().parents[2] / "examples/agentic-rl-GB200/scripts/make_harbor_tasks.py")
+    mht = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mht)
+    task = tmp_path / "task"
+    (task / "environment").mkdir(parents=True)
+    (task / "tests").mkdir()
+    (task / "tests" / "test.sh").write_text("echo hi\n", encoding="utf-8")
+    (task / "environment" / "Dockerfile").write_text("FROM x\nWORKDIR /workspace\nCOPY . /workspace\n", encoding="utf-8")
+    df = (mht.build_context(task, tmp_path / "ctx") / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    copy_at = df.index(f"COPY {mht.HIDDEN_DIR}/ /tests/")
+    assert df[copy_at + 1].startswith("RUN find / -xdev -path /tests -prune") and mht.HIDDEN_DIR in df[copy_at + 1]
+
+
+def test_fresh_mode_refuses_root_workdir(tmp_path):
+    env = _fresh_env(tmp_path, lambda root: Result())
+    env._config = type(env._config)(**{**env._config.__dict__, "workdir": "/"}) if hasattr(env._config, "__dict__") else env._config
+    if env._config.workdir == "/":
+        out = env._verify_sync()
+        assert out["swe_status"] == "error" and "non-root workdir" in out["swe_error"]

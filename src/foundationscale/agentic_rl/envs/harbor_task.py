@@ -125,6 +125,10 @@ class HarborTaskEnvironment(TaskSandboxEnvironment):
         return _read_rewards(self._sandbox, result, verify_mode="inplace")
 
     def _verify_fresh(self) -> dict[str, str]:
+        if self._config.workdir.rstrip("/") == "":
+            # copying "/" would replace the whole pristine rootfs with the agent's (tampered binaries included)
+            return {"swe_status": "error", "swe_error": "fresh verification needs a non-root workdir",
+                    "harbor_verify_mode": "fresh"}
         fresh = None
         try:
             fresh = self._fresh_sandbox()
@@ -135,6 +139,10 @@ class HarborTaskEnvironment(TaskSandboxEnvironment):
                 shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
             if src.is_dir():
                 shutil.copytree(src, dst, symlinks=True)
+            for name in REWARD_FILES:  # a reward planted inside the copied workdir must never be read back
+                planted = fresh.host_path(f"{REWARD_DIR}/{name}")
+                if planted.is_file() or planted.is_symlink():
+                    planted.unlink()
             result = fresh.exec(
                 self._config.test_cmd, cwd=self._config.workdir, env=dict(self._spec.env) or None,
                 timeout_s=self._config.test_timeout_s,
