@@ -19,7 +19,7 @@ from pathlib import Path
 
 from foundationscale.agentic_rl.cli import _HFChatTokenizer
 from foundationscale.agentic_rl.engines.vllm import VLLMClient
-from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
+from foundationscale.agentic_rl.envs.base import EnvInfraError, EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import EpisodeBudget, EpisodeTask, SamplingParams
 from foundationscale.agentic_rl.harness.native_tool_loop import NativeToolLoop
 from foundationscale.agentic_rl.rewards.swe import SweReward
@@ -28,6 +28,9 @@ from foundationscale.agentic_rl.tools import (
     QwenXmlToolCallParser,
     default_tools,
 )
+
+
+START_ATTEMPTS = 3
 
 
 async def evaluate(a: argparse.Namespace) -> dict:
@@ -62,8 +65,26 @@ async def evaluate(a: argparse.Namespace) -> dict:
                 uid=t["uid"], session_id=f"{t['uid']}#{k}", messages=tuple(t["messages"]),
                 metadata=t.get("metadata", {}),
             )  # fmt: skip
-            env = backend.create_for_task(spec, task, instance_id=task.session_id)
-            await env.start()
+            env = None
+            for attempt in range(START_ATTEMPTS):  # a transient sandbox-start fault must not kill the whole eval
+                env = backend.create_for_task(spec, task, instance_id=task.session_id)
+                try:
+                    await env.start()
+                    break
+                except EnvInfraError as exc:
+                    try:
+                        await env.close()
+                    except EnvInfraError as close_exc:
+                        print(f"[eval] {task.session_id}: close after failed start: {close_exc}"[:300], flush=True)
+                    env = None
+                    print(f"[eval] {task.session_id}: env start failed (attempt {attempt + 1}): {exc}"[:400], flush=True)
+                    await asyncio.sleep(5 * (attempt + 1))
+            if env is None:  # abstain: an unstarted episode is not a failed episode
+                if dump is not None:
+                    dump.write(json.dumps({"session": task.session_id, "reward": None,
+                                           "reason": "infra:env_start", "termination": "abstained"}) + "\n")
+                    dump.flush()
+                return None
             try:
                 out = await loop.run_episode(task, client=client, env=env, budget=budget)
                 report = await env.verify()
