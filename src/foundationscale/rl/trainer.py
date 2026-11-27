@@ -58,6 +58,7 @@ correctly tuned; or that any row survives scoring on any given step.
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 from contextlib import contextmanager
@@ -3127,6 +3128,24 @@ class RLTrainer:
         # weights -- the surrogate is the mean of centred advantages and reads
         # ~0 even when the gradient is large. Without the reward spread there
         # is no way to tell those two apart from the report alone.
+        # One line per step naming every loss component's contribution (e.g. the policy surrogate and an
+        # opt-in k3 KL term), so a run log shows what each declared term did -- None stays "unmeasured".
+        if getattr(ctx, "rank", 0) == 0:
+            print(
+                "[trainer:loss] "
+                + json.dumps(
+                    {
+                        "step": step,
+                        "loss": float(loss_output.loss),
+                        "components": {
+                            c.name: (None if c.contribution is None else float(c.contribution))
+                            for c in loss_output.components
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
         return StepReport(
             step=step,
             loss=loss_output,
