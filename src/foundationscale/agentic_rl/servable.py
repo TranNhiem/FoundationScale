@@ -324,6 +324,13 @@ def _require_settled_dir(path: Path, *, label: str, value: str, where: str) -> N
         )
 
 
+# In-process memo of base configs read in this process: a later publish then touches no file
+# for it. The on-disk snapshot below lives on the same shared filesystem as the base model, so a
+# stall there hid the snapshot too (is_file() swallows the error) and killed a GB200 run at
+# step 10 after the full backoff.
+_BASE_CONFIG_MEMO: dict[str, dict[str, object]] = {}
+
+
 def _base_config(
     base: Path, cache_root: Path, *, base_model_dir: str, where: str
 ) -> dict[str, object]:
@@ -333,11 +340,16 @@ def _base_config(
     then never reads it again, and a shared-filesystem stall on that path -- which killed two
     GB200 runs after a full backoff while the directory existed -- can no longer stop a run.
     The snapshot is keyed by the base path and written atomically (temp + rename)."""
+    memo = _BASE_CONFIG_MEMO.get(str(base))
+    if memo is not None:
+        return dict(memo)
     digest = hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
     snapshot = cache_root / f"base-config-{digest}.json"
     if snapshot.is_file():
         try:
-            return _read_json_object(snapshot, where=f"{where}: base config snapshot")
+            config = _read_json_object(snapshot, where=f"{where}: base config snapshot")
+            _BASE_CONFIG_MEMO[str(base)] = config
+            return dict(config)
         except ServableRefusal:
             pass  # a torn/invalid snapshot: rebuild it from the base directory below
     _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
@@ -346,7 +358,8 @@ def _base_config(
     tmp = snapshot.with_name(f"{snapshot.name}.tmp.{os.getpid()}")
     tmp.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
     tmp.replace(snapshot)
-    return config
+    _BASE_CONFIG_MEMO[str(base)] = config
+    return dict(config)
 
 
 def complete_for_serving(

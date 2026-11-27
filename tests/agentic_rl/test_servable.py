@@ -483,6 +483,7 @@ def _no_fs_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     import foundationscale.agentic_rl.servable as servable_mod
 
     monkeypatch.setattr(servable_mod, "_FS_RETRY_SLEEP_S", 0.0)
+    monkeypatch.setattr(servable_mod, "_BASE_CONFIG_MEMO", {})  # per-test isolation
 
 
 def test_directory_check_rides_out_a_transient_nfs_blip(
@@ -565,6 +566,9 @@ def test_a_text_model_publish_survives_the_base_dir_vanishing_after_the_first(
         _build_published(published)
         _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
         if step == 2:
+            import foundationscale.agentic_rl.servable as servable_mod
+
+            servable_mod._BASE_CONFIG_MEMO.clear()  # a new process: the disk snapshot must serve
             base.rename(tmp_path / "base-stalled")  # a shared-filesystem stall: ENOENT
         report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
         assert report.status == "already_servable"
@@ -603,6 +607,31 @@ def test_a_torn_base_config_snapshot_is_rebuilt_from_the_base_dir(tmp_path: Path
         _build_published(published)
         _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
         if step == 2:
+            import foundationscale.agentic_rl.servable as servable_mod
+
+            servable_mod._BASE_CONFIG_MEMO.clear()  # a new process: only the disk snapshot is left
             (next(cache.glob("base-config-*.json"))).write_text("{trunc", encoding="utf-8")
+        report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
+        assert report.status == "already_servable"
+
+
+def test_a_later_publish_survives_the_cache_and_base_both_vanishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A shared-filesystem stall hides the on-disk snapshot AND the base dir at once: the
+    # in-process memo must carry a text-model publish through it.
+    import foundationscale.agentic_rl.servable as servable_mod
+
+    monkeypatch.setattr(servable_mod, "_BASE_CONFIG_MEMO", {})
+    base = tmp_path / "base"
+    cache = tmp_path / "cache"
+    _build_base(base)
+    for step in (1, 2):
+        published = tmp_path / f"step_{step}"
+        _build_published(published)
+        _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
+        if step == 2:
+            base.rename(tmp_path / "base-stalled")
+            cache.rename(tmp_path / "cache-stalled")
         report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
         assert report.status == "already_servable"
