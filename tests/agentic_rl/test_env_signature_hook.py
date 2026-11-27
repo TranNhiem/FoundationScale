@@ -199,3 +199,19 @@ def test_clone_and_adopt_a_single_file_hidden_path(tmp_path: Path) -> None:
     fresh = HiddenVault(RootfsSandbox(fresh_root, []), spec, tmp_path / "vault2")
     fresh.adopt_sealed(tmp_path / "clone", ("/answer.txt",))
     assert fresh.sealed_manifest(content=True) == vault.sealed_manifest(content=True)
+
+
+def test_sealed_manifest_sees_a_hidden_file_mode_change(tmp_path: Path) -> None:
+    def manifest(mode: int, name: str, content: bool) -> str:
+        root = tmp_path / name / "root"
+        root.mkdir(parents=True)
+        (root / "answer.txt").write_text("42")
+        (root / "answer.txt").chmod(mode)
+        vault = HiddenVault(
+            RootfsSandbox(root, []), HiddenSpec(paths=("/answer.txt",)), tmp_path / name / "v"
+        )
+        vault.seal()
+        return vault.sealed_manifest(content=content)
+
+    for content in (False, True):
+        assert manifest(0o644, f"a{content}", content) != manifest(0o755, f"b{content}", content)

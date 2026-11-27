@@ -230,9 +230,12 @@ class HiddenVault:
             part = (
                 tree_manifest(target, content=content)
                 if target.is_dir()
-                else hashlib.sha256(target.read_bytes()).hexdigest()
-                if content
-                else str(target.stat().st_size)
+                else f"{target.stat().st_mode & 0o7777:o}:"
+                + (
+                    hashlib.sha256(target.read_bytes()).hexdigest()
+                    if content
+                    else str(target.stat().st_size)
+                )
             )
             digest.update(f"{container_path}\0{part}\n".encode())
         return digest.hexdigest()

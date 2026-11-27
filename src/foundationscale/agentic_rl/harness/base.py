@@ -513,6 +513,11 @@ class EpisodeCheckpoint:
         for name in ("cursor", "steps_used"):
             if _real_int(getattr(self, name), where=where, name=name) < 0:
                 raise HarnessRefusal(f"{where}: field {name!r} must be >= 0")
+        if self.cursor > len(self.messages):
+            raise HarnessRefusal(
+                f"{where}: field 'cursor' is {self.cursor} but only {len(self.messages)} "
+                f"message(s) exist: later observation renders would start at a wrong position"
+            )
         if (
             type(self.elapsed_s) is bool
             or not isinstance(self.elapsed_s, (int, float))

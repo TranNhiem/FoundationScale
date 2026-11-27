@@ -336,7 +336,10 @@ def _base_config(
     digest = hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:16]
     snapshot = cache_root / f"base-config-{digest}.json"
     if snapshot.is_file():
-        return _read_json_object(snapshot, where=f"{where}: base config snapshot")
+        try:
+            return _read_json_object(snapshot, where=f"{where}: base config snapshot")
+        except ServableRefusal:
+            pass  # a torn/invalid snapshot: rebuild it from the base directory below
     _require_settled_dir(base, label="base_model_dir", value=base_model_dir, where=where)
     config = _read_json_object(base / "config.json", where=f"{where}: base_model_dir")
     cache_root.mkdir(parents=True, exist_ok=True)

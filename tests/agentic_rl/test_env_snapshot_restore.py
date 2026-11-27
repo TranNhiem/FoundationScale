@@ -707,7 +707,9 @@ def test_deleting_or_reaping_a_snapshot_removes_its_retained_vault(tmp_path: Pat
     clock = [1000.0]
     store = SnapshotStore(
         tmp_path / "store-cleanup",
-        SnapshotLimits(max_bytes=1024 * 1024, total_bytes=8 * 1024 * 1024, ttl_s=10.0),
+        SnapshotLimits(
+            max_bytes=1024 * 1024, total_bytes=8 * 1024 * 1024, ttl_s=10.0, timeout_s=1.0
+        ),
         clock=lambda: clock[0],
         on_remove=sandbox_task.retained_vault_cleanup(vault_root),
     )
@@ -762,3 +764,48 @@ def test_retained_vault_cleanup_refuses_paths_outside_the_vault_root(tmp_path: P
             meta={},
         )
     )
+
+
+def test_snapshot_records_an_absolute_vault_clone_for_a_relative_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env, _, _ = _started_case(tmp_path, "relative")
+    monkeypatch.chdir(tmp_path)
+    record = asyncio.run(env.snapshot(_new_store(tmp_path), vault_root="retained-rel"))
+    assert Path(record.meta["vault_clone"]).is_absolute()
+
+
+def test_snapshot_removes_the_clone_when_the_store_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env, _, _ = _started_case(tmp_path, "store-refuses")
+    store = _new_store(tmp_path)
+
+    def refuse(**kwargs: object) -> SnapshotRecord:
+        raise SnapshotRefusal("refused by the store")
+
+    monkeypatch.setattr(store, "commit", refuse)
+    vault_root = tmp_path / "retained-refused"
+    with pytest.raises(EnvInfraError) as caught:
+        asyncio.run(env.snapshot(store, vault_root=vault_root))
+    assert caught.value.kind == "snapshot_failed"
+    assert list(vault_root.iterdir()) == []
+
+
+def test_restore_closes_the_env_when_leasing_raises_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env, _, _ = _started_case(tmp_path, "lease-src")
+    store = _new_store(tmp_path)
+    record = asyncio.run(env.snapshot(store, vault_root=tmp_path / "retained-lease"))
+    fresh, _, _, _ = _fresh_case(tmp_path, "lease-dst")
+
+    def broken(snapshot_id: str) -> SnapshotRecord:
+        raise OSError("ESTALE")
+
+    monkeypatch.setattr(store, "lease", broken)
+    with pytest.raises(EnvInfraError) as caught:
+        asyncio.run(fresh.restore(store, record.snapshot_id))
+    assert caught.value.kind == "snapshot_integrity"
+    with pytest.raises(EnvRefusal):
+        asyncio.run(fresh.execute("ls"))

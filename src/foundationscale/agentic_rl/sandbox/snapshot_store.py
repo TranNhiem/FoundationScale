@@ -90,6 +90,13 @@ class SnapshotLimits:
                     "legal values are finite, positive real numbers"
                 )
 
+        if self.ttl_s <= self.timeout_s:
+            # reap() deletes reservations older than ttl_s; one younger than an export's
+            # timeout may belong to an export still writing, whose quota would be freed early.
+            raise SnapshotRefusal(
+                f"field 'ttl_s' has value {self.ttl_s!r}; it must exceed timeout_s="
+                f"{self.timeout_s!r}, or reap() could delete a live export's reservation"
+            )
         if self.max_bytes > self.total_bytes:
             raise SnapshotRefusal(
                 f"field 'max_bytes' has value {self.max_bytes!r}; legal values are "
@@ -295,6 +302,8 @@ def rootless_lossy_entries(
         return any(parts[: len(prefix)] == prefix for prefix in exclude_prefixes)
 
     lossy: list[str] = []
+    if root_path.lstat().st_mode & (stat.S_ISUID | stat.S_ISGID):
+        lossy.append(".")  # the root directory's own bit is lost on extraction too
     for dirpath, dirnames, filenames in os.walk(
         root_path,
         topdown=True,
@@ -653,9 +662,13 @@ class SnapshotStore:
                     f"snapshot {snapshot_id!r}; legal value for deletion is False"
                 )
             self._descriptor_path(snapshot_id).unlink()
-            self._archive_path(snapshot_id).unlink(missing_ok=True)
-            if self._on_remove is not None:
-                self._on_remove(record)
+            try:
+                self._archive_path(snapshot_id).unlink(missing_ok=True)
+            finally:
+                # The descriptor is gone, so this is the only chance to release what the
+                # snapshot references (its retained hidden-test vault): run it regardless.
+                if self._on_remove is not None:
+                    self._on_remove(record)
 
     @staticmethod
     def _is_reapable_temporary_name(name: str) -> bool:
@@ -700,10 +713,12 @@ class SnapshotStore:
                 if now - record.created_at <= self.limits.ttl_s:
                     continue
                 self._descriptor_path(snapshot_id).unlink(missing_ok=True)
-                self._archive_path(snapshot_id).unlink(missing_ok=True)
                 removed.append(snapshot_id)
-                if self._on_remove is not None:
-                    self._on_remove(record)
+                try:
+                    self._archive_path(snapshot_id).unlink(missing_ok=True)
+                finally:
+                    if self._on_remove is not None:
+                        self._on_remove(record)
 
             for path in entries:
                 name = path.name

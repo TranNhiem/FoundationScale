@@ -612,7 +612,8 @@ class TaskSandboxEnvironment:
                 "TaskSandboxEnvironment.snapshot: the boundary signature is unmeasured, so a "
                 "restore could not be checked against it",
             )
-        clone_dir = vault_root / f"vault-{secrets.token_hex(16)}"
+        # Absolute, so restore() and retained_vault_cleanup() find it from any working dir.
+        clone_dir = vault_root.resolve() / f"vault-{secrets.token_hex(16)}"
         try:
             held = clone(clone_dir)
             meta = {
@@ -635,6 +636,7 @@ class TaskSandboxEnvironment:
             OSError,
             SnapshotIntegrityError,
             SnapshotQuotaError,
+            SnapshotRefusal,
         ) as exc:
             shutil.rmtree(clone_dir, ignore_errors=True)
             raise EnvInfraError(
@@ -672,7 +674,7 @@ class TaskSandboxEnvironment:
             )
         try:
             record = store.lease(snapshot_id)
-        except (SnapshotRefusal, SnapshotIntegrityError) as exc:
+        except (SnapshotRefusal, SnapshotIntegrityError, OSError) as exc:
             self._closed = True
             raise EnvInfraError(
                 "snapshot_integrity",

@@ -394,7 +394,7 @@ def test_lease_blocks_delete_and_reap(tmp_path: Path) -> None:
     clock = FakeClock(100.0)
     store = SnapshotStore(
         root,
-        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=10.0),
+        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=10.0, timeout_s=1.0),
         clock=clock,
     )
     record = store.commit(export=make_export(b"archive"), env_signature="sig")
@@ -418,7 +418,7 @@ def test_release_allows_reap(tmp_path: Path) -> None:
     clock = FakeClock(100.0)
     store = SnapshotStore(
         root,
-        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=10.0),
+        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=10.0, timeout_s=1.0),
         clock=clock,
     )
     record = store.commit(export=make_export(b"archive"), env_signature="sig")
@@ -458,7 +458,7 @@ def test_reap_removes_stale_temp_and_orphans_but_keeps_fresh_and_leased(
     clock = FakeClock(1000.0)
     store = SnapshotStore(
         root,
-        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=50.0),
+        SnapshotLimits(max_bytes=128, total_bytes=1024, ttl_s=50.0, timeout_s=1.0),
         clock=clock,
     )
     expired = store.commit(export=make_export(b"expired"), env_signature="old")
@@ -662,3 +662,41 @@ def test_archive_path_refuses_a_missing_archive(tmp_path: Path) -> None:
     (tmp_path / "store" / f"{record.snapshot_id}.sqsh").unlink()
     with pytest.raises(SnapshotIntegrityError, match="missing"):
         store.archive_path(record.snapshot_id)
+
+
+# --- fixes from the 2026-11-27 review ---------------------------------------------------
+
+
+def test_limits_refuse_a_ttl_not_exceeding_the_export_timeout() -> None:
+    with pytest.raises(SnapshotRefusal, match="ttl_s"):
+        SnapshotLimits(ttl_s=300.0, timeout_s=300.0)
+
+
+def test_rootless_lossy_entries_reports_a_setgid_root(tmp_path: Path) -> None:
+    root = tmp_path / "rootfs"
+    root.mkdir()
+    root.chmod(0o2755)
+    assert rootless_lossy_entries(root) == (".",)
+
+
+def test_delete_releases_references_even_if_the_archive_unlink_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    removed: list[str] = []
+    store = SnapshotStore(
+        tmp_path / "store",
+        SnapshotLimits(max_bytes=64, total_bytes=1024),
+        on_remove=lambda record: removed.append(record.snapshot_id),
+    )
+    record = store.commit(export=lambda path, timeout: path.write_bytes(b"abc"), env_signature="e")
+    real_unlink = Path.unlink
+
+    def failing_unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.suffix == ".sqsh":
+            raise OSError("archive unlink failed")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    with pytest.raises(OSError, match="archive unlink failed"):
+        store.delete(record.snapshot_id)
+    assert removed == [record.snapshot_id]

@@ -592,3 +592,17 @@ def test_completing_a_multimodal_checkpoint_still_needs_the_base_dir(tmp_path: P
     _build_published(second)
     with pytest.raises(ServableRefusal, match="base_model_dir .* is not a directory"):
         complete_for_serving(str(second), str(base), cache_dir=str(cache))
+
+
+def test_a_torn_base_config_snapshot_is_rebuilt_from_the_base_dir(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    cache = tmp_path / "cache"
+    _build_base(base)
+    for step in (1, 2):
+        published = tmp_path / f"step_{step}"
+        _build_published(published)
+        _write_json(published / "config.json", {"architectures": _BASE_ARCHITECTURES})
+        if step == 2:
+            (next(cache.glob("base-config-*.json"))).write_text("{trunc", encoding="utf-8")
+        report = complete_for_serving(str(published), str(base), cache_dir=str(cache))
+        assert report.status == "already_servable"

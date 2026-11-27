@@ -649,3 +649,9 @@ def test_trajectory_v2_refuses_to_lift_an_uncredited_fork() -> None:
         trajectory_v2.from_v1(
             _as_trajectory(outcome), model=unused, harness=unused, env=unused, gateway=unused
         )
+
+
+def test_checkpoint_refuses_a_cursor_past_its_messages() -> None:
+    checkpoint = _parent_episode().checkpoint
+    with pytest.raises(HarnessRefusal, match="cursor"):
+        dataclasses.replace(checkpoint, cursor=len(checkpoint.messages) + 1)
