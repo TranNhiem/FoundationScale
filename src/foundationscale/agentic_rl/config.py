@@ -429,7 +429,7 @@ class JudgeConfig:
 class RewardConfig:
     # Required for kind="music" (the scorer converts ABC with it); unused (None) otherwise.
     abc2midi_bin: str | None
-    kind: Literal["music", "math", "swe", "judge"] = "music"
+    kind: Literal["music", "math", "swe", "judge", "science"] = "music"
     timeout_s: float = 60.0
     # Required for kind="judge"; None otherwise.
     judge: JudgeConfig | None = None
@@ -1428,10 +1428,10 @@ def _build_reward(
         required=False,
         provenance=provenance,
     )
-    if kind not in ("music", "math", "swe", "judge"):
+    if kind not in ("music", "math", "swe", "judge", "science"):
         raise AgenticConfigRefusal(
             f"reward.kind: is {_described(kind)}, but this plane builds only 'music', 'math', "
-            f"'swe' and 'judge'"
+            f"'swe', 'judge' and 'science'"
         )
     abc2midi_bin = _resolve_scalar(
         dotted_key="reward.abc2midi_bin",

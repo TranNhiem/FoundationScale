@@ -18,6 +18,7 @@ from foundationscale.agentic_rl.contracts import SegmentKind
 from foundationscale.agentic_rl.harness.base import EpisodeOutcome, EpisodeTask
 from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
+from foundationscale.agentic_rl.rewards.science import ScienceAnswerReward
 
 __all__ = (
     "MusicRewardFn",
@@ -185,3 +186,45 @@ class MathRewardFn:
             submitted=outcome.submitted_answer is not None,
         )
         return RewardVerdict(math_score.value, math_score.note)
+
+
+@dataclass(frozen=True)
+class ScienceRewardFn:
+    """Adapter wrapping ``rewards.science.ScienceAnswerReward`` behind ``RewardFn``.
+
+    The checker and its reference come from ``task.metadata`` (``checker`` plus the fields that
+    checker reads -- see ``rewards.science``). Scores ``outcome.submitted_answer`` when the
+    episode submitted one, else the final generated ASSISTANT turn's text. An episode with no
+    assistant turn is UNMEASURED (value None), as in ``MathRewardFn``; a malformed task scores
+    0.0 with a ``bad_task:<field>`` note, so a broken task file shows up in the reward notes.
+    """
+
+    scorer: ScienceAnswerReward
+    decode: Callable[[Sequence[int]], str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scorer, ScienceAnswerReward):
+            raise RewardFnRefusal(
+                f"ScienceRewardFn: field 'scorer' is {_described(self.scorer)}, not a "
+                f"ScienceAnswerReward"
+            )
+        if not callable(self.decode):
+            raise RewardFnRefusal(
+                f"ScienceRewardFn: field 'decode' is {_described(self.decode)}: it must be callable"
+            )
+
+    async def score(self, task: EpisodeTask, outcome: EpisodeOutcome) -> RewardVerdict:
+        text: str | None
+        if outcome.submitted_answer is not None:
+            text = outcome.submitted_answer
+        else:
+            text = _final_assistant_text(outcome, decode=self.decode)
+        if text is None:
+            return RewardVerdict(None, "no_assistant_turn")
+        science_score = await asyncio.to_thread(
+            self.scorer.score,
+            text,
+            task.metadata,
+            submitted=outcome.submitted_answer is not None,
+        )
+        return RewardVerdict(science_score.value, science_score.note)

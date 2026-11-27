@@ -57,7 +57,7 @@ from foundationscale.agentic_rl.engines.fleet import EngineFleet, EngineServer, 
 from foundationscale.agentic_rl.envs.base import EnvSpec, get_env_backend
 from foundationscale.agentic_rl.harness.base import ChatTokenizer, EpisodeBudget, SamplingParams
 from foundationscale.agentic_rl.harness.native_tool_loop import CompactionPolicy, NativeToolLoop
-from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn
+from foundationscale.agentic_rl.rewards.base import MathRewardFn, MusicRewardFn, ScienceRewardFn
 from foundationscale.agentic_rl.rewards.judge import (
     JudgeRewardFn,
     OpenAIJudgeClient,
@@ -66,6 +66,7 @@ from foundationscale.agentic_rl.rewards.judge import (
 )
 from foundationscale.agentic_rl.rewards.math import MathAnswerReward
 from foundationscale.agentic_rl.rewards.music import MusicReward
+from foundationscale.agentic_rl.rewards.science import ScienceAnswerReward
 from foundationscale.agentic_rl.rewards.swe import SweReward
 from foundationscale.agentic_rl.rollout_host import RolloutHost
 from foundationscale.agentic_rl.stability import (
@@ -282,12 +283,14 @@ def _judge_setup(config: AgenticRLConfig) -> _JudgeSetup:
 
 def _reward_scorer(
     config: AgenticRLConfig,
-) -> MusicReward | MathAnswerReward | SweReward | _JudgeSetup:
+) -> MusicReward | MathAnswerReward | ScienceAnswerReward | SweReward | _JudgeSetup:
     """The scorer ``reward.kind`` names (built without a GPU, so ``--dry-run`` checks it)."""
     if config.reward.kind == "judge":
         return _judge_setup(config)
     if config.reward.kind == "math":
         return MathAnswerReward()
+    if config.reward.kind == "science":
+        return ScienceAnswerReward()
     if config.reward.kind == "swe":
         return SweReward(tamper=config.reward.swe_tamper)
     return _music_reward(config)
@@ -390,7 +393,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
     )
     fleet = EngineFleet(servers=(EngineServer(_engine_server_spec(config)),))
     scorer = _reward_scorer(config)
-    reward: MusicRewardFn | MathRewardFn | SweReward | JudgeRewardFn
+    reward: MusicRewardFn | MathRewardFn | ScienceRewardFn | SweReward | JudgeRewardFn
     if isinstance(scorer, _JudgeSetup):
         judge = config.reward.judge
         assert judge is not None
@@ -405,6 +408,8 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         reward = scorer  # reads the verify() report in outcome.metadata; needs no decoding
     elif isinstance(scorer, MathAnswerReward):
         reward = MathRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
+    elif isinstance(scorer, ScienceAnswerReward):
+        reward = ScienceRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
     else:
         reward = MusicRewardFn(scorer=scorer, decode=chat_tokenizer.decode)
     # save_fn stays None: RolloutHost.publish() builds its OWN save around the
