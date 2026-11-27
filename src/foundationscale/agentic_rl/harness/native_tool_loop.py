@@ -157,6 +157,13 @@ def _truncate_observation(text: str, max_chars: int) -> str:
 
 
 COMPACTION_MODES = ("external", "policy")
+
+
+def _response_tokens(trace: TokenTrace) -> int:
+    """Tokens in the trace's response region (generated + observations) so far."""
+    return len(trace.token_ids) - trace.prompt_len
+
+
 SUMMARIZE_INSTRUCTION = (
     "[context limit] Summarize everything needed to finish the task: the goal, what you have "
     "done and found, files changed, and the next step. Reply with the summary only, no tool calls."
@@ -179,6 +186,10 @@ class CompactionPolicy:
     keep_turns: int = 2
     max_segments: int = 4
     summary_max_tokens: int = 1024
+    # Episode-wide cap on response-region tokens across ALL segments plus external summary
+    # tokens (None = uncapped). Set it to the control arm's max_response_tokens so compaction
+    # is compared at the SAME total token budget, not handed a fresh budget per segment.
+    episode_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in COMPACTION_MODES:
@@ -197,6 +208,13 @@ class CompactionPolicy:
                 raise NativeToolLoopRefusal(
                     f"CompactionPolicy: field {name!r} is {_described(value)}: an int >= {low}"
                 )
+        if self.episode_tokens is not None and (
+            type(self.episode_tokens) is not int or self.episode_tokens < 1
+        ):
+            raise NativeToolLoopRefusal(
+                f"CompactionPolicy: field 'episode_tokens' is {_described(self.episode_tokens)}: "
+                f"None or an int >= 1"
+            )
 
 
 def _compacted_messages(
@@ -420,6 +438,7 @@ class NativeToolLoop(HarnessAdapter):
                 "would silently drop them from training"
             )
         closed: list[SegmentOutcome] = []
+        spent = 0  # response tokens of closed segments + external summary tokens (episode cap)
         summarizing = False  # policy mode: the next generation is the summary turn
         observation_before_instruction = ""
 
@@ -433,6 +452,14 @@ class NativeToolLoop(HarnessAdapter):
             except ResponseBudgetExhausted:
                 termination = Termination.LENGTH
                 break
+            episode_left = (
+                None
+                if policy is None or policy.episode_tokens is None
+                else policy.episode_tokens - spent - _response_tokens(trace)
+            )
+            if episode_left is not None and episode_left < 1:
+                termination = Termination.LENGTH  # the episode-wide token budget is spent
+                break
 
             if (
                 policy is not None
@@ -443,11 +470,14 @@ class NativeToolLoop(HarnessAdapter):
                 and len(trace.token_ids) >= policy.trigger_tokens
             ):
                 try:
-                    summary = await self._external_summary(client, messages, tools_schema)
+                    summary, summary_tokens = await self._external_summary(
+                        client, messages, tools_schema, episode_left
+                    )
                 except EngineInfraError as exc:
                     termination = Termination.INFRA
                     abstention_reason = f"infra:engine_{exc.kind}"
                     break
+                spent += _response_tokens(trace) + summary_tokens
                 closed.append(
                     SegmentOutcome(prompt_turns=prompt_turns, trajectory_turns=tuple(turns))
                 )
@@ -455,6 +485,11 @@ class NativeToolLoop(HarnessAdapter):
                 trace = TokenTrace(response_length=budget.max_response_tokens)
                 turns = []
                 prompt_turns, turn_index, cursor = self._build_prompt(messages, tools_schema, trace)
+                if policy.episode_tokens is not None:
+                    episode_left = policy.episode_tokens - spent
+                    if episode_left < 1:
+                        termination = Termination.LENGTH
+                        break
 
             if checkpoint_hook is not None and not (resume is not None and _step == first_step):
                 await checkpoint_hook(
@@ -470,6 +505,8 @@ class NativeToolLoop(HarnessAdapter):
                 )
 
             effective_max_new = min(self.sampling.max_new_tokens, trace.remaining_budget())
+            if episode_left is not None:
+                effective_max_new = min(effective_max_new, episode_left)
             step_sampling = dataclasses.replace(self.sampling, max_new_tokens=effective_max_new)
             gen_index = turn_index  # the index the assistant turn of this generation gets
             if observer is not None:
@@ -530,6 +567,7 @@ class NativeToolLoop(HarnessAdapter):
                 # the closing segment; any tool call in it is not executed.
                 summarizing = False
                 assert policy is not None  # summarizing is only ever set under a policy
+                spent += _response_tokens(trace)
                 closed.append(
                     SegmentOutcome(prompt_turns=prompt_turns, trajectory_turns=tuple(turns))
                 )
@@ -666,7 +704,8 @@ class NativeToolLoop(HarnessAdapter):
         client: GenerationClient,
         messages: Sequence[Mapping[str, Any]],
         tools_schema: tuple[Mapping[str, Any], ...],
-    ) -> str:
+        episode_left: int | None = None,
+    ) -> tuple[str, int]:
         """ARL-17 external mode: one off-the-record generation over the current chat plus the
         summarize instruction. Nothing here enters the trace or a turn."""
         assert self.compaction is not None
@@ -676,8 +715,9 @@ class NativeToolLoop(HarnessAdapter):
             tools_schema,
             add_generation_prompt=True,
         )
-        sampling = dataclasses.replace(
-            self.sampling, max_new_tokens=self.compaction.summary_max_tokens
-        )
+        limit = self.compaction.summary_max_tokens
+        if episode_left is not None:
+            limit = max(1, min(limit, episode_left))  # summary tokens come out of the same budget
+        sampling = dataclasses.replace(self.sampling, max_new_tokens=limit)
         generation = await client.generate(tuple(context), sampling)
-        return self.parser.parse(generation.text)[1]
+        return self.parser.parse(generation.text)[1], len(generation.token_ids)

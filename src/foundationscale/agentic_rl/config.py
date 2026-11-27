@@ -340,6 +340,8 @@ class HarnessConfig:
     compaction_trigger_tokens: int = 24000
     compaction_keep_turns: int = 2
     compaction_max_segments: int = 4
+    # Episode-wide response-token cap across segments (0 = uncapped); see CompactionPolicy.
+    compaction_episode_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -998,6 +1000,7 @@ def _build_harness(
                 "compaction_trigger_tokens",
                 "compaction_keep_turns",
                 "compaction_max_segments",
+                "compaction_episode_tokens",
             }
         ),
         section="harness",
@@ -1066,6 +1069,7 @@ def _build_harness(
         ("compaction_trigger_tokens", 24000, 1),
         ("compaction_keep_turns", 2, 0),
         ("compaction_max_segments", 4, 2),
+        ("compaction_episode_tokens", 0, 0),
     ):
         value = _resolve_scalar(
             dotted_key=f"harness.{key}",
@@ -1088,6 +1092,7 @@ def _build_harness(
         compaction_trigger_tokens=limits["compaction_trigger_tokens"],
         compaction_keep_turns=limits["compaction_keep_turns"],
         compaction_max_segments=limits["compaction_max_segments"],
+        compaction_episode_tokens=limits["compaction_episode_tokens"],
     )
 
 

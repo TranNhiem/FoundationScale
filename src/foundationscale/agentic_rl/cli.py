@@ -384,6 +384,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
                 trigger_tokens=config.harness.compaction_trigger_tokens,
                 keep_turns=config.harness.compaction_keep_turns,
                 max_segments=config.harness.compaction_max_segments,
+                episode_tokens=config.harness.compaction_episode_tokens or None,
             )
         ),
     )

@@ -499,3 +499,59 @@ def test_checkpoint_hook_with_compaction_is_refused() -> None:
                 checkpoint_hook=capture,
             )
         )
+
+
+def test_episode_token_cap_bounds_the_whole_episode_including_summaries() -> None:
+    # Control-matched budget: the cap covers every segment's response tokens AND the external
+    # summary tokens, so compaction never gets a fresh budget per segment.
+    policy = CompactionPolicy(
+        mode="external", trigger_tokens=1, keep_turns=0, max_segments=8, episode_tokens=12
+    )
+    client = RecordingClient([_generation(_bash_call_text(f"echo {i}")) for i in range(20)])
+    outcome = _run(
+        _loop(compaction=policy),
+        _task(),
+        client,
+        FakeEnvironment(execute_fn=lambda command: _exec_result("ok\n")),
+        _budget(step_limit=20),
+    )
+    assert outcome.termination is Termination.LENGTH
+    assert len(client.generations) < 20  # the cap, not the step limit, ended the episode
+    response = sum(
+        len(t.token_ids) for seg in (*outcome.segments, outcome) for t in seg.trajectory_turns
+    )
+    summary_tokens = sum(len(g.token_ids) for g in client.generations) - sum(
+        len(t.token_ids)
+        for seg in (*outcome.segments, outcome)
+        for t in seg.trajectory_turns
+        if t.generated
+    )
+    assert response + summary_tokens >= 12  # the budget really was consumed
+
+
+def test_episode_tokens_is_validated() -> None:
+    for bad in (0, -3, True, 1.5):
+        with pytest.raises(NativeToolLoopRefusal, match="episode_tokens"):
+            CompactionPolicy(mode="external", trigger_tokens=1, episode_tokens=bad)  # type: ignore[arg-type]
+
+
+def test_a_summary_that_spends_the_rest_of_the_episode_budget_ends_it() -> None:
+    first = _generation(_bash_call_text("echo 0"))
+    long_summary = _generation("summary " * 40)
+    policy = CompactionPolicy(
+        mode="external",
+        trigger_tokens=1,
+        keep_turns=0,
+        max_segments=8,
+        episode_tokens=len(first.token_ids) + 8,
+    )
+    client = RecordingClient([first, long_summary, _generation(_submit_call_text("x"))])
+    outcome = _run(
+        _loop(compaction=policy),
+        _task(),
+        client,
+        FakeEnvironment(execute_fn=lambda command: _exec_result("ok\n")),
+        _budget(step_limit=10),
+    )
+    assert outcome.termination is Termination.LENGTH
+    assert len(client.generations) == 2  # the policy never generated after the summary
