@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import shutil
 import sys
@@ -62,6 +63,20 @@ async def episode(task: EpisodeTask, solution: Path | None, idx: int) -> dict:
     return out
 
 
+def task_fingerprint(task_dir: Path) -> str:
+    """sha256 over every file under the task dir (environment, tests, solution): what the image and verdict depend on."""
+    h = hashlib.sha256()
+    for f in sorted(p for p in task_dir.rglob("*") if p.is_file()):
+        h.update(str(f.relative_to(task_dir)).encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def reusable(uid: str, result: dict, tasks_root: Path) -> bool:
+    """A stored verdict is reused only when the task bytes it was measured on are unchanged."""
+    d = tasks_root / uid
+    return d.is_dir() and result.get("fingerprint") == task_fingerprint(d)
+
+
 async def gate(task: EpisodeTask, tasks_root: Path, sem: asyncio.Semaphore, log: Path | None = None) -> tuple[str, dict]:
     async with sem:
         nop = await episode(task, None, 0)
@@ -71,7 +86,7 @@ async def gate(task: EpisodeTask, tasks_root: Path, sem: asyncio.Semaphore, log:
     else:
         status = "PASS" if oracle["reward"] == 1.0 and nop["reward"] == 0.0 else "RED"
     print(task.uid, status, oracle.get("reward"), nop.get("reward"), flush=True)
-    result = {"status": status, "oracle": oracle, "nop": nop}
+    result = {"status": status, "oracle": oracle, "nop": nop, "fingerprint": task_fingerprint(tasks_root / task.uid)}
     if log is not None:  # one line per finished task: a crash or kill never loses finished work
         with log.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"uid": task.uid, **result}) + "\n")
@@ -88,8 +103,10 @@ async def run(args: argparse.Namespace) -> dict:
         for line in log.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 r = json.loads(line)
-                done[r.pop("uid")] = r
-        print(f"resuming: {len(done)} task(s) already gated", flush=True)
+                uid = r.pop("uid")
+                if reusable(uid, r, args.tasks_root):
+                    done[uid] = r
+        print(f"resuming: {len(done)} task(s) already gated on unchanged bytes", flush=True)
     sem = asyncio.Semaphore(args.workers)
     fresh = await asyncio.gather(*(gate(t, args.tasks_root, sem, log) for t in tasks if t.uid not in done))
     return {**done, **dict(fresh)}
@@ -132,6 +149,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.from_gate:
         results = json.loads(args.from_gate.read_text(encoding="utf-8"))
+        for uid, r in results.items():  # a verdict measured on other bytes is not evidence for these
+            if r.get("status") == "PASS" and not reusable(uid, r, args.tasks_root):
+                results[uid] = {**r, "status": "UNMEASURED", "stale": "task bytes changed since gating"}
     else:
         results = asyncio.run(run(args))
         args.out.write_text(json.dumps(results, indent=1, sort_keys=True), encoding="utf-8")
