@@ -45,7 +45,7 @@ def valid_record_json(snapshot_id: str) -> dict[str, object]:
         "archive_sha256": "a" * 64,
         "env_signature": "test-signature",
         "created_at": 123.5,
-        "leased": False,
+        "leases": 0,
         "meta": {"team": "rl"},
     }
 
@@ -102,7 +102,7 @@ def test_snapshot_record_json_round_trip_and_meta_copy() -> None:
         archive_sha256="a" * 64,
         env_signature="test-signature",
         created_at=123.5,
-        leased=False,
+        leases=0,
         meta=metadata,
     )
     metadata["team"] = "changed"
@@ -130,7 +130,7 @@ def test_snapshot_record_from_json_rejects_non_mappings(raw: object) -> None:
         "archive_sha256",
         "env_signature",
         "created_at",
-        "leased",
+        "leases",
         "meta",
     ],
 )
@@ -149,7 +149,7 @@ def test_snapshot_record_from_json_requires_every_field(field: str) -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("schema", "fs.env_snapshot/v2"),
+        ("schema", "fs.env_snapshot/v1"),
         ("snapshot_id", "../escape"),
         ("snapshot_id", "snap_not_hex"),
         ("archive_bytes", True),
@@ -165,8 +165,9 @@ def test_snapshot_record_from_json_requires_every_field(field: str) -> None:
         ("created_at", float("nan")),
         ("created_at", float("inf")),
         ("created_at", "yesterday"),
-        ("leased", 0),
-        ("leased", "false"),
+        ("leases", -1),
+        ("leases", "1"),
+        ("leases", True),
         ("meta", []),
         ("meta", {"team": 7}),
         ("meta", {7: "rl"}),
@@ -700,3 +701,39 @@ def test_delete_releases_references_even_if_the_archive_unlink_fails(
     with pytest.raises(OSError, match="archive unlink failed"):
         store.delete(record.snapshot_id)
     assert removed == [record.snapshot_id]
+
+
+def test_concurrent_leases_are_counted(tmp_path: Path) -> None:
+    store = SnapshotStore(tmp_path / "store", SnapshotLimits(max_bytes=64, total_bytes=1024))
+    record = store.commit(export=lambda path, timeout: path.write_bytes(b"x"), env_signature="e")
+    store.lease(record.snapshot_id)
+    store.lease(record.snapshot_id)  # a second concurrent restore
+    assert store.release(record.snapshot_id).leased is True  # one holder still protects it
+    with pytest.raises(SnapshotRefusal, match="leased"):
+        store.delete(record.snapshot_id)
+    assert store.release(record.snapshot_id).leases == 0
+    with pytest.raises(SnapshotRefusal, match="no lease"):
+        store.release(record.snapshot_id)
+
+
+def test_a_store_on_a_shared_filesystem_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import foundationscale.agentic_rl.sandbox.snapshot_store as module
+
+    monkeypatch.setattr(module, "_filesystem_type", lambda path: "wekafs")
+    with pytest.raises(SnapshotRefusal, match="shared filesystem"):
+        SnapshotStore(tmp_path / "shared")
+    SnapshotStore(tmp_path / "shared-ok", allow_shared_fs=True)
+
+
+def test_filesystem_type_reads_proc_mounts() -> None:
+    import foundationscale.agentic_rl.sandbox.snapshot_store as module
+
+    assert module._filesystem_type(Path("/")) not in ("", None)
+    assert module._filesystem_type(Path("/proc/self")) == "proc"
+
+
+def test_max_concurrent_io_is_validated() -> None:
+    with pytest.raises(SnapshotRefusal, match="max_concurrent_io"):
+        SnapshotLimits(max_concurrent_io=0)

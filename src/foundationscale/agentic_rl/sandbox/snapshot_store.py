@@ -22,6 +22,7 @@ import re
 import secrets
 import stat
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -30,7 +31,7 @@ from numbers import Real
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-SNAPSHOT_SCHEMA = "fs.env_snapshot/v1"
+SNAPSHOT_SCHEMA = "fs.env_snapshot/v2"  # v2: a lease COUNT (was a boolean)
 
 _ID_RE = re.compile(r"^snap_[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -66,6 +67,9 @@ class SnapshotLimits:
     total_bytes: int = 64 * 1024**3
     timeout_s: float = 300.0
     ttl_s: float = 86400.0
+    # Admission control: at most this many exports / archive hashes at once per store, so many
+    # concurrent forks cannot saturate disk and network I/O.
+    max_concurrent_io: int = 2
 
     def __post_init__(self) -> None:
         for field_name, value in (
@@ -90,6 +94,10 @@ class SnapshotLimits:
                     "legal values are finite, positive real numbers"
                 )
 
+        if type(self.max_concurrent_io) is not int or self.max_concurrent_io < 1:
+            raise SnapshotRefusal(
+                f"field 'max_concurrent_io' has value {self.max_concurrent_io!r}; an int >= 1"
+            )
         if self.ttl_s <= self.timeout_s:
             # reap() deletes reservations older than ttl_s; one younger than an export's
             # timeout may belong to an export still writing, whose quota would be freed early.
@@ -134,11 +142,17 @@ class SnapshotRecord:
     archive_sha256: str
     env_signature: str
     created_at: float
-    leased: bool
+    leases: int
     meta: Mapping[str, str]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "meta", dict(self.meta))
+
+    @property
+    def leased(self) -> bool:
+        """True while any holder has the snapshot leased (a count: concurrent restores of one
+        snapshot each hold their own lease, so one release cannot unprotect the others)."""
+        return self.leases > 0
 
     def to_json(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -148,7 +162,7 @@ class SnapshotRecord:
             "archive_sha256": self.archive_sha256,
             "env_signature": self.env_signature,
             "created_at": self.created_at,
-            "leased": self.leased,
+            "leases": self.leases,
             "meta": dict(self.meta),
         }
         return payload
@@ -238,13 +252,13 @@ class SnapshotRecord:
                 "legal values are finite real numbers",
             )
 
-        leased = _required_field(data, "leased", where=where)
-        if not isinstance(leased, bool):
+        leases = _required_field(data, "leases", where=where)
+        if type(leases) is not int or leases < 0:
             raise _integrity_error(
                 where,
-                "leased",
-                leased,
-                "legal values are true and false",
+                "leases",
+                leases,
+                "legal values are ints >= 0",
             )
 
         raw_meta = _required_field(data, "meta", where=where)
@@ -272,9 +286,47 @@ class SnapshotRecord:
             archive_sha256=archive_sha256,
             env_signature=env_signature,
             created_at=created_at_value,
-            leased=leased,
+            leases=leases,
             meta=meta,
         )
+
+
+_SHARED_FS_TYPES = frozenset(
+    {
+        "nfs",
+        "nfs4",
+        "lustre",
+        "gpfs",
+        "cifs",
+        "smb3",
+        "fuse.sshfs",
+        "beegfs",
+        "ceph",
+        "wekafs",
+        "glusterfs",
+        "fuse.glusterfs",
+    }
+)
+
+
+def _filesystem_type(path: Path) -> str:
+    """The filesystem type of ``path``'s mount (longest /proc/mounts prefix), or "unknown"
+    when that cannot be read -- which never blocks a store."""
+    try:
+        resolved = os.path.realpath(path)
+        best, best_type = "", "unknown"
+        with Path("/proc/mounts").open(encoding="utf-8") as mounts:
+            for line in mounts:
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                point = fields[1].replace("\\040", " ")
+                prefix = point.rstrip("/") + "/"
+                if (resolved == point or resolved.startswith(prefix)) and len(point) > len(best):
+                    best, best_type = point, fields[2]
+        return best_type
+    except OSError:
+        return "unknown"
 
 
 def _raise_walk_error(error: OSError) -> None:
@@ -361,6 +413,7 @@ class SnapshotStore:
         *,
         clock: Callable[[], float] = time.time,
         on_remove: Callable[[SnapshotRecord], None] | None = None,
+        allow_shared_fs: bool = False,
     ) -> None:
         """``on_remove`` runs after a committed snapshot is uncommitted by ``delete()`` or
         ``reap()`` (descriptor gone, under the store lock) to release what the snapshot
@@ -372,10 +425,18 @@ class SnapshotStore:
                 f"field 'root' has value {str(root_path)!r}; legal values are absolute paths"
             )
         root_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fstype = _filesystem_type(root_path)
+        if fstype in _SHARED_FS_TYPES and not allow_shared_fs:
+            raise SnapshotRefusal(
+                f"field 'root' is {str(root_path)!r} on a shared filesystem ({fstype}): flock, "
+                f"rename/fsync visibility and quota reservations are not reliable across nodes "
+                f"there; use a node-local store, or pass allow_shared_fs=True deliberately"
+            )
         self.root = root_path
         self.limits = limits if limits is not None else SnapshotLimits()
         self._clock = clock
         self._on_remove = on_remove
+        self._io = threading.BoundedSemaphore(self.limits.max_concurrent_io)
 
     def _archive_path(self, snapshot_id: str) -> Path:
         return self.root / f"{snapshot_id}.sqsh"
@@ -520,7 +581,8 @@ class SnapshotStore:
 
         descriptor_committed = False
         try:
-            export(temporary, self.limits.timeout_s)
+            with self._io:
+                export(temporary, self.limits.timeout_s)
 
             try:
                 archive_stat = temporary.lstat()
@@ -548,7 +610,8 @@ class SnapshotStore:
                     f"legal sizes are 1..{self.limits.max_bytes}"
                 )
 
-            archive_digest = _sha256_file(temporary)
+            with self._io:
+                archive_digest = _sha256_file(temporary)
             archive_fd = os.open(temporary, os.O_RDONLY)
             try:
                 os.fsync(archive_fd)
@@ -561,7 +624,7 @@ class SnapshotStore:
                 archive_sha256=archive_digest,
                 env_signature=env_signature,
                 created_at=self._clock(),
-                leased=False,
+                leases=0,
                 meta=meta_copy,
             )
 
@@ -630,7 +693,8 @@ class SnapshotStore:
                 f"{archive_stat.st_size}; committed size is {record.archive_bytes}"
             )
 
-        actual_digest = _sha256_file(archive)
+        with self._io:
+            actual_digest = _sha256_file(archive)
         if actual_digest != record.archive_sha256:
             raise SnapshotIntegrityError(
                 f"{archive}: field 'archive_sha256' has value {actual_digest!r}; "
@@ -638,19 +702,28 @@ class SnapshotStore:
             )
         return archive
 
-    def _set_leased(self, snapshot_id: str, *, leased: bool) -> SnapshotRecord:
+    def _add_lease(self, snapshot_id: str, delta: int) -> SnapshotRecord:
         self._check_id(snapshot_id)
         with self._locked():
             record = self.get(snapshot_id)
-            updated = replace(record, leased=leased)
+            if record.leases + delta < 0:
+                raise SnapshotRefusal(
+                    f"release: snapshot {snapshot_id!r} holds no lease to release"
+                )
+            updated = replace(record, leases=record.leases + delta)
             self._write_descriptor(updated)
+            self._fsync_directory()
             return updated
 
     def lease(self, snapshot_id: str) -> SnapshotRecord:
-        return self._set_leased(snapshot_id, leased=True)
+        """Take one lease (each concurrent holder takes its own); reap/delete skip a snapshot
+        while any lease is held. A holder that crashes leaves its lease -- the snapshot is
+        kept, never deleted under a live user -- and an operator can release it."""
+        return self._add_lease(snapshot_id, +1)
 
     def release(self, snapshot_id: str) -> SnapshotRecord:
-        return self._set_leased(snapshot_id, leased=False)
+        """Drop one lease; refused when none is held."""
+        return self._add_lease(snapshot_id, -1)
 
     def delete(self, snapshot_id: str) -> None:
         self._check_id(snapshot_id)

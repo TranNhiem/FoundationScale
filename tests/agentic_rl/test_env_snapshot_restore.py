@@ -744,7 +744,7 @@ def test_retained_vault_cleanup_refuses_paths_outside_the_vault_root(tmp_path: P
             archive_sha256="0" * 64,
             env_signature="envsig_x",
             created_at=0.0,
-            leased=False,
+            leases=0,
             meta={"vault_clone": path},
         )
 
@@ -760,7 +760,7 @@ def test_retained_vault_cleanup_refuses_paths_outside_the_vault_root(tmp_path: P
             archive_sha256="0" * 64,
             env_signature="envsig_x",
             created_at=0.0,
-            leased=False,
+            leases=0,
             meta={},
         )
     )
