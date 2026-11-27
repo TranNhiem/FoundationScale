@@ -248,16 +248,7 @@ class SGLangServer:
             return
         process = self._process
         self._process = None
-        if process.poll() is not None:
-            return
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        _stop_group(process, grace_s=grace_s)
 
 
 @dataclass(frozen=True)
@@ -463,16 +454,43 @@ class EngineServer:
             return
         process = self._process
         self._process = None
-        if process.poll() is not None:
-            return
+        _stop_group(process, grace_s=grace_s)
+
+
+def _group_alive(pgid: int) -> bool:
+    """True while any process in group ``pgid`` exists (signal 0 probes, sends nothing)."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # a member we cannot signal still exists
+        return True
+    return True
+
+
+def _stop_group(process: subprocess.Popen[bytes], *, grace_s: float) -> None:
+    """Stop a server started with ``start_new_session=True``: its WHOLE process group.
+
+    The group is signalled even when the leader has already exited: a vLLM API server that
+    crashed leaves its ``EngineCore`` child alive in the same group, still holding the GPU.
+    Returning early there (as an earlier version did) orphaned that child, so the next
+    ``start()`` on a co-located GPU failed for lack of memory or OOM-killed the trainer
+    (measured 2026-11-27: arl_ds_s11 and arl_cur_s11). After SIGTERM this waits for every
+    group member, not just the leader, and SIGKILLs whatever outlives ``grace_s``.
+    """
+    pgid = process.pid
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        process.poll()  # reap the leader so it does not linger as a zombie member
+        if not _group_alive(pgid):
+            break
+        time.sleep(0.1)
+    else:
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            os.killpg(pgid, signal.SIGKILL)
+    process.wait()
 
 
 @dataclass(frozen=True)

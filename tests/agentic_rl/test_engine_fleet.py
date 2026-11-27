@@ -613,3 +613,41 @@ def test_server_creates_a_missing_log_dir(tmp_path: Path, fake_module: str) -> N
         assert Path(server.log_path).exists()
     finally:
         server.stop()
+
+
+def test_stop_group_kills_a_child_that_outlives_its_crashed_leader() -> None:
+    """A vLLM API server that crashed leaves EngineCore alive in its group: stop must still
+    signal the group (2026-11-27: the orphan held 78 GB and OOM-killed the next start)."""
+    import subprocess
+    import time
+
+    from foundationscale.agentic_rl.engines.fleet import _group_alive, _stop_group
+
+    leader = subprocess.Popen(["sh", "-c", "sleep 300 & exit 0"], start_new_session=True)
+    leader.wait(timeout=10)  # the leader is gone; its sleep child is not
+    time.sleep(0.2)
+    assert _group_alive(leader.pid)
+    _stop_group(leader, grace_s=5.0)
+    deadline = time.monotonic() + 5
+    while _group_alive(leader.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _group_alive(leader.pid)
+
+
+def test_stop_group_escalates_to_sigkill_for_a_member_ignoring_sigterm() -> None:
+    import subprocess
+    import time
+
+    from foundationscale.agentic_rl.engines.fleet import _group_alive, _stop_group
+
+    stubborn = subprocess.Popen(
+        ["sh", "-c", "trap '' TERM; sleep 300 & wait"], start_new_session=True
+    )
+    time.sleep(0.3)
+    start = time.monotonic()
+    _stop_group(stubborn, grace_s=0.5)
+    deadline = time.monotonic() + 5
+    while _group_alive(stubborn.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _group_alive(stubborn.pid)
+    assert time.monotonic() - start < 6
