@@ -389,6 +389,8 @@ class RewardConfig:
     timeout_s: float = 60.0
     # kind="swe" only: score the fraction of fail_to_pass tests passing instead of all-or-nothing.
     partial_credit: bool = False
+    # kind="swe" + partial_credit only: an unresolved episode with a malformed tool call scores 0.0.
+    format_gate: bool = False
 
 
 @dataclass(frozen=True)
@@ -1177,7 +1179,7 @@ def _build_reward(
 ) -> RewardConfig:
     section = _strip_doc(raw, dotted_prefix="reward")
     local_overrides = _section_overrides(overrides, section="reward")
-    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", "partial_credit"})
+    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", "partial_credit", "format_gate"})
     _refuse_unknown_keys(section, allowed, section="reward")
     kind = _resolve_scalar(
         dotted_key="reward.kind",
@@ -1234,8 +1236,27 @@ def _build_reward(
             f"reward.partial_credit: is true, but reward.kind={kind!r} never uses it -- only the "
             f"'swe' scorer has partial credit"
         )
+    format_gate = _resolve_scalar(
+        dotted_key="reward.format_gate",
+        field_name="format_gate",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
+    if format_gate and not partial_credit:
+        raise AgenticConfigRefusal(
+            "reward.format_gate: is true, but reward.partial_credit is false -- the gate only "
+            "withholds partial credit, so without it the setting would change nothing"
+        )
     return RewardConfig(
-        kind=kind, abc2midi_bin=abc2midi_bin, timeout_s=timeout_s, partial_credit=partial_credit
+        kind=kind,
+        abc2midi_bin=abc2midi_bin,
+        timeout_s=timeout_s,
+        partial_credit=partial_credit,
+        format_gate=format_gate,
     )
 
 

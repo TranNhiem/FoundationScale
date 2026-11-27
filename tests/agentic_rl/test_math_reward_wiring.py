@@ -130,3 +130,14 @@ def test_swe_partial_credit_reaches_the_scorer() -> None:
     assert overridden.reward.partial_credit is True
     with pytest.raises(AgenticConfigRefusal, match="only the 'swe' scorer"):
         build_config(_raw({"kind": "math", "partial_credit": True}), {})
+
+
+def test_swe_format_gate_reaches_the_scorer_and_needs_partial_credit() -> None:
+    import foundationscale.agentic_rl.cli as cli_module
+
+    config = build_config(_raw({"kind": "swe", "partial_credit": True, "format_gate": True}), {})
+    reward = cli_module._build_real_run(config).reward
+    assert isinstance(reward, SweReward) and reward.format_gate is True
+    assert build_config(_raw({"kind": "swe"}), {}).reward.format_gate is False
+    with pytest.raises(AgenticConfigRefusal, match="format_gate"):
+        build_config(_raw({"kind": "swe", "format_gate": True}), {})
