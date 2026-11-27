@@ -88,8 +88,18 @@ async def evaluate(a: argparse.Namespace) -> dict:
             try:
                 out = await loop.run_episode(task, client=client, env=env, budget=budget)
                 report = await env.verify()
+            except EnvInfraError as exc:  # e.g. the fresh verifier container never came up: abstain, never 0
+                print(f"[eval] {task.session_id}: infra during episode/verify: {exc}"[:400], flush=True)
+                if dump is not None:
+                    dump.write(json.dumps({"session": task.session_id, "reward": None,
+                                           "reason": "infra:episode", "termination": "abstained"}) + "\n")
+                    dump.flush()
+                return None
             finally:
-                await env.close()
+                try:
+                    await env.close()
+                except EnvInfraError as close_exc:
+                    print(f"[eval] {task.session_id}: close failed: {close_exc}"[:300], flush=True)
             out = replace(out, metadata={**out.metadata, **report})
             verdict = await reward.score(task, out)
             if dump is not None:
