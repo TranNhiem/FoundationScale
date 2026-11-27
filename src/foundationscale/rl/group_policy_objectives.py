@@ -1388,20 +1388,22 @@ class AgenticGRPOLoss:
         asymmetric ``(0.8, 1.28)``, because ``_clipped_term`` prices ratio
         bounds, not epsilons.
 
-        There is NO ``kl_weight`` field at all -- deliberately absent, not
-        defaulted to zero, for :class:`DAPOLoss`'s reason: a present-but-zero
-        field invites a caller to build a configuration no measured record
-    describes, and an absent field makes it unrepresentable. So
-        ``required_columns`` is GRPO's set minus the reference column and
-        ``semantics()`` abstains (kl_estimator ``None``, ``reference_free``
-    True).
+        ``kl_weight`` is OPT-IN: its default of 0.0 keeps the reference-free
+        objective, with no reference column required and no KL component
+        declared. A positive value adds the token-relative k3 penalty against a
+        frozen reference policy, reduced as a token mean over every supervised
+        token (the tensor kernel's own expression), whichever reduction the policy
+        surrogate uses. This makes the atlas
+        recipe's ``kl_coefficient = 0.04`` representable (B2.3 C1) without
+        imposing a reference policy on the default objective.
 
         WHAT IS CLAIMED: token ratio scope, the configured symmetric clip, the
         concrete :class:`SessionGroupAdvantage` with its min-group-size
         agreement check, a ``prompt_mean`` denominator owned by
-        :func:`prompt_mean_row_weights`, and no KL term under any configuration.
-        ``expects_dynamic_sampling`` is False (declared, and
-        ``filter_groups`` arrives in a later slice).
+        :func:`prompt_mean_row_weights`, a reference-free default, and an
+        optional token-mean k3 term matching ``TensorPolicyLoss``.
+        ``expects_dynamic_sampling`` is False (declared, and ``filter_groups``
+        arrives in a later slice).
 
         WHAT IS NOT CLAIMED: any rollout-side behaviour, dynamic sampling,
         overlong reward shaping, or convergence/benchmark/paper equivalence --
@@ -1411,12 +1413,15 @@ class AgenticGRPOLoss:
     group_size: int = 2
     clip_low: float = 0.8
     clip_high: float = 1.2
+    kl_weight: float = 0.0
     weight: float = 1.0
     prompt_id_column: str = "prompt_ids"
     reward_column: str = "rewards"
     mask_column: str = "loss_mask"
     old_logprob_column: str = "old_logprobs"
+    reference_logprob_column: str = "reference_logprobs"
     component_name: str = "agentic_grpo_policy_loss"
+    kl_component_name: str = "agentic_grpo_kl_penalty"
     advantage_fn: SessionGroupAdvantage = field(default_factory=SessionGroupAdvantage)
     # ``token_mean`` is the ABLATION arm, not an alternative default: it keeps
     # every other choice of this objective and swaps only the denominator, so
@@ -1429,8 +1434,8 @@ class AgenticGRPOLoss:
             clip_low=self.clip_low,
             clip_high=self.clip_high,
             weight=self.weight,
-            kl_weight=None,
-            reference_logprob_column=None,
+            kl_weight=self.kl_weight,
+            reference_logprob_column=self.reference_logprob_column,
             origin="agentic_grpo",
         )
         # Read through ``object``: the Literal annotation is a promise to the
@@ -1447,9 +1452,17 @@ class AgenticGRPOLoss:
             ("reward_column", self.reward_column),
             ("mask_column", self.mask_column),
             ("old_logprob_column", self.old_logprob_column),
+            ("reference_logprob_column", self.reference_logprob_column),
             ("component_name", self.component_name),
+            ("kl_component_name", self.kl_component_name),
         ):
             _checked_name(field_name, name_value)
+        if self.component_name == self.kl_component_name:
+            raise LossConfigRefusal(
+                f"component_name and kl_component_name are both "
+                f"{self.component_name!r}: 2 components would share 1 "
+                f"name and collapse the objective denominator"
+            )
         if not isinstance(self.advantage_fn, SessionGroupAdvantage):
             raise LossConfigRefusal(
                 f"advantage_fn={self.advantage_fn!r}: agentic_grpo binds "
@@ -1487,30 +1500,29 @@ class AgenticGRPOLoss:
 
     @property
     def required_columns(self) -> tuple[str, ...]:
-        # GRPO's schema minus the reference column -- the objective is
-        # structurally reference-free.
-        return (
+        columns = [
             self.prompt_id_column,
             self.reward_column,
             self.mask_column,
             self.old_logprob_column,
-        )
+        ]
+        if self.kl_weight != 0.0:
+            columns.append(self.reference_logprob_column)
+        return tuple(columns)
 
     def declaration(self) -> LossDeclaration:
-        # One unconditional component whose weight is validated strictly
-        # positive: a zero-component declaration is unreachable.
-        return LossDeclaration(components=(self.component_name,))
+        components: tuple[str, ...] = (self.component_name,)
+        if self.kl_weight != 0.0:
+            components = components + (self.kl_component_name,)
+        return LossDeclaration(components=components)
 
     def semantics(self) -> AlgorithmSemantics:
-        # kl_estimator is None -- abstention in the house sense: agentic_grpo
-        # carries no KL term structurally, so "which KL estimator" is a
-        # question the objective refuses to pose.
         return AlgorithmSemantics(
             group_size=self.group_size,
             ratio_scope="token",
-            kl_estimator=None,
+            kl_estimator=("k3" if self.kl_weight != 0.0 else None),
             clip_bounds=self.clip_bounds,
-            reference_free=True,
+            reference_free=self.kl_weight == 0.0,
         )
 
     def __call__(self, forward_fn: ForwardFn, batch: ExperienceBatch) -> LossOutput:
@@ -1529,7 +1541,9 @@ class AgenticGRPOLoss:
             reward_column=self.reward_column,
             mask_column=self.mask_column,
             old_logprob_column=self.old_logprob_column,
-            reference_logprob_column=None,
+            reference_logprob_column=(
+                self.reference_logprob_column if self.kl_weight != 0.0 else None
+            ),
             origin="agentic_grpo",
         )
         prompt_id_values = _outer_sequence(
@@ -1578,7 +1592,39 @@ class AgenticGRPOLoss:
                 contribution=policy_contribution,
             ),
         )
+        if self.kl_weight == 0.0:
+            return (
+                LossOutput(loss=policy_contribution, components=components),
+                prices.advantage,
+            )
+
+        kl_total, kl_supervised = _kl_component_terms(
+            prices, origin="agentic_grpo"
+        )
+        rows_used = len(prices.batch_rows)
+        if kl_supervised == 0:
+            raise SupervisionRefusal(
+                f"kl_weight={self.kl_weight!r} is active but 0 "
+                f"supervised tokens remain across {rows_used} used rows "
+                f"for agentic_grpo; the k3 term is unmeasured"
+            )
+        # The k3 term is a TOKEN mean under either policy reduction -- exactly the
+        # expression TensorPolicyLoss prices (``kl_weight * k3.sum() / supervised``)
+        # and the trainer's reported split re-measures, so reference and kernel agree.
+        reduced_kl = kl_total / kl_supervised
+        kl_contribution = self.kl_weight * reduced_kl
+        components = components + (
+            LossComponent(
+                name=self.kl_component_name,
+                weight=self.kl_weight,
+                observed=True,
+                contribution=kl_contribution,
+            ),
+        )
         return (
-            LossOutput(loss=policy_contribution, components=components),
+            LossOutput(
+                loss=policy_contribution + kl_contribution,
+                components=components,
+            ),
             prices.advantage,
         )

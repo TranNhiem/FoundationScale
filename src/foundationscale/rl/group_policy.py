@@ -740,6 +740,31 @@ def agentic_grpo_algorithm() -> SequencePolicyAlgorithm:
     return SequencePolicyAlgorithm(name="agentic_grpo", objective=objective)
 
 
+AGENTIC_GRPO_KL_WEIGHT = 0.04  # the atlas agent-RL recipe's kl_coefficient (B2.3 C1)
+
+
+def agentic_grpo_kl_algorithm() -> SequencePolicyAlgorithm:
+    """Construct the ``agentic_grpo_kl`` binding: :func:`agentic_grpo_algorithm` plus a k3 KL term.
+
+    WHAT IS CLAIMED: identical to ``agentic_grpo`` -- session-group estimator, shrink policy,
+    ``min_valid=2``, (0.8, 1.2) clip, ``prompt_mean`` policy reduction -- except that
+    ``kl_weight=0.04`` adds the token-mean k3 penalty against a frozen reference copy of the
+    initial policy, which the trainer loads because the objective declares a non-zero weight.
+
+    WHAT IS NOT CLAIMED: that 0.04 is tuned for this estate (it is the atlas recipe's value), or
+    that the term improves any measured result -- the B2.3 A/B decides that.
+    """
+    objective = AgenticGRPOLoss(
+        advantage_fn=SessionGroupAdvantage(
+            normalise_by_std=False,
+            partial_group_policy="shrink",
+            min_valid=2,
+        ),
+        kl_weight=AGENTIC_GRPO_KL_WEIGHT,
+    )
+    return SequencePolicyAlgorithm(name="agentic_grpo_kl", objective=objective)
+
+
 def agentic_grpo_token_mean_algorithm() -> SequencePolicyAlgorithm:
     """Construct the ``agentic_grpo_token_mean`` ablation binding.
 

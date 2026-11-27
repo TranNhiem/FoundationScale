@@ -147,23 +147,42 @@ def test_the_objective_declaraxes_prompt_mean_and_no_dynamic_sampling() -> None:
     assert objective.declaration().metrics == ()
 
 
-def test_the_objective_carries_no_kl_field_under_any_configuration() -> None:
+def test_the_kl_term_is_opt_in_and_off_by_default() -> None:
     objective = _objective()
-    field_names = tuple(field.name for field in dataclasses.fields(objective))
-    assert "kl_weight" not in field_names
-    assert "kl_component_name" not in field_names
-    assert "reference_logprob_column" not in field_names
-    # Absent, not falsy: the kernel's optional read is the only reader, and
-    # it must fall back to 0.0 rather than find a field pretending to hold a
-    # configured KL weight.
-    assert not hasattr(objective, "kl_weight")
-    assert getattr(objective, "kl_weight", 0.0) == 0.0
+    assert objective.kl_weight == 0.0
+    assert objective.declaration().components == (objective.component_name,)
+    assert objective.semantics().kl_estimator is None
+    assert objective.semantics().reference_free is True
     assert objective.required_columns == (
         "prompt_ids",
         "rewards",
         "loss_mask",
         "old_logprobs",
     )
+
+
+def test_an_active_kl_term_declares_its_reference_and_component() -> None:
+    objective = dataclasses.replace(_objective(), kl_weight=0.04)
+    assert objective.declaration().components == (
+        objective.component_name,
+        objective.kl_component_name,
+    )
+    assert objective.semantics().kl_estimator == "k3"
+    assert objective.semantics().reference_free is False
+    assert objective.required_columns[-1] == "reference_logprobs"
+
+
+@pytest.mark.parametrize("bad", [-0.1, float("nan"), float("inf")])
+def test_a_negative_or_non_finite_kl_weight_is_refused(bad: float) -> None:
+    with pytest.raises(LossConfigRefusal):
+        dataclasses.replace(_objective(), kl_weight=bad)
+
+
+def test_the_registered_kl_binding_carries_the_atlas_weight() -> None:
+    from foundationscale.rl.group_policy import AGENTIC_GRPO_KL_WEIGHT, agentic_grpo_kl_algorithm
+
+    algorithm = agentic_grpo_kl_algorithm()
+    assert algorithm._objective.kl_weight == AGENTIC_GRPO_KL_WEIGHT == 0.04
 
 
 def test_construction_refuses_a_foreign_advantage_estimator() -> None:
