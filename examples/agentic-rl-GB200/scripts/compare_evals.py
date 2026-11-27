@@ -6,7 +6,8 @@ Pairs the two runs on tasks present (and measured) in both, averages each task's
 unit), and reports the mean candidate-minus-base difference with a 95% bootstrap CI over tasks for the partial-credit
 reward and for binary resolve (reward == 1). An abstained sample (reward null) is dropped from its task's mean, never
 counted as 0; a task with no measured sample on either side is excluded and counted. Verdict per metric: "better" if
-the CI is above 0, "worse" if below, else "no detectable difference". Exit 0 always (it reports, it does not gate).
+the CI is above 0, "worse" if below, else "no detectable difference"; fewer than 20 paired tasks is "unmeasured".
+Exit 95 when any verdict is unmeasured, else 0 (it reports, it does not gate).
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ import random
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+
+MIN_PAIRED = 20  # fewer paired tasks give a degenerate bootstrap; never a verdict
 
 
 def per_task(path: Path) -> dict[str, list[float]]:
@@ -44,8 +48,8 @@ def compare(base: dict, cand: dict, resamples: int, seed: int) -> dict:
         b = [sum(map(f, base[t])) / len(base[t]) for t in tasks]
         c = [sum(map(f, cand[t])) / len(cand[t]) for t in tasks]
         d = [y - x for x, y in zip(b, c)]
-        if not d:
-            result[metric] = {"verdict": "unmeasured", "reason": "no paired tasks"}
+        if len(d) < MIN_PAIRED:
+            result[metric] = {"verdict": "unmeasured", "reason": f"{len(d)} paired tasks < {MIN_PAIRED}"}
             continue
         lo, hi = bootstrap(d, resamples, seed)
         result[metric] = {"base": sum(b) / len(b), "cand": sum(c) / len(c), "diff": sum(d) / len(d), "ci95": [lo, hi],
@@ -66,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.out:
         a.out.write_text(text + "\n", encoding="utf-8")
     print(text)
-    return 0
+    # report-only tool, but an unmeasured comparison must not look like PASS to automation (0/5/95/96 doctrine)
+    return 95 if any(res.get(m, {}).get("verdict") == "unmeasured" for m in ("reward", "resolve")) else 0
 
 
 if __name__ == "__main__":

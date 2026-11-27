@@ -175,7 +175,13 @@ def _clip_device_grads(optimizer: Any, max_norm: float) -> float:
     grads = [p for p in params if p.grad is not None]
     if not grads:
         return 0.0
-    return float(torch.nn.utils.clip_grad_norm_(grads, max_norm))
+    total = float(torch.nn.utils.clip_grad_norm_(grads, max_norm))
+    if not math.isfinite(total):
+        # clip would multiply every grad by NaN; drop this update instead of corrupting the weights
+        for p in grads:
+            p.grad = None
+        print(f"[trainer] non-finite gradient norm ({total}); optimizer step skipped", flush=True)
+    return total
 
 
 def _chunked_token_logprobs(
@@ -1417,7 +1423,8 @@ class RLTrainer:
             raise TrainerRefusal(
                 f"logprob_chunk_tokens={config.logprob_chunk_tokens!r}: an int >= 0 is required (0 = full logits)"
             )
-        if isinstance(config.max_grad_norm, bool) or not isinstance(config.max_grad_norm, (int, float)) or config.max_grad_norm < 0:
+        if (isinstance(config.max_grad_norm, bool) or not isinstance(config.max_grad_norm, (int, float))
+                or not math.isfinite(config.max_grad_norm) or config.max_grad_norm < 0):
             raise TrainerRefusal(f"max_grad_norm={config.max_grad_norm!r}: a number >= 0 is required (0 = off)")
         if config.max_grad_norm and getattr(config, "sharding", "none") != "none":
             raise TrainerRefusal(

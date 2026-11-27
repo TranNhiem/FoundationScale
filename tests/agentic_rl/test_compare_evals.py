@@ -29,7 +29,7 @@ def test_abstentions_are_dropped_not_zeroed_and_unpaired_tasks_counted(tmp_path)
     cand = _dump(tmp_path, "b", [("t1#0", 0.5), ("t3#0", 1.0)])
     res = ce.compare(ce.per_task(base), ce.per_task(cand), 500, 0)
     assert res["paired_tasks"] == 1 and res["base_only"] == 1 and res["cand_only"] == 1
-    assert res["reward"]["base"] == 0.5 and res["reward"]["verdict"] == "no detectable difference"
+    assert res["reward"]["verdict"] == "unmeasured"  # one paired task is never a verdict
 
 
 def test_no_paired_tasks_is_unmeasured(tmp_path):

@@ -40,3 +40,10 @@ def test_master_weight_style_optimizer_uses_device_params():
 def test_no_grads_is_a_noop():
     p = torch.nn.Parameter(torch.zeros(2))
     assert _clip_device_grads(torch.optim.SGD([p], lr=0.1), 1.0) == 0.0
+
+
+def test_non_finite_norm_skips_the_update():
+    a, b = _params(1.0)
+    a.grad[0] = float("nan")
+    _clip_device_grads(torch.optim.SGD([a, b], lr=0.1), 1.0)
+    assert a.grad is None and b.grad is None
