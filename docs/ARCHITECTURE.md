@@ -203,7 +203,7 @@ The entry point is deliberately thin. `cli.py` and `loop.py` validate the declar
 
 ## Around the package
 
-`src/` is 112169 LOC across 200 files; `tests/` adds 149482 `.py` LOC (its conftest carries the skip guard). Beside the package:
+`src/` is 113086 LOC across 203 files; `tests/` adds 150183 `.py` LOC (its conftest carries the skip guard). Beside the package:
 
 | Tree | Contents |
 |---|---|
@@ -214,7 +214,7 @@ The entry point is deliberately thin. `cli.py` and `loop.py` validate the declar
 | `docs/` | User and maintainer documentation; `research/` holds design notes per area. |
 | `.github/workflows/` | CI: check / controls / launchers / mutation shards. |
 
-Repo-wide: 507416 git-tracked `.py`/`.sh`/`.md` lines.
+Repo-wide: 509059 git-tracked `.py`/`.sh`/`.md` lines.
 
 ## Known gaps
 
