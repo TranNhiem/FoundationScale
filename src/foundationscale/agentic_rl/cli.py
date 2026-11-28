@@ -455,6 +455,7 @@ def _build_real_run(config: AgenticRLConfig) -> RolloutHost:
         dynamic_sampling=config.rollout.dynamic_sampling,
         max_refill_rounds=config.rollout.max_refill_rounds,
         publish_deadline_s=config.rollout.publish_deadline_s,
+        episode_deadline_s=config.rollout.episode_deadline_s,
         trace_dir=config.rollout.trace_dir,
         declared_max_lag=config.engine.max_policy_lag,
         servable_base_model_dir=(

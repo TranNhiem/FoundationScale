@@ -24,11 +24,12 @@ import os
 import re
 import sys
 import threading
+import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from foundationscale.agentic_rl.contracts import Termination, Trajectory, flatten
 from foundationscale.agentic_rl.curriculum import FrontierTaskSource
@@ -75,11 +76,37 @@ __all__ = (
     "RolloutHostRefusal",
 )
 
-_INFRA_EXCEPTIONS: tuple[type[Exception], ...] = (EnvInfraError, EngineInfraError)
+_T = TypeVar("_T")
+
+
+class EpisodeDeadlineExceeded(Exception):
+    """One episode (start + loop + verify + reward) outlived ``RolloutHost.episode_deadline_s``."""
+
+
+_INFRA_EXCEPTIONS: tuple[type[Exception], ...] = (
+    EnvInfraError,
+    EngineInfraError,
+    EpisodeDeadlineExceeded,
+)
 
 
 def _described(value: object) -> str:
     return f"{type(value).__name__} {value!r}"
+
+
+async def _within(awaitable: Awaitable[_T], deadline_at: float | None) -> _T:
+    """Await under the episode's shared deadline (``time.monotonic()``); None = unbounded."""
+    if deadline_at is None:
+        return await awaitable
+    left = deadline_at - time.monotonic()
+    try:
+        if left <= 0:
+            raise TimeoutError
+        return await asyncio.wait_for(awaitable, timeout=left)
+    except TimeoutError:
+        if inspect.iscoroutine(awaitable):
+            awaitable.close()  # never awaited: drop it without a "never awaited" warning
+        raise EpisodeDeadlineExceeded("episode deadline exceeded") from None
 
 
 class RolloutHostRefusal(ValueError):
@@ -288,6 +315,12 @@ class RolloutHost:
     # each hung ~2 days between writing the checkpoint shards and the push (no reload
     # ever reached the engine), holding 4 GPUs, with nothing able to notice or recover.
     publish_deadline_s: float | None = None
+    # Hard wall-clock deadline on ONE episode -- env start, the harness loop, verify() and the
+    # reward together. None (default) = no deadline. On expiry the episode ABSTAINS as
+    # infra:EpisodeDeadlineExceeded (never a scored zero) and the step goes on. The harness's
+    # own episode_timeout_s is checked only between turns, so an await with no timeout of its
+    # own held GPU arl_ds_s10i in rollout() for 3.5 h (idle engine, no socket, no tool process).
+    episode_deadline_s: float | None = None
     # ARL-21: when set, every step's final trajectories are written as fs.trace/v1 span traces
     # to <trace_dir>/step_<NNNNNN>.jsonl (agentic_rl.fs_trace); None (default) writes nothing.
     trace_dir: str | None = None
@@ -383,6 +416,15 @@ class RolloutHost:
                 f"{where}: field 'publish_deadline_s' is {_described(self.publish_deadline_s)}: "
                 f"it must be None or a finite number of seconds > 0"
             )
+        if self.episode_deadline_s is not None and (
+            type(self.episode_deadline_s) is bool
+            or not isinstance(self.episode_deadline_s, (int, float))
+            or not (0.0 < float(self.episode_deadline_s) < float("inf"))
+        ):
+            raise RolloutHostRefusal(
+                f"{where}: field 'episode_deadline_s' is {_described(self.episode_deadline_s)}: "
+                f"it must be None or a finite number of seconds > 0"
+            )
         if self.engine_recovery_retries > 0 and self.fleet is None:
             raise RolloutHostRefusal(
                 f"{where}: field 'engine_recovery_retries' is {self.engine_recovery_retries} "
@@ -466,14 +508,22 @@ class RolloutHost:
             else:
                 instance = self.env_backend.create(self.env_spec, instance_id=session_id)
             outcome: EpisodeOutcome | None = None
+            deadline_at = (
+                None
+                if self.episode_deadline_s is None
+                else time.monotonic() + float(self.episode_deadline_s)
+            )
             try:
-                await instance.start()
-                outcome = await self.harness.run_episode(
-                    task,
-                    client=client,
-                    env=instance,
-                    budget=self.budget,
-                    **self._live_trace_kwargs(step, session_id, version),
+                await _within(instance.start(), deadline_at)
+                outcome = await _within(
+                    self.harness.run_episode(
+                        task,
+                        client=client,
+                        env=instance,
+                        budget=self.budget,
+                        **self._live_trace_kwargs(step, session_id, version),
+                    ),
+                    deadline_at,
                 )
                 reward_value: float | None
                 abstention: str | None
@@ -484,14 +534,14 @@ class RolloutHost:
                     if isinstance(instance, VerifiableEnvironment):
                         # e.g. hidden tests run against the agent's edits; an EnvInfraError
                         # here lands in the infra branch below, never as a scored zero.
-                        checked = await instance.verify()
+                        checked = await _within(instance.verify(), deadline_at)
                         if self.trace_dir is not None:
                             # ARL-21: name the verifier's keys so _write_traces can join a
                             # verifier span to the reward (only when tracing: otherwise the
                             # metadata stays exactly what it was).
                             checked = {**checked, "verifier_keys": ",".join(sorted(checked))}
                         outcome = replace(outcome, metadata={**outcome.metadata, **checked})
-                    verdict = await self.reward.score(task, outcome)
+                    verdict = await _within(self.reward.score(task, outcome), deadline_at)
                     reward_value = verdict.value
                     if reward_value is None:
                         # ABSTAINED: verdict.reason is the abstention's own name.

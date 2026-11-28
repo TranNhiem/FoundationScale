@@ -1201,3 +1201,61 @@ def test_trace_run_ids_differ_for_trace_dirs_sharing_a_basename(tmp_path: Path) 
         )
 
     assert host("run_a")._trace_run_id() != host("run_b")._trace_run_id()
+
+
+# ---------------------------------------------------------------------------
+# episode_deadline_s: a hung await abstains the episode instead of holding the run
+# ---------------------------------------------------------------------------
+
+
+def test_a_hung_reward_abstains_under_the_episode_deadline(tmp_path: Path) -> None:
+    # GPU arl_ds_s10i sat 3.5 h in rollout() on an await with no timeout; with the deadline
+    # the episode abstains as infra and the step completes.
+    import time
+
+    class HangingReward:
+        async def score(self, task: Any, outcome: Any) -> RewardVerdict:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=lambda index: SubmitClient("ok"),
+        reward=HangingReward(),
+        episode_deadline_s=0.3,
+    )
+    start = time.monotonic()
+    batch = host.rollout(0)
+    assert time.monotonic() - start < 10
+    assert all(t is Termination.INFRA for t in batch.columns["termination"])
+    assert all(a == "infra:EpisodeDeadlineExceeded" for a in batch.columns["abstention_reason"])
+    assert all(len(ids) > 0 for ids in batch.columns["response_ids"])  # real outcome kept
+
+
+def test_a_hung_generation_abstains_under_the_episode_deadline(tmp_path: Path) -> None:
+    class HangingClient:
+        async def generate(self, prompt_ids: Any, sampling: Any) -> Any:
+            await asyncio.Event().wait()
+
+    host = _host(
+        tmp_path,
+        uids=["taskA"],
+        group_size=2,
+        client_factory=lambda index: HangingClient(),
+        episode_deadline_s=0.3,
+    )
+    batch = host.rollout(0)
+    assert all(a == "infra:EpisodeDeadlineExceeded" for a in batch.columns["abstention_reason"])
+
+
+@pytest.mark.parametrize("bad", [0, -1.0, float("inf"), True, "60"])
+def test_episode_deadline_is_validated(tmp_path: Path, bad: object) -> None:
+    with pytest.raises(RolloutHostRefusal, match="episode_deadline_s"):
+        _host(
+            tmp_path,
+            uids=["taskA"],
+            client_factory=lambda index: SubmitClient("ok"),
+            episode_deadline_s=bad,
+        )
