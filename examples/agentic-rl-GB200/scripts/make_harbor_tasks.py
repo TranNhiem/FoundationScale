@@ -26,8 +26,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import tomllib
-
 from foundationscale.agentic_rl.envs.harbor_task import ALL_TEST
 from foundationscale.agentic_rl.sandbox.build import build_image
 
@@ -134,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     images = args.out / "images"
     images.mkdir(parents=True, exist_ok=True)
+    import tomllib  # Python >= 3.11; imported here so the module (and its tests) import on 3.10
 
     def convert(name: str) -> tuple[str, dict | None, str | None]:
         task_dir = args.tasks_root / name
