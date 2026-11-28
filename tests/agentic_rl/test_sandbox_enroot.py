@@ -1029,3 +1029,29 @@ def test_run_timeout_is_bounded_despite_backgrounded_pipe_holder() -> None:
     assert time.monotonic() - t0 < 5
     assert (result.returncode, result.timed_out) == (124, True)
     assert result.stdout.strip() == "started"
+
+
+def test_a_flooding_command_times_out_promptly_with_bounded_output() -> None:
+    # `yes` writes gigabytes a second; unbounded capture made the broker's reply miss its grace
+    # window, so an agent-caused timeout surfaced as an infra abstention (2026-11-29).
+    import time
+
+    from foundationscale.agentic_rl.sandbox import enroot as _enroot
+
+    started = time.monotonic()
+    result = SubprocessRunner().run(["yes"], timeout_s=1.0)
+    assert result.timed_out and result.returncode == 124
+    assert 0 < len(result.stdout) <= _enroot._CAPTURE_LIMIT_BYTES
+    assert time.monotonic() - started < 10.0
+
+
+def test_drain_keeps_only_the_limit_but_reads_to_eof(tmp_path) -> None:
+    from foundationscale.agentic_rl.sandbox import enroot as _enroot
+
+    path = tmp_path / "big"
+    path.write_bytes(b"x" * 300_000)
+    sink: list[bytes] = []
+    with path.open("rb") as fh:
+        _enroot._drain(fh, sink, limit=100_000)
+        assert fh.read() == b""  # the whole stream was consumed
+    assert sum(len(c) for c in sink) == 100_000

@@ -218,11 +218,24 @@ class SubprocessRunner:
         return RunResult(returncode=proc.returncode, stdout=stdout, stderr=stderr)
 
 
-def _drain(stream: IO[bytes], sink: list[bytes]) -> None:
-    """Read a pipe to EOF into sink; may outlive its exec while a background process holds it."""
+# Bytes of a command's stdout (and, separately, stderr) kept in memory. The env truncates output
+# to its own max_output_bytes later anyway; past this the pipe is still READ (so the writer never
+# blocks) but discarded. Unbounded capture let `yes` buffer gigabytes in the broker, whose reply
+# then missed the client's grace window: an agent-caused timeout surfaced as an infra abstention
+# (2026-11-29, runs stopped by the rollout infra gate).
+_CAPTURE_LIMIT_BYTES = 4 << 20
+
+
+def _drain(stream: IO[bytes], sink: list[bytes], limit: int = _CAPTURE_LIMIT_BYTES) -> None:
+    """Read a pipe to EOF into sink, keeping at most ``limit`` bytes; may outlive its exec while a
+    background process holds the pipe."""
+    kept = 0
     with contextlib.suppress(OSError, ValueError):
         while chunk := os.read(stream.fileno(), 65536):
-            sink.append(chunk)
+            if kept < limit:
+                piece = chunk[: limit - kept]
+                sink.append(piece)
+                kept += len(piece)
 
 
 @dataclass(frozen=True)
