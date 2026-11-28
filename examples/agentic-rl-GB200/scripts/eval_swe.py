@@ -29,7 +29,6 @@ from foundationscale.agentic_rl.tools import (
     default_tools,
 )
 
-
 START_ATTEMPTS = 3
 
 
@@ -73,7 +72,9 @@ async def evaluate(a: argparse.Namespace) -> dict:
                 metadata=t.get("metadata", {}),
             )  # fmt: skip
             env = None
-            for attempt in range(START_ATTEMPTS):  # a transient sandbox-start fault must not kill the whole eval
+            for attempt in range(
+                START_ATTEMPTS
+            ):  # a transient sandbox-start fault must not kill the whole eval
                 env = backend.create_for_task(spec, task, instance_id=task.session_id)
                 try:
                     await env.start()
@@ -82,24 +83,56 @@ async def evaluate(a: argparse.Namespace) -> dict:
                     try:
                         await env.close()
                     except EnvInfraError as close_exc:
-                        print(f"[eval] {task.session_id}: close after failed start: {close_exc}"[:300], flush=True)
+                        print(
+                            f"[eval] {task.session_id}: close after failed start: {close_exc}"[
+                                :300
+                            ],
+                            flush=True,
+                        )
                     env = None
-                    print(f"[eval] {task.session_id}: env start failed (attempt {attempt + 1}): {exc}"[:400], flush=True)
+                    print(
+                        f"[eval] {task.session_id}: env start failed "
+                        f"(attempt {attempt + 1}): {exc}"[:400],
+                        flush=True,
+                    )
                     await asyncio.sleep(5 * (attempt + 1))
             if env is None:  # abstain: an unstarted episode is not a failed episode
                 if dump is not None:
-                    dump.write(json.dumps({"session": task.session_id, "reward": None,
-                                           "reason": "infra:env_start", "termination": "abstained"}) + "\n")
+                    dump.write(
+                        json.dumps(
+                            {
+                                "session": task.session_id,
+                                "reward": None,
+                                "reason": "infra:env_start",
+                                "termination": "abstained",
+                            }
+                        )
+                        + "\n"
+                    )
                     dump.flush()
                 return None
             try:
                 out = await loop.run_episode(task, client=client, env=env, budget=budget)
                 report = await env.verify()
-            except EnvInfraError as exc:  # e.g. the fresh verifier container never came up: abstain, never 0
-                print(f"[eval] {task.session_id}: infra during episode/verify: {exc}"[:400], flush=True)
+            except (
+                EnvInfraError
+            ) as exc:  # e.g. the fresh verifier container never came up: abstain, never 0
+                print(
+                    f"[eval] {task.session_id}: infra during episode/verify: {exc}"[:400],
+                    flush=True,
+                )
                 if dump is not None:
-                    dump.write(json.dumps({"session": task.session_id, "reward": None,
-                                           "reason": "infra:episode", "termination": "abstained"}) + "\n")
+                    dump.write(
+                        json.dumps(
+                            {
+                                "session": task.session_id,
+                                "reward": None,
+                                "reason": "infra:episode",
+                                "termination": "abstained",
+                            }
+                        )
+                        + "\n"
+                    )
                     dump.flush()
                 return None
             finally:
@@ -142,9 +175,17 @@ def main() -> None:
     p.add_argument("--total-tokens", type=int, default=16000, help="per episode")
     p.add_argument("--concurrency", type=int, default=16)
     p.add_argument("--parser", choices=["qwen_xml", "hermes_json"], default="qwen_xml")
-    p.add_argument("--partial-credit", action="store_true", help="score the fraction of fail_to_pass tests passing")
-    p.add_argument("--backend", choices=["enroot_task", "harbor_task"], default="enroot_task",
-                   help="harbor_task for Harbor-format tasks (make_harbor_tasks.py)")
+    p.add_argument(
+        "--partial-credit",
+        action="store_true",
+        help="score the fraction of fail_to_pass tests passing",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["enroot_task", "harbor_task"],
+        default="enroot_task",
+        help="harbor_task for Harbor-format tasks (make_harbor_tasks.py)",
+    )
     p.add_argument("--dump", default=None, help="write per-episode transcripts here (JSONL)")
     p.add_argument(
         "--resume", action="store_true",

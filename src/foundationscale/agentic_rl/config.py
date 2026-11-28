@@ -311,8 +311,10 @@ class EngineConfig:
     # VLLMClient.reload_weights refuses at the first publish(), after a GPU is
     # already resident -- refusing at config time instead costs nothing.
     reload_mode: Literal["collective_rpc"] | None = None
-    # Comma-separated GPU ids for engine REPLICAS (e.g. "0,1,2"): one server per GPU, port = base port + i,
-    # CUDA_VISIBLE_DEVICES set per replica; sessions round-robin across them. "" keeps the single engine.
+    # Comma-separated GPU ids for engine REPLICAS (e.g. "0,1,2"): one server per GPU, port = base
+    # port + i,
+    # CUDA_VISIBLE_DEVICES set per replica; sessions round-robin across them. "" keeps the single
+    # engine.
     replica_gpus: str = ""
     # The engine subprocess's COMPLETE environment -- an explicit allow-list,
     # never merged with this process's own os.environ (same "nothing is ever
@@ -409,7 +411,8 @@ class RolloutConfig:
     curriculum_state_path: str | None = None
     # ARL-21: directory for fs.trace/v1 span traces of every step's trajectories; None = off.
     trace_dir: str | None = None
-    # One-step-off-policy async rollout (RolloutHost.async_prefetch): generation of step k+1 overlaps training of k.
+    # One-step-off-policy async rollout (RolloutHost.async_prefetch): generation of step k+1
+    # overlaps training of k.
     async_prefetch: bool = False
 
 
@@ -887,7 +890,8 @@ def _build_engine(
     )
     if replica_gpus and not all(g.strip().isdigit() for g in replica_gpus.split(",")):
         raise AgenticConfigRefusal(
-            f"engine.replica_gpus: is {replica_gpus!r}, expected comma-separated GPU indices like '0,1,2'"
+            f"engine.replica_gpus: is {replica_gpus!r}, expected comma-separated GPU indices "
+            f"like '0,1,2'"
         )
     return EngineConfig(
         kind=kind,
@@ -1476,7 +1480,15 @@ def _build_reward(
     section = _strip_doc(raw, dotted_prefix="reward")
     local_overrides = _section_overrides(overrides, section="reward")
     allowed = frozenset(
-        {"kind", "abc2midi_bin", "timeout_s", "swe_tamper", "partial_credit", "format_gate", *_JUDGE_KEYS}
+        {
+            "kind",
+            "abc2midi_bin",
+            "timeout_s",
+            "swe_tamper",
+            "partial_credit",
+            "format_gate",
+            *_JUDGE_KEYS,
+        }
     )
     _refuse_unknown_keys(section, allowed, section="reward")
     kind = _resolve_scalar(

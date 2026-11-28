@@ -1449,58 +1449,58 @@ class ProcessShaping:
 class AgenticGRPOLoss:
     """Agentic GRPO: token ratio, centred session baseline, prompt-mean reduction.
 
-        Per supervised token, over each priced row::
+    Per supervised token, over each priced row::
 
-            ratio = exp(current_logprob - old_logprob)
-            score = min(ratio * advantage, clip(ratio, low, high) * advantage)
+        ratio = exp(current_logprob - old_logprob)
+        score = min(ratio * advantage, clip(ratio, low, high) * advantage)
 
-        and the reduction is ``prompt_mean``::
+    and the reduction is ``prompt_mean``::
 
-            loss = -weight * (1 / P) * SUM over active groups g of
-                   (SUM of score over g's supervised tokens)
-                        / (g's supervised-token count)
+        loss = -weight * (1 / P) * SUM over active groups g of
+               (SUM of score over g's supervised tokens)
+                    / (g's supervised-token count)
 
-        ``P`` is the number of ACTIVE groups -- groups holding at least one
-        supervised token -- and a zero-token group contributes to neither side.
-        ``P == 0`` is UNMEASURED and refuses (via
-        :func:`prompt_mean_row_weights`); it is never a zero loss. The row-weight
-        vector that realises the formula is built ONCE per evaluation by that
-        same function and is the quantity ``TensorPolicyLoss`` receives as
-        ``reduction_row_weights`` -- the kernel has no group ids and must not
-        re-derive a denominator. Under DDP the CMD rescales those weights to
-        ``world_size / (P_global * tokens_g)`` so the GLOBAL objective is the
-        prompt mean over every rank's groups; that rescale is the trainer's and
-        is stated in its own docstring.
+    ``P`` is the number of ACTIVE groups -- groups holding at least one
+    supervised token -- and a zero-token group contributes to neither side.
+    ``P == 0`` is UNMEASURED and refuses (via
+    :func:`prompt_mean_row_weights`); it is never a zero loss. The row-weight
+    vector that realises the formula is built ONCE per evaluation by that
+    same function and is the quantity ``TensorPolicyLoss`` receives as
+    ``reduction_row_weights`` -- the kernel has no group ids and must not
+    re-derive a denominator. Under DDP the CMD rescales those weights to
+    ``world_size / (P_global * tokens_g)`` so the GLOBAL objective is the
+    prompt mean over every rank's groups; that rescale is the trainer's and
+    is stated in its own docstring.
 
-        The advantage estimator is the concrete :class:`SessionGroupAdvantage`:
-        one row is one session, ``prompt_ids`` carries the session key (and the
-        caller's optional ``::harness`` suffix), and a ``None`` reward excludes
-        its row rather than scoring it 0.0. The clip default is the SYMMETRIC
-        +-0.2 PPO interval -- the absolute bounds ``(0.8, 1.2)``, stored as two
-        ``clip_low``/``clip_high`` fields exactly as :class:`DAPOLoss` stores its
-        asymmetric ``(0.8, 1.28)``, because ``_clipped_term`` prices ratio
-        bounds, not epsilons.
+    The advantage estimator is the concrete :class:`SessionGroupAdvantage`:
+    one row is one session, ``prompt_ids`` carries the session key (and the
+    caller's optional ``::harness`` suffix), and a ``None`` reward excludes
+    its row rather than scoring it 0.0. The clip default is the SYMMETRIC
+    +-0.2 PPO interval -- the absolute bounds ``(0.8, 1.2)``, stored as two
+    ``clip_low``/``clip_high`` fields exactly as :class:`DAPOLoss` stores its
+    asymmetric ``(0.8, 1.28)``, because ``_clipped_term`` prices ratio
+    bounds, not epsilons.
 
-        ``kl_weight`` is OPT-IN: its default of 0.0 keeps the reference-free
-        objective, with no reference column required and no KL component
-        declared. A positive value adds the token-relative k3 penalty against a
-        frozen reference policy, reduced as a token mean over every supervised
-        token (the tensor kernel's own expression), whichever reduction the policy
-        surrogate uses. This makes the atlas
-        recipe's ``kl_coefficient = 0.04`` representable (B2.3 C1) without
-        imposing a reference policy on the default objective.
+    ``kl_weight`` is OPT-IN: its default of 0.0 keeps the reference-free
+    objective, with no reference column required and no KL component
+    declared. A positive value adds the token-relative k3 penalty against a
+    frozen reference policy, reduced as a token mean over every supervised
+    token (the tensor kernel's own expression), whichever reduction the policy
+    surrogate uses. This makes the atlas
+    recipe's ``kl_coefficient = 0.04`` representable (B2.3 C1) without
+    imposing a reference policy on the default objective.
 
-        WHAT IS CLAIMED: token ratio scope, the configured symmetric clip, the
-        concrete :class:`SessionGroupAdvantage` with its min-group-size
-        agreement check, a ``prompt_mean`` denominator owned by
-        :func:`prompt_mean_row_weights`, a reference-free default, and an
-        optional token-mean k3 term matching ``TensorPolicyLoss``.
-        ``expects_dynamic_sampling`` is False (declared, and ``filter_groups``
-        arrives in a later slice).
+    WHAT IS CLAIMED: token ratio scope, the configured symmetric clip, the
+    concrete :class:`SessionGroupAdvantage` with its min-group-size
+    agreement check, a ``prompt_mean`` denominator owned by
+    :func:`prompt_mean_row_weights`, a reference-free default, and an
+    optional token-mean k3 term matching ``TensorPolicyLoss``.
+    ``expects_dynamic_sampling`` is False (declared, and ``filter_groups``
+    arrives in a later slice).
 
-        WHAT IS NOT CLAIMED: any rollout-side behaviour, dynamic sampling,
-        overlong reward shaping, or convergence/benchmark/paper equivalence --
-        this objective has never been trained here.
+    WHAT IS NOT CLAIMED: any rollout-side behaviour, dynamic sampling,
+    overlong reward shaping, or convergence/benchmark/paper equivalence --
+    this objective has never been trained here.
     """
 
     group_size: int = 2
@@ -1622,7 +1622,7 @@ class AgenticGRPOLoss:
             self.mask_column,
             self.old_logprob_column,
         )
-        columns = base
+        columns: tuple[str, ...] = base
         if self.process_shaping is not None:
             columns = columns + self.process_shaping.columns
         if self.kl_weight != 0.0:
@@ -1728,7 +1728,7 @@ class AgenticGRPOLoss:
                 )
             surrogate_total += row_weights[index] * row_total
         policy_contribution = -self.weight * surrogate_total
-        components = (
+        components: tuple[LossComponent, ...] = (
             LossComponent(
                 name=self.component_name,
                 weight=self.weight,
@@ -1742,9 +1742,7 @@ class AgenticGRPOLoss:
                 prices.advantage,
             )
 
-        kl_total, kl_supervised = _kl_component_terms(
-            prices, origin="agentic_grpo"
-        )
+        kl_total, kl_supervised = _kl_component_terms(prices, origin="agentic_grpo")
         rows_used = len(prices.batch_rows)
         if kl_supervised == 0:
             raise SupervisionRefusal(

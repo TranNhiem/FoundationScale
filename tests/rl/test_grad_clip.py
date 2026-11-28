@@ -18,7 +18,7 @@ def test_large_gradients_are_clipped_to_max_norm():
     opt = torch.optim.SGD([a, b], lr=0.1)
     pre = _clip_device_grads(opt, 1.0)
     post = torch.sqrt(a.grad.pow(2).sum() + b.grad.pow(2).sum()).item()
-    assert pre == pytest.approx(10.0 * 7 ** 0.5, rel=1e-5) and post == pytest.approx(1.0, rel=1e-4)
+    assert pre == pytest.approx(10.0 * 7**0.5, rel=1e-5) and post == pytest.approx(1.0, rel=1e-4)
 
 
 def test_small_gradients_are_untouched():
@@ -34,7 +34,9 @@ def test_master_weight_style_optimizer_uses_device_params():
         device_params = [a, b]
 
     _clip_device_grads(Wrapper(), 2.0)
-    assert torch.sqrt(a.grad.pow(2).sum() + b.grad.pow(2).sum()).item() == pytest.approx(2.0, rel=1e-4)
+    assert torch.sqrt(a.grad.pow(2).sum() + b.grad.pow(2).sum()).item() == pytest.approx(
+        2.0, rel=1e-4
+    )
 
 
 def test_no_grads_is_a_noop():

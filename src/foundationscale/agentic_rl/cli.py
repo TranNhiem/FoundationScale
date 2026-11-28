@@ -252,7 +252,8 @@ def _engine_server_spec(config: AgenticRLConfig) -> EngineServerSpec:
 
 
 def _engine_servers(config: AgenticRLConfig) -> tuple[EngineServer, ...]:
-    """One EngineServer, or one per ``engine.replica_gpus`` entry (own port and CUDA_VISIBLE_DEVICES each)."""
+    """One EngineServer, or one per ``engine.replica_gpus`` entry (own port and
+    CUDA_VISIBLE_DEVICES each)."""
     import dataclasses
 
     base = _engine_server_spec(config)
@@ -267,7 +268,11 @@ def _engine_servers(config: AgenticRLConfig) -> tuple[EngineServer, ...]:
             if command[k] == "--port":
                 command[k + 1] = str(port)
         env = {**dict(base.env or {}), "CUDA_VISIBLE_DEVICES": gpu}
-        servers.append(EngineServer(dataclasses.replace(base, command=type(base.command)(command), port=port, env=env)))
+        servers.append(
+            EngineServer(
+                dataclasses.replace(base, command=type(base.command)(command), port=port, env=env)
+            )
+        )
     return tuple(servers)
 
 

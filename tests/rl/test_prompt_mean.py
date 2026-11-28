@@ -481,7 +481,9 @@ def test_tensor_loss_matches_the_oracle_with_an_active_kl_term(seed: int) -> Non
     used = advantage.rows
     weights = prompt_mean_row_weights([prompt_ids[r] for r in used], [sum(mask[r]) for r in used])
     tensor = TensorPolicyLoss(objective)(
-        current_logprobs=torch.tensor([current[r] for r in used], dtype=torch.float64, requires_grad=True),
+        current_logprobs=torch.tensor(
+            [current[r] for r in used], dtype=torch.float64, requires_grad=True
+        ),
         old_logprobs=torch.tensor([old[r] for r in used], dtype=torch.float64),
         advantages=torch.tensor([list(w) for w in advantage.weights], dtype=torch.float64),
         mask=torch.tensor([mask[r] for r in used], dtype=torch.float64),

@@ -351,6 +351,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "fully line-covered by tests/agentic_rl/test_envs_sandbox_task.py, but no mutation row "
         "yet proves a flipped parse or lifecycle rule would be caught."
     ),
+    "src/foundationscale/agentic_rl/envs/harbor_task.py": (
+        "Harbor-format task env (fresh-container verification, reward-file scrub, partial-credit "
+        "leaves): covered by tests/agentic_rl/test_envs_harbor_task.py, but no mutation row yet "
+        "proves a flipped verify-mode or reward-leaf rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/envs/diff_guard.py": (
         "SWE test-harness tamper guard (host-side fingerprint of conftest/pytest.ini/*.pth): "
         "fully line-covered by tests/agentic_rl/test_diff_guard.py, but no mutation row yet "

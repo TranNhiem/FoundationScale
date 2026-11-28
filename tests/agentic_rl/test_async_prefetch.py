@@ -1,4 +1,5 @@
-"""RolloutHost.async_prefetch: step k+1 is generated while the trainer works on k; publish waits; staleness <= 1."""
+"""RolloutHost.async_prefetch: step k+1 is generated while the trainer works on k;
+publish waits; staleness <= 1."""
 
 from __future__ import annotations
 
@@ -28,7 +29,9 @@ class Probe:
 
 
 def _host(probe, **kw):
-    host = object.__new__(RolloutHost)  # bypass field validation; only the prefetch logic is under test
+    host = object.__new__(
+        RolloutHost
+    )  # bypass field validation; only the prefetch logic is under test
     object.__setattr__(host, "_state", {})
     object.__setattr__(host, "async_prefetch", kw.get("async_prefetch", True))
     object.__setattr__(host, "prefetch_limit", kw.get("prefetch_limit"))

@@ -324,10 +324,14 @@ class RolloutHost:
     # ARL-21: when set, every step's final trajectories are written as fs.trace/v1 span traces
     # to <trace_dir>/step_<NNNNNN>.jsonl (agentic_rl.fs_trace); None (default) writes nothing.
     trace_dir: str | None = None
-    # Opt-in one-step-off-policy prefetch (rollout.async_prefetch): ``rollout(k)`` starts step k+1's rollout on a
-    # background thread with the CURRENT fleet weights, so generation overlaps the trainer's step k; ``publish(k)``
-    # waits for that prefetch before syncing weights, so no reload lands mid-generation and every batch is at most
-    # one policy step stale. ``prefetch_limit`` (the trainer's max_steps) stops a wasted rollout past the last step.
+    # Opt-in one-step-off-policy prefetch (rollout.async_prefetch): ``rollout(k)`` starts step k+1's
+    # rollout on a
+    # background thread with the CURRENT fleet weights, so generation overlaps the trainer's step k;
+    # ``publish(k)``
+    # waits for that prefetch before syncing weights, so no reload lands mid-generation and every
+    # batch is at most
+    # one policy step stale. ``prefetch_limit`` (the trainer's max_steps) stops a wasted rollout
+    # past the last step.
     async_prefetch: bool = False
     prefetch_limit: int | None = None
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
@@ -993,7 +997,8 @@ class RolloutHost:
             else ()
         )
         # Keyed by step for async_prefetch: step k+1's prefetched rollout runs before publish(k), so
-        # publish must judge the versions of the batch it actually trained on, not the newest rollout's.
+        # publish must judge the versions of the batch it actually trained on, not the newest
+        # rollout's.
         self._state.setdefault("versions_by_step", {})[step] = self._state["last_step_versions"]
         if self.trace_dir is not None:
             self._write_traces(step, trajectories)
@@ -1033,7 +1038,9 @@ class RolloutHost:
             return asyncio.run(self.rollout_async(step))
         pending = self._state.pop("prefetch", None)
         if pending is not None and pending[0] == step:
-            batch = pending[1].result()  # re-raises the prefetched rollout's exception here, in the trainer
+            batch = pending[
+                1
+            ].result()  # re-raises the prefetched rollout's exception here, in the trainer
         else:
             if pending is not None:
                 pending[1].result()  # never leave a stale prefetch running
@@ -1043,11 +1050,15 @@ class RolloutHost:
             from concurrent.futures import ThreadPoolExecutor
 
             pool = self._state.setdefault("prefetch_pool", ThreadPoolExecutor(max_workers=1))
-            self._state["prefetch"] = (nxt, pool.submit(lambda: asyncio.run(self.rollout_async(nxt))))
+            self._state["prefetch"] = (
+                nxt,
+                pool.submit(lambda: asyncio.run(self.rollout_async(nxt))),
+            )
         return batch
 
     def _await_prefetch(self) -> None:
-        """Block until an in-flight prefetched rollout finishes (its result stays queued for ``rollout``)."""
+        """Block until an in-flight prefetched rollout finishes (its result stays queued for
+        ``rollout``)."""
         pending = self._state.get("prefetch")
         if pending is not None:
             from concurrent.futures import wait
@@ -1103,7 +1114,8 @@ class RolloutHost:
     def _publish_body(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
         """Push the policy trained through ``step`` to the generation fleet.
 
-        With ``async_prefetch`` the in-flight next-step rollout is awaited first, so the reload never lands mid-
+        With ``async_prefetch`` the in-flight next-step rollout is awaited first, so the reload
+        never lands mid-
         generation (that batch was generated with the previous weights: exactly one step stale).
 
         No-op when ``weight_sync`` is ``None``. The save itself is built HERE,

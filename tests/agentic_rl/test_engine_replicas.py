@@ -8,13 +8,23 @@ import pytest
 from foundationscale.agentic_rl import cli
 from foundationscale.agentic_rl.config import AgenticConfigRefusal, build_config
 
-CFG = Path(__file__).resolve().parents[2] / "examples/agentic-rl-GB200/configs/harbor_qwen35_4b_2gpu.json"
+CFG = (
+    Path(__file__).resolve().parents[2]
+    / "examples/agentic-rl-GB200/configs/harbor_qwen35_4b_2gpu.json"
+)
 
 
 def _config(overrides):
     s = CFG.read_text(encoding="utf-8")
-    for k, v in {"@MODEL@": "/m", "@OUT@": "/o", "@PORT@": "18400", '"@PORT_INT@"': "18400", "@HOME@": "/h",
-                 "@ENGINE_GPU@": "0", "@TASKS@": "/t.jsonl"}.items():
+    for k, v in {
+        "@MODEL@": "/m",
+        "@OUT@": "/o",
+        "@PORT@": "18400",
+        '"@PORT_INT@"': "18400",
+        "@HOME@": "/h",
+        "@ENGINE_GPU@": "0",
+        "@TASKS@": "/t.jsonl",
+    }.items():
         s = s.replace(k, v)
     return build_config(json.loads(s), overrides)
 
