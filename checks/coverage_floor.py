@@ -342,6 +342,7 @@ FLOORS: dict[str, int] = {
     "src/foundationscale/upstream/nemo/__init__.py": 99,  # measured 100% (docstring only)
     "src/foundationscale/upstream/nemo/adjudicate.py": 58,  # measured 59%
     "src/foundationscale/upstream/nemo/census.py": 90,  # measured 91%
+    "src/foundationscale/upstream/nemo/_io.py": 99,  # measured 100%; 1 pt CI slack
     "src/foundationscale/upstream/nemo/decode.py": 32,  # measured 33%
     "src/foundationscale/upstream/nemo/finetune.py": 44,  # measured 45%
     "src/foundationscale/upstream/nemo/salm_adjudicate.py": 60,  # measured 61%

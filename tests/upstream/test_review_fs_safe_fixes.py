@@ -62,3 +62,42 @@ def test_atomic_write_replaces_whole_file_and_leaves_no_temp(tmp_path: Path) -> 
     write_text_atomic(target, '{"new": 1}')
     assert target.read_text() == '{"new": 1}'
     assert [p.name for p in tmp_path.iterdir()] == ["result.json"]
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_level3_judge_refuses_a_non_finite_measurement(bad) -> None:
+    from foundationscale.upstream.levels import judge, level3_plan
+
+    step = next(s for s in level3_plan() if s.model_id == "canary-qwen-2.5b")
+    with pytest.raises(ValueError, match="unmeasured"):
+        judge(step, bad)
+
+
+def test_unknown_sdp_backend_is_a_named_refusal_not_a_keyerror() -> None:
+    from foundationscale.train.sdp_backend import sdp_pin_refusal_reason
+
+    reason = sdp_pin_refusal_reason("no-such-backend", object(), "2.9.0")
+    assert reason is not None and "unknown" in reason and "96" in reason
+
+
+def test_atomic_write_failure_leaves_the_old_file_and_no_temp(tmp_path: Path, monkeypatch) -> None:
+    import foundationscale.upstream.nemo._io as io_mod
+
+    target = tmp_path / "result.json"
+    target.write_text("old")
+
+    def boom(self, dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(io_mod.Path, "replace", boom)
+    with pytest.raises(OSError, match="replace failed"):
+        write_text_atomic(target, "new")
+    assert target.read_text() == "old"
+    assert [p.name for p in tmp_path.iterdir()] == ["result.json"]
+
+
+def test_manifest_dir_fsync_tolerates_an_unopenable_directory(tmp_path: Path) -> None:
+    from foundationscale.provenance.manifest import _fsync_dir
+
+    _fsync_dir(tmp_path / "does-not-exist")  # best effort: never raises
+    _fsync_dir(tmp_path)
