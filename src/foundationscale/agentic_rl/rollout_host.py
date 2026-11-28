@@ -999,11 +999,12 @@ class RolloutHost:
         # Keyed by step for async_prefetch: step k+1's prefetched rollout runs before publish(k), so
         # publish must judge the versions of the batch it actually trained on, not the newest
         # rollout's.
-        self._state.setdefault("versions_by_step", {})[step] = (
-            self._state.get("push_count", 0),
-            self._state["rollout_frontier"],
-            self._state["last_step_versions"],
-        )
+        if self.async_prefetch:
+            self._state.setdefault("versions_by_step", {})[step] = (
+                self._state.get("push_count", 0),
+                self._state["rollout_frontier"],
+                self._state["last_step_versions"],
+            )
         if self.trace_dir is not None:
             self._write_traces(step, trajectories)
         batch = flatten(self._expand_segments(trajectories), group_by_harness=self.group_by_harness)

@@ -75,7 +75,10 @@ async def episode(task: EpisodeTask, solution: Path | None, idx: int) -> dict:
         out.update(reward=None, reason=f"{type(exc).__name__}: {exc}"[:400])
     finally:
         if env is not None:
-            await env.close()
+            try:
+                await env.close()
+            except Exception as exc:  # noqa: BLE001 - a close fault is recorded, never fatal to the gather
+                out.setdefault("close_error", f"{type(exc).__name__}: {exc}"[:400])
     out["wall_s"] = round(time.monotonic() - t0, 1)
     return out
 
@@ -89,14 +92,25 @@ def task_fingerprint(task_dir: Path) -> str:
     return h.hexdigest()
 
 
-def reusable(uid: str, result: dict, tasks_root: Path) -> bool:
-    """A stored verdict is reused only when the task bytes it was measured on are unchanged."""
+def row_fingerprint(row: dict | None, task_dir: Path) -> str:
+    """Task-dir bytes PLUS the task's JSONL row (messages, metadata): both decide the verdict."""
+    h = hashlib.sha256(task_fingerprint(task_dir).encode())
+    h.update(json.dumps(row, sort_keys=True).encode() if row is not None else b"null")
+    return h.hexdigest()
+
+
+def reusable(uid: str, result: dict, tasks_root: Path, row: dict | None = None) -> bool:
+    """Reuse a stored verdict only if the task bytes and row it was measured on are unchanged."""
     d = tasks_root / uid
-    return d.is_dir() and result.get("fingerprint") == task_fingerprint(d)
+    return d.is_dir() and result.get("fingerprint") == row_fingerprint(row, d)
 
 
 async def gate(
-    task: EpisodeTask, tasks_root: Path, sem: asyncio.Semaphore, log: Path | None = None
+    task: EpisodeTask,
+    tasks_root: Path,
+    sem: asyncio.Semaphore,
+    log: Path | None = None,
+    row: dict | None = None,
 ) -> tuple[str, dict]:
     async with sem:
         nop = await episode(task, None, 0)
@@ -110,7 +124,7 @@ async def gate(
         "status": status,
         "oracle": oracle,
         "nop": nop,
-        "fingerprint": task_fingerprint(tasks_root / task.uid),
+        "fingerprint": row_fingerprint(row, tasks_root / task.uid),
     }
     if log is not None:  # one line per finished task: a crash or kill never loses finished work
         with log.open("a", encoding="utf-8") as fh:
@@ -133,6 +147,7 @@ async def run(args: argparse.Namespace) -> dict:
         )
         for r in rows
     ]
+    by_uid = {r["uid"]: r for r in rows}
     log = args.out.with_suffix(".progress.jsonl")
     done: dict = {}
     if args.resume and log.is_file():
@@ -140,12 +155,12 @@ async def run(args: argparse.Namespace) -> dict:
             if line.strip():
                 r = json.loads(line)
                 uid = r.pop("uid")
-                if reusable(uid, r, args.tasks_root):
+                if reusable(uid, r, args.tasks_root, by_uid.get(uid)):
                     done[uid] = r
         print(f"resuming: {len(done)} task(s) already gated on unchanged bytes", flush=True)
     sem = asyncio.Semaphore(args.workers)
     fresh = await asyncio.gather(
-        *(gate(t, args.tasks_root, sem, log) for t in tasks if t.uid not in done)
+        *(gate(t, args.tasks_root, sem, log, by_uid[t.uid]) for t in tasks if t.uid not in done)
     )
     return {**done, **dict(fresh)}
 
@@ -200,17 +215,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     if args.from_gate:
-        results = json.loads(args.from_gate.read_text(encoding="utf-8"))
-        for (
-            uid,
-            r,
-        ) in results.items():  # a verdict measured on other bytes is not evidence for these
-            if r.get("status") == "PASS" and not reusable(uid, r, args.tasks_root):
+        stored = json.loads(args.from_gate.read_text(encoding="utf-8"))
+        task_lines = (
+            args.tasks.read_text(encoding="utf-8").splitlines() if args.tasks.is_file() else []
+        )
+        by_uid = {r["uid"]: r for r in (json.loads(ln) for ln in task_lines if ln.strip())}
+        # Judge exactly the tasks in --tasks: an old verdict for another task is not evidence, and a
+        # task with no stored verdict is UNMEASURED, never silently absent.
+        results = {}
+        for uid, row in by_uid.items():
+            r = stored.get(uid)
+            if r is None:
+                results[uid] = {"status": "UNMEASURED", "stale": "no stored verdict"}
+            elif r.get("status") == "PASS" and not reusable(uid, r, args.tasks_root, row):
                 results[uid] = {
                     **r,
                     "status": "UNMEASURED",
                     "stale": "task bytes changed since gating",
                 }
+            else:
+                results[uid] = r
     else:
         results = asyncio.run(run(args))
         args.out.write_text(json.dumps(results, indent=1, sort_keys=True), encoding="utf-8")
@@ -222,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     print("GATE", json.dumps(counts), flush=True)
     if counts["PASS"] == len(results) and results:
         return 0
-    return 5 if counts["PASS"] or counts["RED"] else 95
+    return 5 if counts["RED"] else 95  # PASS + UNMEASURED with no RED is unmeasured, not red
 
 
 if __name__ == "__main__":

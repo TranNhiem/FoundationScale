@@ -407,3 +407,9 @@ def test_proposal_is_withheld_when_the_ledger_cannot_be_written(tmp_path, monkey
     assert out["decision"] == "ledger_unwritable" and out["proposal"] is None
     monkeypatch.undo()
     assert gov.on_event("t1", "src", {"x": 1}, now, True)["decision"] == "propose"  # nothing was consumed
+
+
+@pytest.mark.parametrize("junk", [1, "yes", ["x"], {"a": 1}])
+def test_truthy_non_bool_condition_never_opens_the_gate(tmp_path, junk):
+    governor = ag.Governor([make_record(budget_cap=1, daily_cap=1)], tmp_path / "junk")
+    assert call(governor, condition_holds=junk)["decision"] == "condition_false"

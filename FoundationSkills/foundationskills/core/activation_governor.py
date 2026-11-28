@@ -162,7 +162,7 @@ class Governor:
             return finish("duplicate", "payload key was already proposed for this trigger")
         if now_utc >= _parse_dt(rec.expires_at, "expires_at").astimezone(_dt.timezone.utc):
             return finish("expired", f"record expired at {rec.expires_at}")
-        if not condition_holds:
+        if condition_holds is not True:  # only a real True opens the gate; truthy junk does not
             return finish("condition_false", "condition does not hold against current state")
         q = rec.quiet_hours
         quiet = q is not None and ((q[0] <= now.hour < q[1]) if q[0] < q[1]

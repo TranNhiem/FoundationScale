@@ -169,3 +169,13 @@ def test_permission_error_reading_ledger_refuses_governor_start(
 
     with pytest.raises(ag.GovernorRefusal, match="ledger unreadable"):
         ag.Governor([make_record()], tmp_path)
+
+
+def test_unidentifiable_calls_make_pairing_unmeasured() -> None:
+    from foundationskills.agent.self_improve_evidence import paired_cases
+
+    good = {"arm": "with_skill", "package": "p", "measured": True, "case_id": "c1", "rep": 0,
+            "items_graded": 1, "items_met": 1}
+    bad = {**good, "case_id": None}
+    with pytest.raises(ValueError, match="usable"):
+        paired_cases({"calls": [good]}, {"calls": [bad]}, "p")

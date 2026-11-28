@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import statistics
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -60,7 +61,9 @@ async def evaluate(a: argparse.Namespace) -> dict:
     if a.resume and a.dump and Path(a.dump).exists():
         # Keep the measured episodes of an earlier attempt; re-run the abstained ones.
         rows = [json.loads(ln) for ln in Path(a.dump).read_text().splitlines() if ln.strip()]
-        kept = [r for r in rows if r["reward"] is not None]
+        wanted = {f"{t['uid']}#{k}" for t in tasks for k in range(a.samples)}
+        # only this run's task x sample matrix: rows from another --n/--samples/--tasks never count
+        kept = [r for r in rows if r["reward"] is not None and r["session"] in wanted]
         done = {r["session"]: r["reward"] for r in kept}
         Path(a.dump).write_text("".join(json.dumps(r) + "\n" for r in kept))
     dump = Path(a.dump).open("a" if a.resume else "w") if a.dump else None  # noqa: SIM115
@@ -192,7 +195,10 @@ def main() -> None:
         help="keep the measured episodes already in --dump and run only the rest (after an "
         "engine hang, restart the server and re-run with --resume)",
     )  # fmt: skip
-    print(json.dumps(asyncio.run(evaluate(p.parse_args()))))
+    result = asyncio.run(evaluate(p.parse_args()))
+    print(json.dumps(result))
+    if not result["measured"]:  # nothing measured is UNMEASURED, never a clean exit
+        sys.exit(95)
 
 
 if __name__ == "__main__":

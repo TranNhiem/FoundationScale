@@ -321,3 +321,38 @@ def test_fresh_mode_refuses_root_workdir(tmp_path):
     if env._config.workdir == "/":
         out = env._verify_sync()
         assert out["swe_status"] == "error" and "non-root workdir" in out["swe_error"]
+
+
+# --- r3 review fixes ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"a": 1, "b": NaN}',
+        '{"a": 1, "b": Infinity}',
+        '{"a": 1, "b": 1e400}',
+        '{"a": 1, "b": ' + "9" * 400 + "}",
+    ],
+)
+def test_a_non_finite_or_overflowing_leaf_abstains_the_whole_reward(text) -> None:
+    # dropping the bad leaf would let "a" alone pass harbor::all with a component unmeasured
+    assert reward_tests("reward.json", text) is None
+
+
+def test_workdir_copy_skips_fifos_and_devices(tmp_path) -> None:
+    import os
+
+    from foundationscale.agentic_rl.envs.harbor_task import _special_files
+
+    (tmp_path / "f.txt").write_text("x")
+    (tmp_path / "d").mkdir()
+    os.mkfifo(tmp_path / "pipe")
+    assert _special_files(str(tmp_path), ["f.txt", "d", "pipe", "gone"]) == {"pipe"}
+
+
+def test_fresh_mode_refuses_a_workdir_containing_hidden_tests(tmp_path):
+    import dataclasses
+
+    env = _fresh_env(tmp_path, lambda root: Result())
+    env._config = dataclasses.replace(env._config, workdir="/srv", hidden_paths=("/srv/tests",))
+    out = env._verify_sync()
+    assert out["swe_status"] == "error" and "hidden test paths" in out["swe_error"]

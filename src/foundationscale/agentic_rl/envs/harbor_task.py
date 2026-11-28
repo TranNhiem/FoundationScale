@@ -62,11 +62,18 @@ def short_instance_id(instance_id: str) -> str:
 
 
 def _leaves(value: Any, prefix: str = "") -> list[tuple[str, float]]:
-    """Every numeric (non-bool, finite) leaf of a JSON value as ``(dotted key, value)``."""
+    """Every numeric (non-bool) leaf of a JSON value as ``(key, value)``; non-finite -> NaN."""
     if isinstance(value, bool):
         return []
     if isinstance(value, (int, float)):
-        return [(prefix or "reward", float(value))] if math.isfinite(value) else []
+        # A non-finite or overflowing leaf is kept as NaN, never dropped: dropping it would let the
+        # remaining leaves pass harbor::all with a reward component unmeasured. reward_tests then
+        # abstains on the whole file.
+        try:
+            number = float(value)
+        except OverflowError:
+            return [(prefix or "reward", math.nan)]
+        return [(prefix or "reward", number if math.isfinite(number) else math.nan)]
     if isinstance(value, Mapping):
         out: list[tuple[str, float]] = []
         for key in sorted(value, key=str):
@@ -88,8 +95,8 @@ def reward_tests(name: str, text: str) -> dict[str, str] | None:
     except ValueError:
         return None
     leaves = _leaves(value)
-    if not leaves:
-        return None
+    if not leaves or any(not math.isfinite(score) for _, score in leaves):
+        return None  # no leaves, or a component that is not a finite number: unmeasured, abstain
     tests = {f"harbor::{key}": ("passed" if score == 1.0 else "failed") for key, score in leaves}
     tests[ALL_TEST] = "passed" if all(score == 1.0 for _, score in leaves) else "failed"
     return tests
@@ -150,6 +157,14 @@ class HarborTaskEnvironment(TaskSandboxEnvironment):
                 "swe_error": "fresh verification needs a non-root workdir",
                 "harbor_verify_mode": "fresh",
             }
+        workdir = self._config.workdir.rstrip("/")
+        if any(p == workdir or p.startswith(workdir + "/") for p in self._config.hidden_paths):
+            # the agent's copy of the workdir would REPLACE the pristine hidden tests it contains
+            return {
+                "swe_status": "error",
+                "swe_error": "fresh verification refuses a workdir that contains hidden test paths",
+                "harbor_verify_mode": "fresh",
+            }
         factory = self._fresh_sandbox
         assert factory is not None  # _verify_sync routes here only when a factory is set
         fresh: Any = None
@@ -161,7 +176,7 @@ class HarborTaskEnvironment(TaskSandboxEnvironment):
             if dst.exists() or dst.is_symlink():
                 shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
             if src.is_dir():
-                shutil.copytree(src, dst, symlinks=True)
+                shutil.copytree(src, dst, symlinks=True, ignore=_special_files)
             for (
                 name
             ) in REWARD_FILES:  # a reward planted inside the copied workdir must never be read back
@@ -189,6 +204,23 @@ class HarborTaskEnvironment(TaskSandboxEnvironment):
             if fresh is not None:
                 with contextlib.suppress(SandboxError, OSError):
                     fresh.stop(delete=True)
+
+
+def _special_files(directory: str, names: list[str]) -> set[str]:
+    """copytree ignore hook: skip FIFOs, sockets and device nodes (a FIFO would block the copy)."""
+    import os
+    import stat
+    from pathlib import Path
+
+    skipped = set()
+    for name in names:
+        try:
+            mode = os.lstat(Path(directory) / name).st_mode
+        except OSError:
+            continue
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            skipped.add(name)
+    return skipped
 
 
 def _read_rewards(sandbox: Any, result: Any, *, verify_mode: str) -> dict[str, str]:

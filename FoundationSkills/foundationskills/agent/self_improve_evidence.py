@@ -51,7 +51,12 @@ def _keyed_case_values(report: Mapping[str, Any], package: str, arm: str,
     for call in report.get("calls") or []:
         if (call.get("arm") == arm and call.get("package") == package
                 and call.get("measured") in (True, "True")):
-            key = (str(call.get("case_id")), int(call.get("rep")))
+            case_id, rep = call.get("case_id"), call.get("rep")
+            if not isinstance(case_id, str) or not case_id or type(rep) is not int:
+                # an unidentifiable call cannot be paired: the evidence is unmeasured, never guessed
+                raise ValueError(f"call without a usable (case_id, rep) in {side} report: "
+                                 f"{case_id!r}, {rep!r}")
+            key = (case_id, rep)
             if key in calls:
                 raise ValueError(f"duplicate (case_id, rep) key {key!r} in {side} report")
             calls[key] = _case_pass_value(call)
