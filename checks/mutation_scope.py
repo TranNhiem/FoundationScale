@@ -351,6 +351,11 @@ PENDING_ENROLMENT: dict[str, str] = {
         "fully line-covered by tests/agentic_rl/test_envs_sandbox_task.py, but no mutation row "
         "yet proves a flipped parse or lifecycle rule would be caught."
     ),
+    "src/foundationscale/upstream/nemo/_io.py": (
+        "atomic result-file writes for the NeMo CLIs (temp + fsync + os.replace): covered by "
+        "tests/upstream/test_review_fs_safe_fixes.py, but no mutation row yet proves a dropped "
+        "fsync or a non-atomic write would be caught."
+    ),
     "src/foundationscale/agentic_rl/envs/harbor_task.py": (
         "Harbor-format task env (fresh-container verification, reward-file scrub, partial-credit "
         "leaves): covered by tests/agentic_rl/test_envs_harbor_task.py, but no mutation row yet "

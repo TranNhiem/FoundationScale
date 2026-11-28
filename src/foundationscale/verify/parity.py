@@ -781,7 +781,9 @@ def _classify(
 ) -> ParityStatus:
     if bitwise and mismatched == 0:
         return ParityStatus.EXACT
-    within_cosine = cosine is None or math.isnan(cosine) or cosine >= tolerances.min_cosine
+    # None = no angle exists (a zero norm): abs/frob decide. NaN = the angle was NOT measured
+    # (overflowing norms) and must never satisfy the cosine tolerance.
+    within_cosine = cosine is None or (not math.isnan(cosine) and cosine >= tolerances.min_cosine)
     if (
         max_abs_diff <= tolerances.max_abs_diff
         and rel_frob <= tolerances.max_rel_frob

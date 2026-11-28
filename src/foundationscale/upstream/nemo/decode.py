@@ -27,6 +27,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from foundationscale.upstream.nemo._io import write_text_atomic
+
 __all__ = ["main", "pair_rows", "parse_args"]
 
 
@@ -129,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         # Every row, with its duration, so regressions can be located (e.g. by clip length).
         "all": per_row,
     }
-    Path(args.out).write_text(json.dumps(result, indent=2))
+    write_text_atomic(Path(args.out), json.dumps(result, indent=2))
     print(f"n={len(rows)}\nWER={wer.rate()}\nCER={cer.rate()}\nclass={type(model).__name__}")
     return 0
 

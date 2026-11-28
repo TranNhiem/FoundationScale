@@ -28,6 +28,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from foundationscale.upstream.nemo._io import write_text_atomic
+
 __all__ = ["chat_prompt", "main", "pair_rows", "parse_args", "prompts_for"]
 
 
@@ -124,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     pairs = [(p["reference"], p["hypothesis"]) for p in per_row]
     wer = corpus_error_rate(pairs, metric="wer", expected=len(rows))
     cer = corpus_error_rate(pairs, metric="cer", expected=len(rows))
-    Path(args.out).write_text(
+    write_text_atomic(
+        Path(args.out),
         json.dumps(
             {
                 "model": args.model,
@@ -137,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 "all": per_row,
             },
             indent=2,
-        )
+        ),
     )
     print(f"n={len(rows)}\nWER={wer.rate()}\nCER={cer.rate()}\nclass={type(model).__name__}")
     return 0

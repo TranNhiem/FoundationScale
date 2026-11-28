@@ -414,14 +414,25 @@ def _mono_float32(samples: Any, row_id: str) -> np.ndarray:
 
     try:
         array = np.asarray(samples)
-        if array.ndim == 2:
-            array = array.mean(axis=-1)
-        elif array.ndim != 1:
+        if array.ndim not in (1, 2):
             raise AudioLoadError(row_id, "unsupported_value")
-        if np.issubdtype(array.dtype, np.integer):
+        # Scale integer PCM BEFORE averaging channels: mean() promotes ints to float, which would
+        # skip this branch and hand the tower raw +-32767-range samples for stereo PCM.
+        if np.issubdtype(array.dtype, np.unsignedinteger):
+            info = np.iinfo(array.dtype)
+            half = (
+                int(info.max) + 1
+            ) / 2.0  # offset-binary PCM (e.g. uint8) is centred, as soundfile does
+            array = (array.astype(np.float32) - half) / half
+        elif np.issubdtype(array.dtype, np.integer):
             info = np.iinfo(array.dtype)
             array = array.astype(np.float32) / float(max(abs(info.min), info.max))
-        return array.astype(np.float32, copy=False)
+        if array.ndim == 2:
+            array = array.mean(axis=-1)
+        array = array.astype(np.float32, copy=False)
+        if not np.isfinite(array).all():  # NaN/inf audio is not a verified waveform
+            raise AudioLoadError(row_id, "unsupported_value")
+        return array
     except AudioLoadError:
         raise
     except Exception as exc:  # noqa: BLE001 - numpy refuses more shapes than it names

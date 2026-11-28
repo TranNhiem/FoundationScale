@@ -144,6 +144,30 @@ class CheckpointFormatError(CheckpointError):
     """
 
 
+def checked_member_path(name: object, *, path: str, what: str) -> str:
+    """Return ``name`` if it is a plain relative member of a checkpoint directory, else refuse.
+
+    Checkpoint metadata (DCP storage records, safetensors index ``weight_map`` values) names files
+    to read relative to the checkpoint directory. A name that is absolute, contains a ``..``
+    component, or a NUL byte would read outside that directory, so it is a format error, never a
+    path to follow.
+    """
+    text = name if isinstance(name, str) else None
+    parts = Path(text).parts if text else ()
+    if (
+        not text
+        or "\x00" in text
+        or Path(text).is_absolute()
+        or any(part in ("..", "") for part in parts)
+    ):
+        raise CheckpointFormatError(
+            f"{what}: member path {name!r} is not a plain relative path inside the checkpoint "
+            f"(absolute, '..' or NUL); refusing to read outside the checkpoint directory",
+            path=path,
+        )
+    return text
+
+
 class TensorNotFoundError(CheckpointError):
     """The requested tensor key is not present in the source."""
 
@@ -571,7 +595,9 @@ class DcpReader:
 
     def _read_blob(self, key: str, offsets: tuple[int, ...], sinfo: Any) -> tuple[Any, int]:
         """Read one storage record, returning (tensor, bytes_read)."""
-        blob_path = Path(self.path) / sinfo.relative_path
+        blob_path = Path(self.path) / checked_member_path(
+            sinfo.relative_path, path=os.fspath(self.path), what=f"storage record of {key!r}"
+        )
         try:
             with blob_path.open("rb") as handle:
                 handle.seek(sinfo.offset)
@@ -887,7 +913,10 @@ class SafetensorsReader:
                     f"{SAFETENSORS_INDEX_FILENAME}: 'weight_map' is not an object",
                     path=directory,
                 )
-            return dict(raw_map)
+            return {
+                k: checked_member_path(v, path=os.fspath(directory), what=f"weight_map[{k!r}]")
+                for k, v in raw_map.items()
+            }
         shards = sorted(
             n.name for n in Path(directory).iterdir() if n.name.endswith(".safetensors")
         )

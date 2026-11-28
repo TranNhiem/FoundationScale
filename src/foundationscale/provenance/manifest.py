@@ -54,11 +54,13 @@ timeout-bounded subprocess calls, treating any subprocess or repository failure 
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -143,6 +145,19 @@ _SOURCE_RE = re.compile(
     r"|measured:[A-Za-z][A-Za-z0-9-]*)$"
 )
 _ATTEMPT_RE = re.compile(r"^attempt-(\d+)\.json$")
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Best-effort fsync of a directory entry table (POSIX); a no-op where unsupported."""
+    try:
+        dfd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        with contextlib.suppress(OSError):
+            os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 class CaptureStatus(str, Enum):
@@ -2619,8 +2634,11 @@ class ManifestStore:
         run_dir.mkdir(parents=True, exist_ok=True)
         final = run_dir / f"attempt-{manifest.attempt:04d}.json"
         payload = manifest.to_json().encode("utf-8")
-        tmp = run_dir / f".{final.name}.tmp.{os.getpid()}"
-        with tmp.open("wb") as fh:
+        # mkstemp: O_CREAT|O_EXCL with a random name in the same directory -- a PID-only name
+        # collides across hosts on a shared filesystem and "wb" would follow a planted symlink.
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{final.name}.tmp.", dir=run_dir)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "wb") as fh:
             fh.write(payload)
             fh.flush()
             os.fsync(fh.fileno())
@@ -2644,6 +2662,7 @@ class ManifestStore:
             ) from exc
         finally:
             tmp.unlink(missing_ok=True)
+        _fsync_dir(run_dir)  # the new link itself must survive a crash, not just the bytes
         return final
 
     def attempts(self, run_id: str) -> tuple[RunManifest, ...]:

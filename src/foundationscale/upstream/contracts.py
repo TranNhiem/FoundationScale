@@ -143,7 +143,10 @@ def manifest_row_problems(row: object) -> list[str]:
         value = row["duration"]
         if not _is_number(value):
             problems.append("bad_type:duration")
-        elif not math.isfinite(float(value)) or float(value) <= 0.0:
+        elif isinstance(value, int):
+            if value <= 0:
+                problems.append("bad_duration")
+        elif not math.isfinite(value) or value <= 0.0:
             problems.append("bad_duration")
     if "text" in row and not isinstance(row["text"], str):
         problems.append("bad_type:text")
@@ -395,7 +398,7 @@ class SpeechRunConfig:
             raise ValueError(
                 f"SpeechRunConfig.batch_size must be a positive int, got {self.batch_size!r}"
             )
-        if not _is_number(self.lr) or self.lr <= 0.0:
+        if not _is_number(self.lr) or not math.isfinite(self.lr) or self.lr <= 0.0:
             raise ValueError(f"SpeechRunConfig.lr must be a positive number, got {self.lr!r}")
         if not _is_int(self.warmup) or self.warmup < 0:
             raise ValueError(
@@ -405,7 +408,11 @@ class SpeechRunConfig:
             raise ValueError(
                 f"SpeechRunConfig.pnc must be one of {sorted(_PNC_VALUES)}, got {self.pnc!r}"
             )
-        if not _is_number(self.max_duration) or self.max_duration <= 0.0:
+        if (
+            not _is_number(self.max_duration)
+            or not math.isfinite(self.max_duration)
+            or self.max_duration <= 0.0
+        ):
             raise ValueError(
                 f"SpeechRunConfig.max_duration must be a positive number, got {self.max_duration!r}"
             )

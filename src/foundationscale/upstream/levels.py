@@ -10,6 +10,7 @@ its backend's own container and judges the result with :func:`judge`.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from foundationscale.upstream.models import (
@@ -181,4 +182,8 @@ def judge(step: DecodeStep, measured_wer_whisper_normalizer: float) -> Verdict:
     For speech steps that is WER under the card's normalizer; for VLA steps it is the success
     rate in percentage points that ``foundationscale.vla.eval`` writes to its report.
     """
+    if not math.isfinite(measured_wer_whisper_normalizer):
+        raise ValueError(
+            f"{step.model_id!r}: unmeasured (non-finite value {measured_wer_whisper_normalizer!r})"
+        )
     return Verdict(step.model_id, measured_wer_whisper_normalizer, step.card_value, step.tolerance)

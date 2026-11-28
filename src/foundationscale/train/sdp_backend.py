@@ -46,7 +46,13 @@ def sdp_pin_refusal_reason(backend: str, cuda_backends: Any, torch_version: str)
     backend AND the torch version, so the refusal is itself a measurement
     the manifest can carry instead of a shrug.
     """
-    toggle = SDP_BACKEND_TOGGLES[backend]
+    toggle = SDP_BACKEND_TOGGLES.get(backend)
+    if toggle is None:
+        return (
+            f"sdp_backend={backend!r} is unknown; expected one of "
+            f"{', '.join(sorted(SDP_BACKEND_TOGGLES))}; refusing (96) "
+            "before applying any pin (#526/#527)"
+        )
     if callable(getattr(cuda_backends, toggle, None)):
         return None
     return (

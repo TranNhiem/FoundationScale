@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from foundationscale.upstream.nemo._io import write_text_atomic
+
 __all__ = [
     "digests",
     "fmt",
@@ -243,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     for line in lines:
         print("ADJ", line[:200])
     blocking = any(b for _, b in results)
-    Path(args.out).write_text(json.dumps({"lines": lines, "blocking": blocking}, indent=2))
+    write_text_atomic(Path(args.out), json.dumps({"lines": lines, "blocking": blocking}, indent=2))
     return 5 if blocking else 0
 
 

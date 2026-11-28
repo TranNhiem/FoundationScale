@@ -55,6 +55,7 @@ from .dcp import (
     SAFETENSORS_INDEX_FILENAME,
     CheckpointFormatError,
     DcpReader,
+    checked_member_path,
 )
 
 if TYPE_CHECKING:
@@ -523,7 +524,10 @@ def _st_weight_map(base: Path, header_of: Any) -> dict[str, str]:
                 f"{SAFETENSORS_INDEX_FILENAME}: 'weight_map' is not an object",
                 path=os.fspath(base),
             )
-        return {str(k): str(v) for k, v in raw_map.items()}
+        return {
+            str(k): checked_member_path(v, path=os.fspath(base), what=f"weight_map[{k!r}]")
+            for k, v in raw_map.items()
+        }
 
     shards = sorted(n.name for n in base.iterdir() if n.name.endswith(".safetensors"))
     if not shards:
