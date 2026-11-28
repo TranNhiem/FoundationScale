@@ -101,9 +101,9 @@ async def _within(awaitable: Awaitable[_T], deadline_at: float | None) -> _T:
     left = deadline_at - time.monotonic()
     try:
         if left <= 0:
-            raise TimeoutError
+            raise asyncio.TimeoutError
         return await asyncio.wait_for(awaitable, timeout=left)
-    except TimeoutError:
+    except asyncio.TimeoutError:  # NOT builtin TimeoutError: distinct classes before 3.11
         if inspect.iscoroutine(awaitable):
             awaitable.close()  # never awaited: drop it without a "never awaited" warning
         raise EpisodeDeadlineExceeded("episode deadline exceeded") from None
