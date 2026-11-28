@@ -138,3 +138,32 @@ def test_from_hf_tokenizer_resolves_markers_and_refuses_a_foreign_tokenizer() ->
     assert enc.encode_plain("zz") == [7, 7]
     with pytest.raises(Gemma4ProtocolRefusal, match="does not speak the Gemma-4 tool protocol"):
         from_hf_tokenizer(_FakeHF({}))
+
+
+def test_inline_observations_refuse_a_checkpoint_hook() -> None:
+    import asyncio
+
+    async def hook(checkpoint: Any) -> None:
+        return None
+
+    loop = _H._loop(inline_observations=_encoder())
+    env = _H.FakeEnvironment(execute_fn=lambda command: _H._exec_result("hi\n"))
+    client = _H.ScriptedClient([_H._generation(_H._submit_call_text("x"))])
+    with pytest.raises(NativeToolLoopRefusal, match="with inline_observations"):
+        asyncio.run(
+            loop.run_episode(
+                _H._task(), client=client, env=env, budget=_H._budget(), checkpoint_hook=hook
+            )
+        )
+
+
+def test_an_inline_observation_past_the_response_budget_ends_the_episode_as_length() -> None:
+    from foundationscale.agentic_rl.contracts import Termination
+
+    first = _H._generation(_H._bash_call_text("echo hi"), n_tokens=3)
+    client = _Recording([first, _H._generation(_H._submit_call_text("done"))])
+    loop = _H._loop(inline_observations=_encoder())
+    env = _H.FakeEnvironment(execute_fn=lambda command: _H._exec_result("x" * 200))
+    outcome = _H._run(loop, _H._task(), client, env, _H._budget(max_response_tokens=40))
+    assert outcome.termination is Termination.LENGTH
+    assert all(t.kind != SegmentKind.TOOL_RESULT for t in outcome.trajectory_turns)

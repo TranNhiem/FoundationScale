@@ -388,6 +388,22 @@ PENDING_ENROLMENT: dict[str, str] = {
         "line-covered by tests/agentic_rl/test_eval_stats.py, but no mutation row yet proves a "
         "flipped estimator or percentile index would be caught."
     ),
+    "src/foundationscale/agentic_rl/rewards/science.py": (
+        "science-answer reward (closed checker set label/numeric/span_f1, MCQ letter-or-text "
+        "matching, JSON-decoded str metadata): line-covered by tests/agentic_rl/"
+        "test_science_reward*.py, but no mutation row yet proves a flipped option or tolerance "
+        "rule would be caught."
+    ),
+    "src/foundationscale/agentic_rl/gemma4_tools.py": (
+        "Gemma-4 tool-call parser (string-aware span scan, typed value grammar, depth cap): "
+        "line-covered by tests/agentic_rl/test_gemma4_parser.py incl. a template round-trip, but "
+        "no mutation row yet proves a broken string-aware close scan would be caught."
+    ),
+    "src/foundationscale/agentic_rl/harness/gemma4_protocol.py": (
+        "Gemma-4 inline tool observations (marker ids by id, special-token-split tool text, "
+        "forged-marker refusal): line-covered by tests/agentic_rl/test_gemma4_inline.py, but no "
+        "mutation row yet proves a dropped opened-marker rule would be caught."
+    ),
     "src/foundationscale/agentic_rl/rewards/judge.py": (
         "LLM-judge rubric reward (nonce-fenced prompt, injection floor, vote median, calibration "
         "gate): covered by tests/agentic_rl/test_judge_*.py, but no mutation row yet proves a "

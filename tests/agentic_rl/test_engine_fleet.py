@@ -651,3 +651,13 @@ def test_stop_group_escalates_to_sigkill_for_a_member_ignoring_sigterm() -> None
         time.sleep(0.05)
     assert not _group_alive(stubborn.pid)
     assert time.monotonic() - start < 6
+
+
+def test_group_alive_counts_a_member_it_cannot_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    import foundationscale.agentic_rl.engines.fleet as fleet_mod
+
+    def denied(pgid: int, sig: int) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(fleet_mod.os, "killpg", denied)
+    assert fleet_mod._group_alive(12345) is True

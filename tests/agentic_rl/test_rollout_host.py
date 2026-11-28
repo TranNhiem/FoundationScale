@@ -1259,3 +1259,20 @@ def test_episode_deadline_is_validated(tmp_path: Path, bad: object) -> None:
             client_factory=lambda index: SubmitClient("ok"),
             episode_deadline_s=bad,
         )
+
+
+def test_within_an_already_passed_deadline_never_awaits() -> None:
+    import time
+
+    from foundationscale.agentic_rl.rollout_host import EpisodeDeadlineExceeded, _within
+
+    started: list[bool] = []
+
+    async def work() -> int:
+        started.append(True)
+        return 1
+
+    with pytest.raises(EpisodeDeadlineExceeded):
+        asyncio.run(_within(work(), time.monotonic() - 1.0))
+    assert started == []  # the coroutine was closed, never run
+    assert asyncio.run(_within(work(), None)) == 1
