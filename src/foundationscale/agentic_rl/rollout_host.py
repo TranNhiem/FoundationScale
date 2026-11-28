@@ -999,7 +999,11 @@ class RolloutHost:
         # Keyed by step for async_prefetch: step k+1's prefetched rollout runs before publish(k), so
         # publish must judge the versions of the batch it actually trained on, not the newest
         # rollout's.
-        self._state.setdefault("versions_by_step", {})[step] = self._state["last_step_versions"]
+        self._state.setdefault("versions_by_step", {})[step] = (
+            self._state.get("push_count", 0),
+            self._state["rollout_frontier"],
+            self._state["last_step_versions"],
+        )
         if self.trace_dir is not None:
             self._write_traces(step, trajectories)
         batch = flatten(self._expand_segments(trajectories), group_by_harness=self.group_by_harness)
@@ -1212,17 +1216,23 @@ class RolloutHost:
                 )
             self._state["last_pushed_path"] = path
             self._state["last_pushed_version"] = target_step
+            pushes_before = self._state.get("push_count", 0)
+            self._state["push_count"] = pushes_before + 1
             self._record_push(report, target_step)
             if self.gates:
                 # rollout_policy_versions: the per-session versions the LAST rollout
                 # measured off the server ledger (see _server_versions) -- () when no
                 # ledger exists (client_factory hosts), never a fabricated sequence.
                 if self.async_prefetch:
-                    # One-step-off-policy: the trained batch was generated before the previous push,
-                    # so its lag is judged against the version being pushed NOW (last push + 1).
-                    trained_versions = self._state.get("versions_by_step", {}).pop(step, ())
+                    # One-step-off-policy: the trained batch may predate earlier pushes. Lag is
+                    # judged in UPDATES, like the on-policy branch: the frontier the batch was
+                    # generated at, plus every push since, plus this one (versions are
+                    # step-indexed and jump).
+                    pushes_at, frontier_at, trained_versions = self._state.get(
+                        "versions_by_step", {}
+                    ).pop(step, (0, 0, ()))
                     trained_policy_version = (
-                        self._state.get("last_pushed_version", self.fleet_launch_version) + 1
+                        frontier_at + (pushes_before - pushes_at) + 1
                         if trained_versions
                         else target_step
                     )

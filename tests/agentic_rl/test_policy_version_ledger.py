@@ -335,3 +335,36 @@ def test_a_server_left_on_old_weights_is_still_refused(
     host.rollout(5)
     with pytest.raises(RolloutHostRefusal, match="trails"):
         host.publish(object(), object(), fakes._Rank0(), 5)
+
+
+def _gated_prefetching_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_lag: int
+) -> RolloutHost:
+    host = _gated_publishing_host(tmp_path, monkeypatch)
+    object.__setattr__(host, "async_prefetch", True)
+    object.__setattr__(host, "declared_max_lag", max_lag)
+    return host
+
+
+def test_prefetch_publish_judges_the_trained_batch_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B2.3: step 5's batch is prefetched BEFORE publish(4), so it trains two updates behind the
+    # version publish(5) pushes; the gate must judge THAT batch, and a declared lag of 2 admits it.
+    host = _gated_prefetching_host(tmp_path, monkeypatch, max_lag=2)
+    host.rollout(4)  # also prefetches step 5 on the current weights
+    host.publish(object(), object(), fakes._Rank0(), 4)
+    host.rollout(5)  # the prefetched batch
+    host.publish(object(), object(), fakes._Rank0(), 5)
+    assert 5 not in host._state["versions_by_step"]  # consumed by the publish that judged it
+
+
+def test_prefetch_lag_of_two_is_refused_under_a_declared_lag_of_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _gated_prefetching_host(tmp_path, monkeypatch, max_lag=1)
+    host.rollout(4)
+    host.publish(object(), object(), fakes._Rank0(), 4)
+    host.rollout(5)
+    with pytest.raises(RolloutHostRefusal):
+        host.publish(object(), object(), fakes._Rank0(), 5)
