@@ -92,3 +92,44 @@ def test_tampering_that_breaks_the_test_run_still_scores_zero(status: str) -> No
     }
     verdict = asyncio.run(SweReward(tamper="zero").score(_task(), _outcome(meta)))
     assert (verdict.value, verdict.reason) == (0.0, "test_harness_tampering")
+
+
+# --- C2 format gate -------------------------------------------------------------------------
+def _with_calls(meta: dict[str, str], parse_errors: list[str | None]) -> EpisodeOutcome:
+    from foundationscale.agentic_rl.contracts import SegmentKind, ToolCall, Turn
+
+    calls = tuple(
+        ToolCall(name="bash", arguments='{"command": "ls"}', call_id=None, parse_error=e)
+        for e in parse_errors
+    )
+    turn = Turn(index=0, kind=SegmentKind.ASSISTANT, token_ids=(1, 2), generated=True,
+                logprobs=None, tool_calls=calls)  # fmt: skip
+    return EpisodeOutcome(
+        trajectory_turns=(turn,), prompt_turns=(), termination=Termination.STOP,
+        submitted_answer="done", abstention_reason=None, metadata=meta,
+    )  # fmt: skip
+
+
+HALF = {F2P[0]: "passed", F2P[1]: "failed", P2P[0]: "passed"}
+
+
+def _gated(outcome: EpisodeOutcome) -> tuple:
+    verdict = asyncio.run(SweReward(partial_credit=True, format_gate=True).score(_task(), outcome))
+    return verdict.value, verdict.reason
+
+
+def test_format_gate_withholds_partial_credit_from_a_malformed_trace() -> None:
+    assert _gated(_with_calls(_report(HALF), [None, "malformed tool_call JSON"])) == (0.0, "format_gate")
+
+
+def test_format_gate_keeps_partial_credit_for_a_clean_trace() -> None:
+    assert _gated(_with_calls(_report(HALF), [None, None])) == (0.5, "partial")
+
+
+def test_format_gate_never_takes_a_verified_resolve() -> None:
+    assert _gated(_with_calls(_report(ALL_PASS), ["bad"])) == (1.0, "resolved")
+
+
+def test_format_gate_off_by_default() -> None:
+    verdict = asyncio.run(SweReward(partial_credit=True).score(_task(), _with_calls(_report(HALF), ["bad"])))
+    assert (verdict.value, verdict.reason) == (0.5, "partial")

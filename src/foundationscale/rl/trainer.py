@@ -58,6 +58,7 @@ correctly tuned; or that any row survives scoring on any given step.
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 from contextlib import contextmanager
@@ -163,6 +164,68 @@ def _token_logprobs(
         )
     return _sampled_token_logprobs(
         logits, target, temperature=temperature, top_p=top_p, top_k=top_k
+    )
+
+
+def _clip_device_grads(optimizer: Any, max_norm: float) -> float:
+    """Clip the global L2 norm of the gradients ``optimizer`` will step to ``max_norm``; returns the pre-clip norm.
+
+    ``MasterWeightOptimizer`` exposes its device params (the bf16 grads it copies to fp32 masters in ``step``);
+    a plain torch optimizer exposes ``param_groups``.
+    """
+    import torch  # function-local: see module docstring
+
+    params = getattr(optimizer, "device_params", None)
+    if params is None:
+        params = [p for group in optimizer.param_groups for p in group["params"]]
+    grads = [p for p in params if p.grad is not None]
+    if not grads:
+        return 0.0
+    total = float(torch.nn.utils.clip_grad_norm_(grads, max_norm))
+    if not math.isfinite(total):
+        # clip would multiply every grad by NaN; drop this update instead of corrupting the weights
+        for p in grads:
+            p.grad = None
+        print(f"[trainer] non-finite gradient norm ({total}); optimizer step skipped", flush=True)
+    return total
+
+
+def _chunked_token_logprobs(
+    model: Any, input_ids: Any, attention_mask: Any, target_ids: Any, *, chunk: int,
+    temperature: float, top_p: float, top_k: int,
+) -> torch.Tensor:
+    """``_token_logprobs`` of ``model(input_ids).logits`` computed chunk by chunk (see ``logprob_chunk_tokens``).
+
+    Hidden states come from ``model.get_decoder()``; each chunk of target positions goes through the output
+    embedding and ``_token_logprobs`` under non-reentrant activation checkpointing, so its full-vocabulary logits
+    are rebuilt during backward instead of being kept. Refuses heads it cannot reproduce exactly.
+    """
+    import torch  # function-local: see module docstring
+    from torch.utils.checkpoint import checkpoint
+
+    head = model.get_output_embeddings() if hasattr(model, "get_output_embeddings") else None
+    decoder = model.get_decoder() if hasattr(model, "get_decoder") else None
+    configs = [getattr(model, "config", None)]
+    configs.append(getattr(configs[0], "text_config", None))
+    softcap = [getattr(c, "final_logit_softcapping", None) for c in configs if c is not None]
+    if not isinstance(head, torch.nn.Linear) or decoder is None or any(v not in (None, 0) for v in softcap):
+        raise TrainerRefusal(
+            f"logprob_chunk_tokens: model {type(model).__name__} needs a plain nn.Linear output embedding, "
+            f"get_decoder() and no final_logit_softcapping to be scored in chunks (head="
+            f"{type(head).__name__}, softcapping={softcap}); set logprob_chunk_tokens=0"
+        )
+    hidden = decoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+    hidden = hidden[:, : target_ids.shape[1]]
+
+    def piece(h: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return _token_logprobs(head(h), t, temperature=temperature, top_p=top_p, top_k=top_k)
+
+    return torch.cat(
+        [
+            checkpoint(piece, hidden[:, s : s + chunk], target_ids[:, s : s + chunk], use_reentrant=False)
+            for s in range(0, target_ids.shape[1], chunk)
+        ],
+        dim=1,
     )
 
 
@@ -355,12 +418,20 @@ class MasterWeightOptimizer:
     exists to eliminate.
     """
 
-    def __init__(self, params: Iterable[torch.nn.Parameter], **adamw_kwargs: Any) -> None:
+    def __init__(self, params: Iterable[torch.nn.Parameter], master_device: str = "cpu", **adamw_kwargs: Any) -> None:
         import torch  # function-local: see module docstring
+
+        # "cpu" (default, historical): masters + AdamW state in host RAM (~12 B/param: ~48 GB for a 4B model).
+        # "device": keep them next to each param on its GPU -- same fp32 numerics, no host RAM; needed where
+        # host NUMA memory is the binding constraint (GB200 trays OOM-killed host-fp32 trainers, 2026-11-26).
+        if master_device not in ("cpu", "device"):
+            raise ValueError(f"master_device={master_device!r}: expected 'cpu' or 'device'")
+        self.master_device = master_device
 
         self.device_params = [p for p in params if p.requires_grad]
         self.masters = [
-            p.detach().to(device="cpu", dtype=torch.float32, copy=True) for p in self.device_params
+            p.detach().to(device="cpu" if master_device == "cpu" else p.device, dtype=torch.float32, copy=True)
+            for p in self.device_params
         ]
         for master in self.masters:
             master.requires_grad_(True)
@@ -382,7 +453,7 @@ class MasterWeightOptimizer:
             if p.grad is None:
                 m.grad = None
             else:
-                m.grad = p.grad.detach().to(device="cpu", dtype=torch.float32, copy=True)
+                m.grad = p.grad.detach().to(device=m.device, dtype=torch.float32, copy=True)
         # (2) true fp32 step: lr=1e-6 updates are representable here and
         # therefore ACCUMULATE instead of being discarded at the bf16 ulp.
         result = (
@@ -1164,6 +1235,8 @@ class RLTrainConfig:
     # bytes) looking healthy. True/False force the choice; forcing it is an
     # operator decision and is recorded either way.
     master_weights: bool | None = None
+    # Where MasterWeightOptimizer keeps fp32 masters + AdamW state: "cpu" (default) or "device" (the param's GPU).
+    master_device: str = "cpu"
     max_steps: int = 10
     # Measured 2026-10-09 (gemma-4-12B-it, ScienceQA, terminal-pattern reward
     # "Answer: X"): this default truncates the model's own reasoning before it
@@ -1197,6 +1270,17 @@ class RLTrainConfig:
     # The loss, kept-row selection and metrics still describe one logical
     # batch, while full-vocabulary scorer activations are bounded per slice.
     logprob_micro_batch: int = 0
+    # Opt-in: score log-probs in chunks of this many target positions through the LM head (hidden states from
+    # model.get_decoder(), each chunk recomputed under activation checkpointing), so full-vocabulary logits exist
+    # for one chunk at a time instead of the whole sequence. Zero keeps the full-logits path. Measured on
+    # Qwen3.5-4B (GB200, 2026-11-24): identical log-probs/grads; 32k tokens 145 GB -> 32 GB, 64k OOM -> 39 GB.
+    # Text-only and unsharded: multimodal rows fall back to the full path; a non-Linear head, logit
+    # soft-capping or sharding != "none" is refused.
+    logprob_chunk_tokens: int = 0
+    # Opt-in global gradient-norm clipping before each optimizer step (0 = off, the historical behaviour). The
+    # Skill2Env agentic-RL recipe clips at 1.0; without it, single bad batches can blow up the policy (our lr >= 1e-5
+    # runs collapsed). Unsharded only: sharded runs need the wrapper's own clip_grad_norm_.
+    max_grad_norm: float = 0.0
     # The distribution the SCORED tokens were sampled from. When an external rollout
     # source (the agentic engine fleet) samples with temperature / top-p / top-k,
     # scoring raw logits trains on a different policy than the one that acted. The
@@ -1341,6 +1425,23 @@ class RLTrainer:
             )
         if type(config.score_top_k) is not int or config.score_top_k < 0:
             raise TrainerRefusal(f"score_top_k={config.score_top_k!r}: an int >= 0 is required")
+        if type(config.logprob_chunk_tokens) is not int or config.logprob_chunk_tokens < 0:
+            raise TrainerRefusal(
+                f"logprob_chunk_tokens={config.logprob_chunk_tokens!r}: an int >= 0 is required (0 = full logits)"
+            )
+        if (isinstance(config.max_grad_norm, bool) or not isinstance(config.max_grad_norm, (int, float))
+                or not math.isfinite(config.max_grad_norm) or config.max_grad_norm < 0):
+            raise TrainerRefusal(f"max_grad_norm={config.max_grad_norm!r}: a number >= 0 is required (0 = off)")
+        if config.max_grad_norm and getattr(config, "sharding", "none") != "none":
+            raise TrainerRefusal(
+                f"max_grad_norm={config.max_grad_norm} needs sharding='none': a sharded model must clip through its "
+                f"wrapper's clip_grad_norm_"
+            )
+        if config.logprob_chunk_tokens and getattr(config, "sharding", "none") != "none":
+            raise TrainerRefusal(
+                f"logprob_chunk_tokens={config.logprob_chunk_tokens} needs sharding='none': calling the decoder "
+                f"directly would bypass the {config.sharding!r} wrapper's forward"
+            )
         if config.logprob_micro_batch < 0:
             raise ValueError(
                 f"logprob_micro_batch={config.logprob_micro_batch}: a negative row "
@@ -2016,7 +2117,7 @@ class RLTrainer:
         optimizer: Any
         if use_masters:
             optimizer = MasterWeightOptimizer(
-                _trainable_parameters(model), lr=self.config.learning_rate
+                _trainable_parameters(model), master_device=self.config.master_device, lr=self.config.learning_rate
             )
         else:
             optimizer = torch.optim.AdamW(  # noqa: B014
@@ -2024,7 +2125,7 @@ class RLTrainer:
             )
         print(
             "[trainer] optimizer="
-            + ("MasterWeightOptimizer(host-fp32)" if use_masters else "AdamW(direct)")
+            + (f"MasterWeightOptimizer({'host' if self.config.master_device == 'cpu' else 'device'}-fp32)" if use_masters else "AdamW(direct)")
             + f" param_dtype={param_dtype} lr={self.config.learning_rate}"
             + f" reason={master_reason}",
             file=sys.stderr,
@@ -2593,6 +2694,17 @@ class RLTrainer:
             # The scorer defaults to the policy; the frozen reference is the
             # only other caller, and every per-row tensor still follows the
             # same half-open row range.
+            if self.config.logprob_chunk_tokens and not sliced_modalities:
+                return _chunked_token_logprobs(
+                    model if scorer_model is None else scorer_model,
+                    kept_sequences.narrow(0, start, width),
+                    attention.narrow(0, start, width),
+                    target_ids.narrow(0, start, width),
+                    chunk=self.config.logprob_chunk_tokens,
+                    temperature=self.config.score_temperature,
+                    top_p=self.config.score_top_p,
+                    top_k=self.config.score_top_k,
+                )
             logits = (model if scorer_model is None else scorer_model)(
                 input_ids=kept_sequences.narrow(0, start, width),
                 attention_mask=attention.narrow(0, start, width),
@@ -2991,6 +3103,8 @@ class RLTrainer:
             # do not deadlock the reduce-scatter.
             lane = forward_logprob_slice(0, min(1, n_rows))
             (lane.sum() * 0.0).backward()
+        if self.config.max_grad_norm:
+            _clip_device_grads(optimizer, float(self.config.max_grad_norm))
         optimizer.step()
 
         # Averaged scalars are reduced MEAN, counts SUM, so every rank holds
@@ -3036,6 +3150,24 @@ class RLTrainer:
         # weights -- the surrogate is the mean of centred advantages and reads
         # ~0 even when the gradient is large. Without the reward spread there
         # is no way to tell those two apart from the report alone.
+        # One line per step naming every loss component's contribution (e.g. the policy surrogate and an
+        # opt-in k3 KL term), so a run log shows what each declared term did -- None stays "unmeasured".
+        if getattr(ctx, "rank", 0) == 0:
+            print(
+                "[trainer:loss] "
+                + json.dumps(
+                    {
+                        "step": step,
+                        "loss": float(loss_output.loss),
+                        "components": {
+                            c.name: (None if c.contribution is None else float(c.contribution))
+                            for c in loss_output.components
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
         return StepReport(
             step=step,
             loss=loss_output,

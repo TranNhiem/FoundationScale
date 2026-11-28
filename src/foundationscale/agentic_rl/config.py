@@ -311,6 +311,9 @@ class EngineConfig:
     # VLLMClient.reload_weights refuses at the first publish(), after a GPU is
     # already resident -- refusing at config time instead costs nothing.
     reload_mode: Literal["collective_rpc"] | None = None
+    # Comma-separated GPU ids for engine REPLICAS (e.g. "0,1,2"): one server per GPU, port = base port + i,
+    # CUDA_VISIBLE_DEVICES set per replica; sessions round-robin across them. "" keeps the single engine.
+    replica_gpus: str = ""
     # The engine subprocess's COMPLETE environment -- an explicit allow-list,
     # never merged with this process's own os.environ (same "nothing is ever
     # inherited" rule EngineServerSpec.env and EnvSpec.env both already keep).
@@ -406,6 +409,8 @@ class RolloutConfig:
     curriculum_state_path: str | None = None
     # ARL-21: directory for fs.trace/v1 span traces of every step's trajectories; None = off.
     trace_dir: str | None = None
+    # One-step-off-policy async rollout (RolloutHost.async_prefetch): generation of step k+1 overlaps training of k.
+    async_prefetch: bool = False
 
 
 @dataclass(frozen=True)
@@ -440,6 +445,10 @@ class RewardConfig:
     # kind="swe" only: what a DiffGuard tampering report does -- "report" (scoring unchanged)
     # or "zero" (tampered episodes score 0.0; an unmeasured guard abstains). ARL-G14.
     swe_tamper: str = "report"
+    # kind="swe" only: score the fraction of fail_to_pass tests passing instead of all-or-nothing.
+    partial_credit: bool = False
+    # kind="swe" + partial_credit only: an unresolved episode with a malformed tool call scores 0.0.
+    format_gate: bool = False
 
 
 @dataclass(frozen=True)
@@ -672,6 +681,7 @@ def _build_engine(
             "max_policy_lag",
             "reload_mode",
             "env",
+            "replica_gpus",
         }
     )
     _refuse_unknown_keys(section, allowed, section="engine")
@@ -865,6 +875,20 @@ def _build_engine(
             "engine.reload_mode='collective_rpc' once it is proven on the cluster, or "
             "use engine.weight_sync_mode='restart' instead)"
         )
+    replica_gpus = _resolve_scalar(
+        dotted_key="engine.replica_gpus",
+        field_name="replica_gpus",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=str,
+        default="",
+        required=False,
+        provenance=provenance,
+    )
+    if replica_gpus and not all(g.strip().isdigit() for g in replica_gpus.split(",")):
+        raise AgenticConfigRefusal(
+            f"engine.replica_gpus: is {replica_gpus!r}, expected comma-separated GPU indices like '0,1,2'"
+        )
     return EngineConfig(
         kind=kind,
         command=command,
@@ -877,6 +901,7 @@ def _build_engine(
         max_policy_lag=max_policy_lag,
         log_dir=log_dir,
         allow_stale_policy=allow_stale_policy,
+        replica_gpus=replica_gpus,
         reload_mode=reload_mode,
         env=dict(env_mapping),
     )
@@ -1176,6 +1201,7 @@ def _build_rollout(
             "curriculum_revisit_fraction",
             "curriculum_state_path",
             "trace_dir",
+            "async_prefetch",
         }
     )
     _refuse_unknown_keys(section, allowed, section="rollout")
@@ -1410,7 +1436,18 @@ def _build_rollout(
     )
     if trace_dir is not None and not trace_dir:
         raise AgenticConfigRefusal("rollout.trace_dir: must be null or a non-empty path")
+    async_prefetch = _resolve_scalar(
+        dotted_key="rollout.async_prefetch",
+        field_name="async_prefetch",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
     return RolloutConfig(
+        async_prefetch=async_prefetch,
         tasks_path=tasks_path,
         tasks_per_step=tasks_per_step,
         group_size=group_size,
@@ -1438,7 +1475,9 @@ def _build_reward(
 ) -> RewardConfig:
     section = _strip_doc(raw, dotted_prefix="reward")
     local_overrides = _section_overrides(overrides, section="reward")
-    allowed = frozenset({"kind", "abc2midi_bin", "timeout_s", "swe_tamper", *_JUDGE_KEYS})
+    allowed = frozenset(
+        {"kind", "abc2midi_bin", "timeout_s", "swe_tamper", "partial_credit", "format_gate", *_JUDGE_KEYS}
+    )
     _refuse_unknown_keys(section, allowed, section="reward")
     kind = _resolve_scalar(
         dotted_key="reward.kind",
@@ -1499,10 +1538,42 @@ def _build_reward(
         raise AgenticConfigRefusal(
             f"reward.swe_tamper: is {swe_tamper!r}, but reward.kind={kind!r} never reads it"
         )
+    partial_credit = _resolve_scalar(
+        dotted_key="reward.partial_credit",
+        field_name="partial_credit",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
+    if partial_credit and kind != "swe":
+        raise AgenticConfigRefusal(
+            f"reward.partial_credit: is true, but reward.kind={kind!r} never uses it -- only the "
+            f"'swe' scorer has partial credit"
+        )
+    format_gate = _resolve_scalar(
+        dotted_key="reward.format_gate",
+        field_name="format_gate",
+        section_raw=section,
+        overrides=local_overrides,
+        py_type=bool,
+        default=False,
+        required=False,
+        provenance=provenance,
+    )
+    if format_gate and not partial_credit:
+        raise AgenticConfigRefusal(
+            "reward.format_gate: is true, but reward.partial_credit is false -- the gate only "
+            "withholds partial credit, so without it the setting would change nothing"
+        )
     return RewardConfig(
         kind=kind,
         abc2midi_bin=abc2midi_bin,
         timeout_s=timeout_s,
+        partial_credit=partial_credit,
+        format_gate=format_gate,
         judge=judge,
         swe_tamper=swe_tamper,
     )
@@ -1660,6 +1731,12 @@ def build_config(raw_config: Mapping[str, Any], overrides: Mapping[str, str]) ->
     )
     _refuse_unconsumed_overrides(overrides, provenance)
     _refuse_engine_policy_mismatch(sections["engine"], sections["policy"])
+    if sections["rollout"].async_prefetch and sections["engine"].max_policy_lag < 2:
+        raise AgenticConfigRefusal(
+            f"rollout.async_prefetch: is true, but engine.max_policy_lag="
+            f"{sections['engine'].max_policy_lag} -- a prefetched batch is generated before the "
+            f"previous push, so it trains 2 updates behind; declare engine.max_policy_lag >= 2"
+        )
     return AgenticRLConfig(
         policy=sections["policy"],
         trainer=sections["trainer"],

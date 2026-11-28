@@ -161,6 +161,7 @@ def _install_default_algorithms() -> None:
     # absence would then read as a successful install.
     from foundationscale.rl.group_policy import (
         agentic_grpo_algorithm,
+        agentic_grpo_kl_algorithm,
         agentic_grpo_token_mean_algorithm,
         agentic_process_grpo_algorithm,
         dapo_algorithm,
@@ -217,6 +218,7 @@ def _install_default_algorithms() -> None:
     _REGISTRY["agentic_grpo"] = agentic_grpo_algorithm
     _REGISTRY["agentic_grpo_token_mean"] = agentic_grpo_token_mean_algorithm
     _REGISTRY["agentic_process_grpo"] = agentic_process_grpo_algorithm
+    _REGISTRY["agentic_grpo_kl"] = agentic_grpo_kl_algorithm
     _REGISTRY["dapo"] = dapo_algorithm
     _REGISTRY["dr_grpo"] = dr_grpo_algorithm
     _REGISTRY["gspo"] = gspo_algorithm

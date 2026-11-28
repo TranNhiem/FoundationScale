@@ -37,7 +37,8 @@ export FS_SANDBOX_DATA_ROOT=$SANDBOX_ROOT/data
 export FS_SANDBOX_IMAGE_STORE=$SANDBOX_ROOT/images
 export FS_SANDBOX_SCRATCH_ROOT=$SANDBOX_ROOT/scratch
 
-python3 - "$HERE/configs/swe_mimo9b_2gpu.json" "$OUT/config.json" <<PY
+CONFIG=${CONFIG:-$HERE/configs/swe_mimo9b_2gpu.json}  # e.g. configs/harbor_qwen35_4b_2gpu.json
+python3 - "$CONFIG" "$OUT/config.json" <<PY
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 text = open(src).read()

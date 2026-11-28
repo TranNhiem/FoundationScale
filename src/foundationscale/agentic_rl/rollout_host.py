@@ -324,6 +324,12 @@ class RolloutHost:
     # ARL-21: when set, every step's final trajectories are written as fs.trace/v1 span traces
     # to <trace_dir>/step_<NNNNNN>.jsonl (agentic_rl.fs_trace); None (default) writes nothing.
     trace_dir: str | None = None
+    # Opt-in one-step-off-policy prefetch (rollout.async_prefetch): ``rollout(k)`` starts step k+1's rollout on a
+    # background thread with the CURRENT fleet weights, so generation overlaps the trainer's step k; ``publish(k)``
+    # waits for that prefetch before syncing weights, so no reload lands mid-generation and every batch is at most
+    # one policy step stale. ``prefetch_limit`` (the trainer's max_steps) stops a wasted rollout past the last step.
+    async_prefetch: bool = False
+    prefetch_limit: int | None = None
     # Private mutable state on this frozen dataclass (the dict's CONTENTS are
     # mutable, never the field binding): "last_pushed_path" is the path of the
     # last checkpoint `publish` fully pushed, so `_recover_engines` can re-push
@@ -580,6 +586,10 @@ class RolloutHost:
                 # ARL-17: an abstained attempt has no segments; never let an earlier attempt's
                 # stored segments stand in for it at flatten time.
                 self._state.get("segments", {}).pop(session_id, None)
+
+                from foundationscale.agentic_rl.harness.native_tool_loop import _log_infra_once
+
+                _log_infra_once(reason, exc)
                 if outcome is not None:
                     # run_episode() returned a real EpisodeOutcome before reward
                     # scoring raised: reuse its REAL prompt_turns/turns rather
@@ -982,6 +992,9 @@ class RolloutHost:
             if self._server_versions() is not None
             else ()
         )
+        # Keyed by step for async_prefetch: step k+1's prefetched rollout runs before publish(k), so
+        # publish must judge the versions of the batch it actually trained on, not the newest rollout's.
+        self._state.setdefault("versions_by_step", {})[step] = self._state["last_step_versions"]
         if self.trace_dir is not None:
             self._write_traces(step, trajectories)
         batch = flatten(self._expand_segments(trajectories), group_by_harness=self.group_by_harness)
@@ -1016,7 +1029,30 @@ class RolloutHost:
         """Synchronous entry point the trainer calls: runs ``rollout_async`` to
         completion in its own event loop.
         """
-        return asyncio.run(self.rollout_async(step))
+        if not self.async_prefetch:
+            return asyncio.run(self.rollout_async(step))
+        pending = self._state.pop("prefetch", None)
+        if pending is not None and pending[0] == step:
+            batch = pending[1].result()  # re-raises the prefetched rollout's exception here, in the trainer
+        else:
+            if pending is not None:
+                pending[1].result()  # never leave a stale prefetch running
+            batch = asyncio.run(self.rollout_async(step))
+        nxt = step + 1
+        if self.prefetch_limit is None or nxt < self.prefetch_limit:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._state.setdefault("prefetch_pool", ThreadPoolExecutor(max_workers=1))
+            self._state["prefetch"] = (nxt, pool.submit(lambda: asyncio.run(self.rollout_async(nxt))))
+        return batch
+
+    def _await_prefetch(self) -> None:
+        """Block until an in-flight prefetched rollout finishes (its result stays queued for ``rollout``)."""
+        pending = self._state.get("prefetch")
+        if pending is not None:
+            from concurrent.futures import wait
+
+            wait([pending[1]])
 
     def publish(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
         """Publish under ``publish_deadline_s`` (see ``_publish_body`` for the publish itself).
@@ -1067,6 +1103,9 @@ class RolloutHost:
     def _publish_body(self, model: Any, tokenizer: Any, ctx: Any, step: int) -> None:
         """Push the policy trained through ``step`` to the generation fleet.
 
+        With ``async_prefetch`` the in-flight next-step rollout is awaited first, so the reload never lands mid-
+        generation (that batch was generated with the previous weights: exactly one step stale).
+
         No-op when ``weight_sync`` is ``None``. The save itself is built HERE,
         around the REAL ``model``/``tokenizer``/``ctx`` this call receives --
         never a closure ``weight_sync.save_fn`` would have had to capture before
@@ -1101,6 +1140,8 @@ class RolloutHost:
         ``_recover_engines`` re-pushes after a fleet restart, so a recovered
         engine serves the current policy (see the class docstring).
         """
+        if self.async_prefetch:
+            self._await_prefetch()
         if type(step) is not int or step < 0:
             raise RolloutHostRefusal(
                 f"RolloutHost.publish: parameter 'step' is {_described(step)}: it must be "
@@ -1164,6 +1205,20 @@ class RolloutHost:
                 # rollout_policy_versions: the per-session versions the LAST rollout
                 # measured off the server ledger (see _server_versions) -- () when no
                 # ledger exists (client_factory hosts), never a fabricated sequence.
+                if self.async_prefetch:
+                    # One-step-off-policy: the trained batch was generated before the previous push,
+                    # so its lag is judged against the version being pushed NOW (last push + 1).
+                    trained_versions = self._state.get("versions_by_step", {}).pop(step, ())
+                    trained_policy_version = (
+                        self._state.get("last_pushed_version", self.fleet_launch_version) + 1
+                        if trained_versions
+                        else target_step
+                    )
+                else:
+                    trained_versions = self._state.get("last_step_versions", ())
+                    trained_policy_version = (
+                        self._state["rollout_frontier"] + 1 if trained_versions else target_step
+                    )
                 gate_ctx = WeightSyncGateContext(
                     offered=len(report.offered),
                     failed=len(report.failed_ranks),
@@ -1179,12 +1234,8 @@ class RolloutHost:
                     # and only a server left on older weights lags by more -- even when a skipped
                     # (UNMEASURED) step made target_step jump past frontier + 1. Without measured
                     # sessions the trainer's own target_step stands, as before.
-                    policy_version=(
-                        self._state["rollout_frontier"] + 1
-                        if self._state.get("last_step_versions")
-                        else target_step
-                    ),
-                    rollout_policy_versions=self._state.get("last_step_versions", ()),
+                    policy_version=trained_policy_version,
+                    rollout_policy_versions=trained_versions,
                     declared_max_lag=self.declared_max_lag,
                     parity=None,
                     declared_parity_atol=None,

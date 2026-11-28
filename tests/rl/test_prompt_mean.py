@@ -460,3 +460,35 @@ def test_token_mean_registry_binding_differs_only_in_the_reduction() -> None:
     assert arm.clip_bounds == control.clip_bounds
     assert arm.group_size == control.group_size
     assert arm.advantage_fn == control.advantage_fn
+
+
+@pytest.mark.parametrize("seed", (0, 3, 9))
+def test_tensor_loss_matches_the_oracle_with_an_active_kl_term(seed: int) -> None:
+    """B2.3 C1: agentic_grpo's opt-in k3 term is a token mean in BOTH planes under prompt_mean."""
+    rng = random.Random(seed)
+    prompt_ids = ("g0", "g0", "g1", "g1")
+    rewards = tuple(float(rng.uniform(0.5, 3.0)) for _ in range(_ROWS))
+    current = tuple(tuple(rng.uniform(-3.0, -0.5) for _ in range(_TOKENS)) for _ in range(_ROWS))
+    old = tuple(tuple(v + rng.uniform(-0.30, 0.30) for v in row) for row in current)
+    ref = tuple(tuple(v + rng.uniform(-0.50, 0.50) for v in row) for row in current)
+    mask = ((1, 1, 1, 0, 0, 0), (1, 1, 0, 0, 0, 0), (1, 1, 1, 1, 0, 0), (1, 0, 0, 0, 0, 0))
+    batch = _experience({"prompt_ids": prompt_ids, "rewards": rewards, "loss_mask": mask,
+                         "old_logprobs": old, "reference_logprobs": ref})  # fmt: skip
+    objective = AgenticGRPOLoss(
+        group_size=2, advantage_fn=SessionGroupAdvantage(min_group_size=2), kl_weight=0.04
+    )
+    oracle, advantage = objective.compute_with_report(lambda _b: current, batch)
+    used = advantage.rows
+    weights = prompt_mean_row_weights([prompt_ids[r] for r in used], [sum(mask[r]) for r in used])
+    tensor = TensorPolicyLoss(objective)(
+        current_logprobs=torch.tensor([current[r] for r in used], dtype=torch.float64, requires_grad=True),
+        old_logprobs=torch.tensor([old[r] for r in used], dtype=torch.float64),
+        advantages=torch.tensor([list(w) for w in advantage.weights], dtype=torch.float64),
+        mask=torch.tensor([mask[r] for r in used], dtype=torch.float64),
+        reduction_row_weights=torch.tensor(weights, dtype=torch.float64),
+        reference_logprobs=torch.tensor([ref[r] for r in used], dtype=torch.float64),
+    )
+    assert float(tensor) == pytest.approx(oracle.loss, rel=1e-6, abs=1e-9)
+    policy, kl = oracle.components
+    assert kl.name == "agentic_grpo_kl_penalty" and kl.contribution > 0.0
+    assert oracle.loss == pytest.approx(policy.contribution + kl.contribution)

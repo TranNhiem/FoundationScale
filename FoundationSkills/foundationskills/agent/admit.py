@@ -1,10 +1,12 @@
 """C9 increment 5: the admission gate for self-improvement candidates.
 Admission is conjunctive per MVES card 2601.22025; the operator types back the hash per candidate.
+Activation-beacon and paired-significance gates reject inert candidates and apparent gains from noise.
 This module never writes files: it returns a verdict dict and the operator decides what happens.
 """
 from __future__ import annotations
 
 import hashlib
+import random
 
 try:  # package layout or plain-path execution
     from foundationskills.core.orchestrator import plan_hash
@@ -17,6 +19,7 @@ except ImportError:  # pragma: no cover
     from agent.frozen_surface import assert_editable
 
 PROTECTED = ("oracle_item_pass", "routing_recall")
+MIN_PAIRS = 3
 
 CONFIRM_REASON = (
     "confirmation required: type back the admission hash printed by "
@@ -33,6 +36,7 @@ def admission_payload(skill: str, old_text: str, new_text: str, evidence: dict) 
 
     It carries the skill name, the sha256 of the incumbent and the candidate texts and the
     evidence exactly as supplied, so the operator can re-derive identical bytes and hash.
+    The whole evidence dict (beacon, paired, eval_case_ids included) is hashed, which binds the gate inputs.
     """
     return {
         "schema": "fskills.self_improve.admission/1",
@@ -53,12 +57,112 @@ def _table(evidence: dict, key: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def paired_signflip_p(pairs) -> tuple[float, float]:
+    """Return mean candidate-minus-incumbent gain and its one-sided sign-flip p-value."""
+    differences = [candidate - incumbent for incumbent, candidate in pairs]
+    mean_gain = sum(differences) / len(differences) if differences else 0.0
+    nonzero = [difference for difference in differences if difference != 0]
+    if not nonzero:
+        return mean_gain, 1.0
+
+    observed = sum(nonzero)
+    count = len(nonzero)
+    if count <= 16:
+        assignments = 1 << count
+        hits = 0
+        for mask in range(assignments):
+            total = sum(
+                value if mask & (1 << index) else -value
+                for index, value in enumerate(nonzero)
+            )
+            if total >= observed:
+                hits += 1
+        return mean_gain, hits / assignments
+
+    draws = 20000
+    hits = 0
+    rng = random.Random(0)
+    for _ in range(draws):
+        total = sum(value * rng.choice((-1, 1)) for value in nonzero)
+        if total >= observed:
+            hits += 1
+    return mean_gain, (hits + 1) / (draws + 1)
+
+
+def _valid_rate_pair(pair) -> bool:
+    if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+        return False
+    return all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.0 <= value <= 1.0
+        for value in pair
+    )
+
+
+def added_text(old_text: str, new_text: str) -> str:
+    """The lines ``new_text`` adds relative to ``old_text`` (difflib), in order, newline-joined."""
+    import difflib
+
+    return "\n".join(line[2:] for line in difflib.ndiff(old_text.splitlines(), new_text.splitlines())
+                     if line.startswith("+ "))
+
+
+def _safety_screen(old_text: str, new_text: str) -> tuple[list[str], list[str]]:
+    from foundationskills.vetting import scan
+
+    added = added_text(old_text, new_text)
+    if not added.strip():
+        return [], []
+    files = {"SKILL.md(added)": added.encode("utf-8")}
+    results = (scan.check_network({}, files), scan.check_credentials(files), scan.check_dynamic_exec(files),
+               scan.check_html_comments(files), scan.check_invisible_unicode(files))
+    spans = [f"unsafe span added ({r.id}): added line {h.line}: {h.excerpt}"
+             for r in results if r.status in ("RED", "REFUSED") for h in (r.hits or ())] + \
+            [f"unsafe span added ({r.id}): {r.note}" for r in results if r.status in ("RED", "REFUSED") and not r.hits]
+    unmeasured = [r.id for r in results if r.status == "UNMEASURED"]
+    return spans, unmeasured
+
+
+def unsafe_spans(old_text: str, new_text: str) -> list[str]:
+    """Write-time safety screen (SafeEvolve 2608.12851): the deterministic vetting checks run on the ADDED lines only.
+
+    Each finding names the check and the offending added span. UNMEASURED checks are reported
+    separately by unmeasured_safety_checks so an empty finding list is not treated as a PASS.
+    """
+    return _safety_screen(old_text, new_text)[0]
+
+
+def unmeasured_safety_checks(old_text: str, new_text: str) -> list[str]:
+    """Return the ids of vetting checks that could not measure the added text."""
+    return _safety_screen(old_text, new_text)[1]
+
+
+_PRIVATE_PATH = __import__("re").compile(r"(/home/[^\s/]+|/Users/[^\s/]+|[A-Za-z]:\\Users\\)")
+
+
+def overfit_spans(old_text: str, new_text: str, case_ids=()) -> list[str]:
+    """Generalization Gate lint (HarnessCompass 2608.01918) on the ADDED lines: a globally loaded skill must not name
+    the evaluation cases it was measured on, nor private absolute paths. Case ids shorter than 4 characters are
+    ignored (too generic to attribute)."""
+    added = added_text(old_text, new_text)
+    found = []
+    lowered = added.lower()
+    for case in sorted({str(c) for c in case_ids if len(str(c)) >= 4}):
+        if case.lower() in lowered:
+            found.append(f"overfit: added text names evaluation case {case!r}")
+    for match in sorted(set(_PRIVATE_PATH.findall(added))):
+        found.append(f"overfit: added text contains a private path {match!r}")
+    return found
+
+
 def admit(skill: str, old_text: str, new_text: str, evidence: dict,
           confirm: str | None) -> dict:
     """Return the admission verdict: REFUSED, UNMEASURED, RED or PASS with the measured gain.
 
-    Every result carries "verdict" and a "reasons" list; a PASS also carries the "gain".
-    Nothing is written to disk: the operator keeps or discards the candidate by hand.
+    Every result carries "verdict" and a "reasons" list; a PASS also carries the "gain",
+    paired p-value and pair count. Nothing is written to disk: the operator keeps or discards
+    the candidate by hand.
     """
     reasons = list(assert_editable(old_text, new_text))
     expected = admission_hash(admission_payload(skill, old_text, new_text, evidence))
@@ -66,6 +170,19 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
         reasons.append(CONFIRM_REASON)
     if reasons:
         return {"verdict": "REFUSED", "reasons": reasons}
+
+    safety_spans, unmeasured_checks = _safety_screen(old_text, new_text)
+    unsafe = safety_spans + overfit_spans(old_text, new_text, evidence.get("eval_case_ids") or ())
+    if unsafe:  # an unsafe or eval-memorising increment is never admitted, whatever its measured gain
+        return {"verdict": "RED", "reasons": unsafe}
+    if unmeasured_checks:
+        return {
+            "verdict": "UNMEASURED",
+            "reasons": [
+                f"safety screen incomplete: {check_id} unmeasured"
+                for check_id in unmeasured_checks
+            ],
+        }
 
     target = evidence.get("target")
     incumbent = _table(evidence, "incumbent")
@@ -80,6 +197,30 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
         for metric in metrics:
             if metric not in table:
                 gaps.append(f"metric missing in {side}: {metric}")
+
+    beacon = _table(evidence, "beacon")
+    condition = beacon.get("condition")
+    fired = beacon.get("fired")
+    if (
+        not isinstance(condition, str)
+        or not condition.strip()
+        or not isinstance(fired, int)
+        or isinstance(fired, bool)
+        or fired < 0
+    ):
+        gaps.append("candidate declares no activation beacon")
+
+    paired = _table(evidence, "paired")
+    pairs = paired.get("pairs")
+    paired_valid = (
+        paired.get("target") == "behaviour_case_pass"
+        and isinstance(pairs, (list, tuple))
+        and len(pairs) >= MIN_PAIRS
+        and all(_valid_rate_pair(pair) for pair in pairs)
+    )
+    if not paired_valid:
+        gaps.append("paired evidence missing: need >= 3 aligned (case, rep) pairs")
+
     if gaps:
         return {"verdict": "UNMEASURED", "reasons": gaps}
 
@@ -89,6 +230,18 @@ def admit(skill: str, old_text: str, new_text: str, evidence: dict,
     for metric in PROTECTED:
         if candidate[metric] < incumbent[metric]:
             red.append(f"protected metric went down: {metric}")
+    if fired == 0:
+        red.append("inert candidate: activation beacon never fired")
+
+    mean_gain, p = paired_signflip_p(pairs)
+    if not (mean_gain > 0 and p < 0.05):
+        red.append(f"gain not significant: paired p={p:.4f} (need < 0.05, mean gain > 0)")
     if red:
         return {"verdict": "RED", "reasons": red}
-    return {"verdict": "PASS", "gain": candidate[target] - incumbent[target], "reasons": []}
+    return {
+        "verdict": "PASS",
+        "gain": candidate[target] - incumbent[target],
+        "paired_p": p,
+        "n_pairs": len(pairs),
+        "reasons": [],
+    }

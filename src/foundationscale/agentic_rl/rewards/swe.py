@@ -20,6 +20,11 @@ test-harness files (``swe_tampered`` non-empty -- see ``envs.diff_guard``) score
 abstains (``tamper_guard_unmeasured``). ``tamper="report"`` (the default) leaves scoring unchanged;
 the report still rides ``outcome.metadata``.
 
+With ``format_gate=True`` (B2.3 C2; the atlas recipe scores an incomplete trace 0.0) an UNRESOLVED
+episode that emitted any malformed tool call (``ToolCall.parse_error`` set) scores 0.0
+(``format_gate``) instead of its partial credit, so the gradient is not spent rewarding traces whose
+tool use was broken. A resolved episode keeps 1.0: the hidden tests verified the fix.
+
 A test missing from the report counts as not passing. A task with an empty ``fail_to_pass`` list is
 a broken task and abstains (``no_fail_to_pass``) rather than scoring every attempt as resolved.
 """
@@ -46,12 +51,23 @@ def _test_ids(raw: Any) -> list[str] | None:
     return list(raw)
 
 
+def malformed_tool_calls(outcome: EpisodeOutcome) -> int:
+    """Count tool calls the harness could not parse or validate (``parse_error`` set)."""
+    return sum(
+        1
+        for turn in outcome.trajectory_turns
+        for call in (getattr(turn, "tool_calls", None) or ())
+        if getattr(call, "parse_error", None) is not None
+    )
+
+
 @dataclass(frozen=True)
 class SweReward:
     """Scores an episode by its hidden-test report (see the module docstring)."""
 
     partial_credit: bool = False
     tamper: str = "report"
+    format_gate: bool = False
 
     def __post_init__(self) -> None:
         if self.tamper not in ("report", "zero"):
@@ -97,6 +113,8 @@ class SweReward:
         fixed = sum(passed(t) for t in fail_to_pass)
         if fixed == len(fail_to_pass):
             return RewardVerdict(1.0, "resolved")
+        if self.format_gate and malformed_tool_calls(outcome) > 0:
+            return RewardVerdict(0.0, "format_gate")
         if self.partial_credit:
             return RewardVerdict(fixed / len(fail_to_pass), "partial")
         return RewardVerdict(0.0, "unresolved")

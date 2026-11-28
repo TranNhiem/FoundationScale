@@ -28,7 +28,10 @@ def _write(tmp_path, old, measured=True, gain=0.1):
     ev.write_text(json.dumps({"measured": measured, "target": "behaviour_case_pass",
                               "incumbent": {"behaviour_case_pass": 0.8, "oracle_item_pass": 0.9, "routing_recall": 0.95},
                               "candidate": {"behaviour_case_pass": 0.8 + gain, "oracle_item_pass": 0.9,
-                                            "routing_recall": 0.95}}))
+                                            "routing_recall": 0.95},
+                              # admit requires a fired activation beacon and significant paired evidence (atlas v2)
+                              "beacon": {"condition": "clarified", "fired": 3},
+                              "paired": {"target": "behaviour_case_pass", "pairs": [[0.0, 1.0]] * 8}}))
     return cand, ev, new
 
 

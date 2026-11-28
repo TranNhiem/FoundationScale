@@ -117,3 +117,37 @@ def test_swe_reward_kind_builds_the_swe_reward() -> None:
     assert isinstance(cli_module._build_real_run(config).reward, SweReward)
     with pytest.raises(AgenticConfigRefusal, match="kind='swe' never uses it"):
         build_config(_raw({"kind": "swe", "abc2midi_bin": "abc2midi"}), {})
+
+
+def test_swe_partial_credit_reaches_the_scorer() -> None:
+    import foundationscale.agentic_rl.cli as cli_module
+
+    assert build_config(_raw({"kind": "swe"}), {}).reward.partial_credit is False
+    config = build_config(_raw({"kind": "swe", "partial_credit": True}), {})
+    reward = cli_module._build_real_run(config).reward
+    assert isinstance(reward, SweReward) and reward.partial_credit is True
+    overridden = build_config(_raw({"kind": "swe"}), {"reward.partial_credit": "true"})
+    assert overridden.reward.partial_credit is True
+    with pytest.raises(AgenticConfigRefusal, match="only the 'swe' scorer"):
+        build_config(_raw({"kind": "math", "partial_credit": True}), {})
+
+
+def test_swe_format_gate_reaches_the_scorer_and_needs_partial_credit() -> None:
+    import foundationscale.agentic_rl.cli as cli_module
+
+    config = build_config(_raw({"kind": "swe", "partial_credit": True, "format_gate": True}), {})
+    reward = cli_module._build_real_run(config).reward
+    assert isinstance(reward, SweReward) and reward.format_gate is True
+    assert build_config(_raw({"kind": "swe"}), {}).reward.format_gate is False
+    with pytest.raises(AgenticConfigRefusal, match="format_gate"):
+        build_config(_raw({"kind": "swe", "format_gate": True}), {})
+
+
+def test_async_prefetch_requires_a_declared_policy_lag_of_two() -> None:
+    """A prefetched batch is generated before the previous push, so it trains 2 updates behind."""
+    with pytest.raises(AgenticConfigRefusal, match="max_policy_lag >= 2"):
+        build_config(_raw({"kind": "math"}), {"rollout.async_prefetch": "true"})
+    config = build_config(
+        _raw({"kind": "math"}), {"rollout.async_prefetch": "true", "engine.max_policy_lag": "2"}
+    )
+    assert config.rollout.async_prefetch is True and config.engine.max_policy_lag == 2
